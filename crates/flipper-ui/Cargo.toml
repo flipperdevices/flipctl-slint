@@ -10,6 +10,9 @@ default = []
 # DRM/KMS panel sink and raw evdev input. Off by default so host-side tests and
 # the golden-image harness build without touching /dev.
 device = ["drm"]
+# Built-in browser remote view. Default off so flipperos-installer and
+# flipper-boot-menu never pay for it.
+remote = []
 # Slint software renderer targeting Gray8. No backend: we own KMS and input, so
 # `renderer-software` is taken on its own and the LinuxKMS backend (with its
 # libinput/libxkbcommon/fontconfig tree) is never pulled in.

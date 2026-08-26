@@ -19,6 +19,8 @@ pub mod platform;
 pub mod evdev;
 #[cfg(feature = "device")]
 pub mod kms;
+#[cfg(feature = "remote")]
+pub mod remote;
 #[cfg(feature = "slint")]
 pub mod slint_render;
 

@@ -1,0 +1,288 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>flipper-ui vs prototype</title>
+<style>
+  :root { --ink: #E8E4DE; --dim: #8A837A; --rule: #2A2E35; }
+  html, body {
+    margin: 0; min-height: 100%;
+    background: #14171C; color: var(--ink);
+    font: 13px/1.5 system-ui, sans-serif;
+  }
+  main {
+    min-height: 100vh; box-sizing: border-box; padding: 20px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  header { display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .01em; }
+  .controls { margin-left: auto; display: flex; gap: 14px; align-items: center; }
+  .controls label { color: var(--dim); cursor: pointer; }
+  #stat { color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  .pair { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+  figure { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+  figcaption { display: flex; gap: 8px; align-items: baseline; }
+  .name { font-weight: 600; }
+  .note { color: var(--dim); }
+  /* The panel is 256x144 of hard pixels. Only integer scaling, never smoothed. */
+  .screen {
+    image-rendering: pixelated;
+    display: block;
+    background: #fff;
+    border: 1px solid var(--rule);
+  }
+  /* Stacked view puts the two screens directly above one another, which is the
+     only way to judge a one-pixel difference. */
+  body.stack .pair { flex-direction: column; }
+  body.stack figure { gap: 4px; }
+
+  #pad { border-top: 1px solid var(--rule); padding-top: 14px; }
+  /* The button positions below are the fractions the prototype's device-photo
+     hitmap uses, and that photo is 2048x1080, so the container has to keep that
+     aspect or the arrangement shears. */
+  .face {
+    position: relative;
+    /* Wider container scales every button with it, so the arrangement stays exact
+       while the targets get comfortably clickable. */
+    /* Last on the page, after the overlay, so it can take the full width and
+       give the buttons comfortable targets. */
+    width: min(820px, 100%);
+    aspect-ratio: 2048 / 1080;
+    background: #191D23;
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+  }
+  .face button {
+    position: absolute;
+    box-sizing: border-box;
+    font: 500 13px/1.15 system-ui, sans-serif;
+    color: var(--ink);
+    background: #2A303A;
+    border: 1px solid #3A424E;
+    border-radius: 4px;
+    padding: 0;
+    cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 1px;
+    user-select: none; touch-action: none;
+    overflow: hidden;
+  }
+  .face button small { color: var(--dim); font-size: 10px; font-weight: 400; }
+  .face button.round { border-radius: 50%; }
+  /* The physical app-switcher key has a chamfered top-right corner. */
+  .face button.cut { clip-path: polygon(0 0, 27% 0, 100% 56%, 100% 100%, 0 100%); }
+  .face button:hover { background: #333B47; }
+  .face button.down { background: var(--ink); color: #14171C; border-color: var(--ink); }
+  .face button.down small { color: #4A5260; }
+  .face button:focus-visible { outline: 2px solid #7A8494; outline-offset: 1px; }
+</style>
+
+<main>
+  <header>
+    <h1>flipper-ui vs prototype</h1>
+    <span class="note">both 256&times;144, 8-bit greyscale, integer scaling only</span>
+    <div class="controls">
+      <label><input type="checkbox" id="stack"> Stack vertically</label>
+      <label>Scale
+        <select id="scale">
+          <option value="1">1&times;</option>
+          <option value="2">2&times;</option>
+          <option value="3" selected>3&times;</option>
+          <option value="4">4&times;</option>
+        </select>
+      </label>
+      <span id="stat">connecting</span>
+    </div>
+  </header>
+
+  <div class="pair">
+    <figure>
+      <figcaption><span class="name">flipper-ui</span><span class="note">Slint, this build</span></figcaption>
+      <canvas id="mine" class="screen" width="256" height="144"></canvas>
+    </figure>
+    <figure>
+      <figcaption><span class="name">prototype</span><span class="note">fake-flipctl2 via cog on the panel</span></figcaption>
+      <canvas id="peer" class="screen" width="256" height="144"></canvas>
+    </figure>
+  </div>
+
+  <figure id="overlay">
+    <figcaption>
+      <span class="name">overlay</span>
+      <label>
+        <select id="mode">
+          <option value="diff" selected>difference</option>
+          <option value="onion">onion skin</option>
+          <option value="blink">blink</option>
+        </select>
+      </label>
+      <label id="mixWrap" hidden>
+        mix <input type="range" id="mix" min="0" max="100" value="50">
+      </label>
+      <span id="diffstat" class="note">waiting for both sides</span>
+    </figcaption>
+    <canvas id="over" class="screen" width="256" height="144"></canvas>
+    <figcaption class="note" id="legend">
+      <span style="color:#FF8200">&#9632; only flipper-ui has ink</span>
+      <span style="color:#3B9EFF">&#9632; only the prototype has ink</span>
+      <span>grey where they agree</span>
+    </figcaption>
+  </figure>
+
+  <!-- Controls for the Slint side. In headless mode cog owns the panel and its
+       buttons, so this is the only way to drive it. -->
+  <figure id="pad">
+    <figcaption>
+      <span class="name">controls</span>
+      <span class="note">drives flipper-ui only &mdash; keyboard works too</span>
+    </figcaption>
+    <!-- Positioned at the same fractions the prototype's device-photo hitmap
+         uses (js/main.js HITMAP), so the arrangement matches the hardware: PTT
+         alone at the top left, the D-pad on the right with the app switcher and
+         back below it, and the five soft keys along the bottom, left of centre. -->
+    <div class="face">
+      <button data-k="ptt"   style="left:22.55%;top:15.36%;width:7.10%;height:9.50%">A<small>ptt</small></button>
+
+      <button data-k="up"    style="left:71.06%;top:31.05%;width:4.50%;height:8.50%">&uarr;</button>
+      <button data-k="left"  style="left:66.36%;top:39.90%;width:4.50%;height:8.60%">&larr;</button>
+      <button data-k="ok"    style="left:71.06%;top:39.90%;width:4.50%;height:8.60%" class="round">OK</button>
+      <button data-k="right" style="left:75.76%;top:39.90%;width:4.50%;height:8.60%">&rarr;</button>
+      <button data-k="down"  style="left:71.06%;top:48.85%;width:4.50%;height:8.50%">&darr;</button>
+
+      <button data-k="appsw" style="left:65.96%;top:55.35%;width:6.15%;height:8.11%" class="cut">Tab</button>
+      <button data-k="back"  style="left:77.80%;top:56.55%;width:5.15%;height:9.69%" class="round">&#9003;</button>
+
+      <button data-k="esc"   style="left:34.11%;top:63.01%;width:5.30%;height:5.30%">Exit<small>Z</small></button>
+      <button data-k="view"  style="left:39.87%;top:63.01%;width:5.30%;height:5.30%">Menu<small>X</small></button>
+      <button data-k="power" style="left:45.64%;top:63.01%;width:5.30%;height:5.30%">Pwr<small>C</small></button>
+      <button data-k="edit"  style="left:51.40%;top:63.01%;width:5.30%;height:5.30%">Edit<small>V</small></button>
+      <button data-k="run"   style="left:57.16%;top:63.01%;width:5.30%;height:5.30%">Run<small>B</small></button>
+    </div>
+  </figure>
+
+</main>
+
+<script src="remote.js"></script>
+<script>
+const W = 256, H = 144;
+const mineCtx = document.getElementById('mine').getContext('2d');
+const peerCtx = document.getElementById('peer').getContext('2d');
+const overCtx = document.getElementById('over').getContext('2d');
+const stat = document.getElementById('stat');
+const diffstat = document.getElementById('diffstat');
+const modeSel = document.getElementById('mode');
+const mixWrap = document.getElementById('mixWrap');
+const mixInput = document.getElementById('mix');
+const legend = document.getElementById('legend');
+
+const mineBlit = new GreyBlitter(mineCtx, W, H);
+const overImg = overCtx.createImageData(W, H);
+const overWords = new Uint32Array(overImg.data.buffer);
+
+// Latest greyscale from each side, or null until one arrives.
+let mineGrey = null, peerGrey = null;
+let blinkPhase = 0;
+
+// Anything closer than this counts as agreement: the prototype's frame arrives as
+// a browser-rendered RGBA PNG, so its greys can land a value or two off ours even
+// when both sides drew the same thing.
+const TOLERANCE = 8;
+const word = v => 0xff000000 | (v << 16) | (v << 8) | v;
+const rgb = (r, g, b) => 0xff000000 | (b << 16) | (g << 8) | r;
+const ink = v => v < 128;
+
+function computeOverlay() {
+  if (!mineGrey || !peerGrey) return;
+  const mode = modeSel.value;
+  const t = Number(mixInput.value) / 100;
+  let differing = 0;
+
+  for (let i = 0; i < W * H; i++) {
+    const a = mineGrey[i], b = peerGrey[i];
+    const apart = Math.abs(a - b) > TOLERANCE;
+    if (apart) differing++;
+    if (mode === 'diff') {
+      if (!apart) overWords[i] = word(200 + ((a >> 3) & 31));
+      else if (ink(a) && !ink(b)) overWords[i] = rgb(255, 130, 0);
+      else if (!ink(a) && ink(b)) overWords[i] = rgb(59, 158, 255);
+      else overWords[i] = rgb(190, 60, 190);
+    } else if (mode === 'onion') {
+      overWords[i] = word(Math.round(a * (1 - t) + b * t));
+    } else {
+      overWords[i] = word(blinkPhase ? b : a);
+    }
+  }
+  overCtx.putImageData(overImg, 0, 0);
+  const pct = (100 * differing / (W * H)).toFixed(2);
+  diffstat.textContent = differing.toLocaleString() + ' of ' +
+    (W * H).toLocaleString() + ' pixels differ (' + pct + '%)';
+}
+
+// Coalesced: the overlay was recomputing on every stream frame and every peer
+// poll, up to twenty full-screen passes a second.
+const drawOverlay = flipperCoalesce(computeOverlay);
+
+function applyScale() {
+  const s = document.getElementById('scale').value;
+  for (const el of document.querySelectorAll('.screen')) {
+    el.style.width = (W * s) + 'px';
+    el.style.height = (H * s) + 'px';
+  }
+}
+document.getElementById('scale').addEventListener('change', applyScale);
+document.getElementById('stack').addEventListener('change', e => {
+  document.body.classList.toggle('stack', e.target.checked);
+});
+applyScale();
+
+modeSel.addEventListener('change', () => {
+  mixWrap.hidden = modeSel.value !== 'onion';
+  legend.hidden = modeSel.value !== 'diff';
+  drawOverlay();
+});
+mixInput.addEventListener('input', drawOverlay);
+setInterval(() => {
+  if (modeSel.value !== 'blink') return;
+  blinkPhase ^= 1;
+  drawOverlay();
+}, 600);
+
+flipperWireInput('.face button');
+
+flipperStream((grey, x, y, w, h) => {
+  mineBlit.draw(grey, x, y, w, h);
+  // Keep the panel's own bytes for the overlay rather than reading the canvas
+  // back, so no browser colour handling sits between us and them.
+  if (x === 0 && y === 0 && w === W && h === H) {
+    mineGrey = grey.slice();
+    drawOverlay();
+  }
+}, text => { stat.textContent = text; });
+
+// The prototype's own screenshot, proxied by this server so the browser never
+// makes a cross-origin request. Each fetch also tells its server a viewer is
+// present, which is what keeps cog uploading.
+(async () => {
+  const scratch = document.createElement('canvas');
+  scratch.width = W; scratch.height = H;
+  const sctx = scratch.getContext('2d', { willReadFrequently: true });
+  for (;;) {
+    try {
+      const res = await fetch('peer.png', { cache: 'no-store' });
+      if (res.status === 200) {
+        const bmp = await createImageBitmap(await res.blob());
+        peerCtx.drawImage(bmp, 0, 0, W, H);
+        sctx.drawImage(bmp, 0, 0, W, H);
+        bmp.close();
+        const rgba = sctx.getImageData(0, 0, W, H).data;
+        const grey = new Uint8Array(W * H);
+        // The prototype only paints greys, so any channel is its value.
+        for (let i = 0, j = 0; i < grey.length; i++, j += 4) grey[i] = rgba[j];
+        peerGrey = grey;
+        drawOverlay();
+      }
+    } catch (e) { /* keep the last frame */ }
+    await new Promise(r => setTimeout(r, 100));
+  }
+})();
+</script>
