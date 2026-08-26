@@ -1,0 +1,33 @@
+# Third-party licenses
+
+flipctl statically links the Rust crates listed below. Our own source is
+MIT-licensed, but because the binary links the [Slint](https://slint.dev) GUI
+toolkit under the GNU General Public License v3.0 (we hold no separate Slint
+license agreement), **the distributed binary as a whole is licensed under
+GPL-3.0-only**. All sources remain publicly buildable.
+
+The panel's three pixel fonts are not crates and are not covered here: they live
+in `third_party/flipctl-fonts`, each with its own license, and HaxrCorp 4090 in
+particular is CC BY-SA 3.0 rather than MIT.
+
+This file is generated from `Cargo.lock` by `scripts/gen-third-party-licenses.sh`.
+Do not edit it by hand.
+
+{{#each overview}}
+- **{{{name}}}**: {{count}} crate(s)
+{{/each}}
+
+{{#each licenses}}
+--------------------------------------------------------------------------------
+
+## {{{name}}} ({{{id}}})
+
+Used by:
+{{#each used_by}}
+  * {{{crate.name}}} {{{crate.version}}} ({{#if crate.repository}}{{{crate.repository}}}{{else}}https://crates.io/crates/{{{crate.name}}}{{/if}})
+{{/each}}
+
+```
+{{{text}}}
+```
+{{/each}}

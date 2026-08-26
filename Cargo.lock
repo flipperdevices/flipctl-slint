@@ -1196,6 +1196,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flipper-ui-demo"
+version = "0.1.0"
+dependencies = [
+ "flipper-ui",
+ "png 0.17.16",
+ "slint",
+]
+
+[[package]]
 name = "float-cmp"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

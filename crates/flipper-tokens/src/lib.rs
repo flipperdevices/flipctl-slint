@@ -24,8 +24,10 @@ pub fn parse(src: &str) -> toml::Value {
 /// cost a full 83-second recompile of both crates on every single build, even with
 /// nothing touched:
 ///
-///     stale: out/theme.slint (vs) out/output
-///     FileTime { seconds: .., nanos: 377030560 } < FileTime { .., nanos: 397030653 }
+/// ```text
+/// stale: out/theme.slint (vs) out/output
+/// FileTime { seconds: .., nanos: 377030560 } < FileTime { .., nanos: 397030653 }
+/// ```
 ///
 /// Leaving an unchanged file alone keeps its mtime older than that marker and the
 /// loop cannot start. The host happened not to trip it, which is why this survived
