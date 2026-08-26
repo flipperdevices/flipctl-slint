@@ -1,0 +1,9 @@
+[package]
+name = "flipper-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared UI component library for the Flipper One 256x144 panel"
+
+[build-dependencies]
+flipper-tokens = { path = "../flipper-tokens" }

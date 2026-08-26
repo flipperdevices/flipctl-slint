@@ -16,6 +16,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "flipper-ui"
+version = "0.1.0"
+dependencies = [
+ "flipper-tokens",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
