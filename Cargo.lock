@@ -1110,6 +1110,7 @@ dependencies = [
  "drm",
  "flipper-tokens",
  "i-slint-common",
+ "libc",
  "png 0.17.16",
  "slint",
  "slint-build",

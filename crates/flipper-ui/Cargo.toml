@@ -16,6 +16,9 @@ device = ["drm"]
 slint = ["dep:slint", "dep:slint-build", "dep:i-slint-common"]
 
 [dependencies]
+# getifaddrs, for the idle screen's IPv4 addresses. procfs exposes IPv6 as text
+# but has no IPv4 equivalent, and a UI process should not be shelling out to `ip`.
+libc = "0.2"
 drm = { version = "0.14", optional = true }
 
 # Not used directly. Present only to switch fontique's fontconfig binding to

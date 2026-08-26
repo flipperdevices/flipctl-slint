@@ -6,6 +6,10 @@
 pub mod font;
 pub mod key;
 pub mod layout;
+pub mod net;
+pub mod status;
+pub mod sysinfo;
+pub mod watch;
 pub mod paint;
 pub mod pixel;
 pub mod platform;
@@ -34,6 +38,7 @@ pub mod theme {
 pub use font::BitmapFont;
 pub use key::{FlipperKey, KeyEvent};
 pub use paint::Surface;
+pub use status::{Ethernet, Status, StatusSource};
 pub use platform::{Frame, FrameSink, InputSource};
 pub use pixel::{Gray8, Rect};
 pub use theme::{PANEL_H, PANEL_W};
