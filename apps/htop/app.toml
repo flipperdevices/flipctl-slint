@@ -1,0 +1,8 @@
+# htop in a terminal emulator that is itself a Wayland client.
+#
+# `foot` draws the terminal as a client, so htop is an app like any other: several
+# terminal apps can run at once, the font is whatever fontconfig has rather than
+# what KDFONTOP accepts, and nothing touches the panel but flipctl.
+name = "htop"
+wayland = "foot --font=monospace:size=6 -e htop"
+apt = ["foot", "htop"]

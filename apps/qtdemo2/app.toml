@@ -1,0 +1,8 @@
+# A clock, drawn by Qt as an ordinary Wayland client.
+#
+# The app joins the compositor that owns the panel on a workspace of its own, and
+# Qt's own Wayland backend does the drawing. flipctl sets QT_QPA_PLATFORM, so the
+# manifest names a command and nothing else.
+name = "Qt Clock"
+wayland = "python3 app.py"
+apt = ["python3-pyqt6", "qt6-wayland"]

@@ -1,0 +1,9 @@
+# The device's own UI, drawn in a terminal.
+#
+# What it is for is showing how far the layout gets with a character grid instead
+# of a panel: a status bar, a list with a selector, and the five soft keys in their
+# slots. It is a program in a terminal, and the terminal is a client like any
+# other.
+name = "TUI Demo"
+wayland = "foot --font=monospace:size=7 -e python3 app.py"
+apt = ["foot"]

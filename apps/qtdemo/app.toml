@@ -1,0 +1,4 @@
+# flipctl's look, drawn by Qt as an ordinary Wayland client.
+name = "Qt Demo"
+wayland = "python3 app.py"
+apt = ["python3-pyqt6", "qt6-wayland"]
