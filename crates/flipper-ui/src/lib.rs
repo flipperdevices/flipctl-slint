@@ -3,6 +3,7 @@
 //! Three consumers: flipperos-installer (size-critical, maskrom-loaded),
 //! flipper-boot-menu (Falcon initramfs) and flipctl, the system launcher.
 
+pub mod app;
 pub mod boot;
 pub mod font;
 pub mod key;
@@ -40,6 +41,7 @@ pub mod theme {
     include!(concat!(env!("OUT_DIR"), "/theme.rs"));
 }
 
+pub use app::{AppEntry, Rotate};
 pub use font::BitmapFont;
 pub use key::{FlipperKey, KeyEvent};
 pub use paint::Surface;
