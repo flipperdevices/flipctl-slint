@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/flipper-tokens",
     "crates/flipper-ui",
+    "crates/flipctl-app",
 ]
 # Apps are not listed here. Each app crate carries its own empty [workspace]
 # table, which keeps it independent without this file having to name it: a user
