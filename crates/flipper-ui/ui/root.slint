@@ -1,0 +1,358 @@
+// The one window.
+//
+// FlipperSlintPlatform hands out a single MinimalSoftwareWindow, and the last
+// component constructed binds itself to it, so two `Window` components cannot
+// coexist: whichever was built second owns the panel regardless of `show()`.
+// A device with one screen therefore wants one Window that switches bodies, which
+// is also the shape a scene stack needs later.
+import { FlipperTheme } from "@theme";
+import { MenuBody, ListItem } from "list.slint";
+import { IdleBody, IdleLink } from "idle.slint";
+import { LogBody } from "log.slint";
+import { Modal } from "modal.slint";
+import { DetailBody, DetailRow } from "detail.slint";
+import { EthernetBody, EthLink, EthDetailRow } from "ethernet.slint";
+import { BootBody, BootRow, BootPopupRow } from "boot.slint";
+import { TextInputBody, KbCell } from "keyboard.slint";
+import { SwitcherBody, SwitchCard } from "switcher.slint";
+import { CardsBody, CardItem } from "card.slint";
+
+export { ListItem, IdleLink, DetailRow, EthLink, EthDetailRow, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem }
+
+// Idle is the root. The menu opens over it and the app list over that. There are no
+// screens for an app to be shown on: an app draws its own, and what flipctl puts up
+// while one is running is the app's own frame. `app_log` is ours, the log of an
+// install.
+export enum Screen { idle, menu, detail, ethernet, boot, apps, app_log, text_input, switcher }
+
+export component Root inherits Window {
+    width: 256px;
+    height: 144px;
+    background: FlipperTheme.white;
+    default-font-family: "HaxrCorp 4090";
+    default-font-size: 16px;
+
+    in property <Screen> screen: Screen.idle;
+
+    // Status bar, shared by every screen.
+    in property <int> battery: -1;
+    in property <bool> charging;
+    in property <bool> wifi_connected;
+    in property <int> wifi_quality;
+    in property <int> ethernet;
+    in property <bool> recording;
+    in property <bool> modem_available;
+    in property <string> access_tech: "--";
+    in property <int> modem_quality;
+
+    // Idle screen.
+    in property <int> battery_temp: -32768;
+    in property <int> cpu_temp: -32768;
+    in property <int> power_mw: -32768;
+    in property <string> hostname;
+    in property <string> profile;
+    in property <bool> has_profile: true;
+    in property <[IdleLink]> links;
+    in property <int> link_scroll;
+    // How many interface cards the idle screen has room for, so the keys that scroll
+    // them can clamp against the geometry rather than a guess.
+    out property <int> link_rows: idle.link_rows;
+    in property <[string]> idle_buttons;
+    in property <int> idle_pressed_slot: -1;
+
+    // The app list, and the log of an install.
+    in property <[ListItem]> app_items;
+    in property <int> app_selected;
+    in property <int> app_total;
+    in property <int> app_bar_total;
+    in property <int> app_bar_offset;
+    in property <int> app_scroll;
+    in property <string> app_title;
+    in property <[string]> app_lines;
+    in property <int> app_log_total;
+    in property <int> app_log_offset;
+    in property <[string]> app_buttons;
+    in property <int> app_pressed_slot: -1;
+
+    // Menu.
+    in property <[ListItem]> items;
+    in property <int> selected;
+    in property <int> scroll;
+    in property <int> total;
+    in property <int> tick;
+    in property <bool> pressed;
+    in property <bool> real_frame: true;
+    in property <[string]> menu_buttons;
+    in property <int> menu_pressed_slot: -1;
+    // Set to open the menu as a submenu, e.g. "> Network". Empty for the main
+    // menu, which anchors 3px higher and draws no trail.
+    in property <string> breadcrumb;
+    // Which chevron on the selected toggle row is flashing: 0 none, 1 left, 2 right.
+    in property <int> arrow_pressed;
+
+    // Detail screens behind Settings and Network.
+    in property <[DetailRow]> detail_rows;
+    in property <int> detail_offset;
+    in property <[string]> detail_buttons;
+    in property <int> detail_pressed_slot: -1;
+
+    // The Ethernet page.
+    in property <[EthLink]> eth_links;
+    in property <int> eth_selected;
+    // The verbose dump, when it is open. Empty closes it.
+    in property <[EthDetailRow]> eth_detail_rows;
+    in property <length> eth_detail_offset;
+    in property <length> eth_detail_content_h;
+
+    // The boot menu, which draws a header instead of the status bar.
+    in property <[BootRow]> boot_rows;
+    in property <int> boot_selected;
+    in property <int> boot_scroll;
+    in property <int> boot_countdown: -1;
+    in property <int> boot_remaining;
+    in property <[string]> boot_buttons;
+    in property <int> boot_pressed_slot: -1;
+    in property <bool> boot_loading;
+    in property <int> boot_spin_frame;
+    // The Info or Edit popup over the boot menu.
+    in property <bool> boot_popup_open;
+    in property <string> boot_popup_title;
+    in property <int> boot_popup_icon;
+    in property <length> boot_popup_icon_w;
+    in property <length> boot_popup_icon_h;
+    in property <string> boot_popup_size_number;
+    in property <string> boot_popup_size_unit;
+    in property <length> boot_popup_size_slot_w;
+    in property <[BootPopupRow]> boot_popup_rows;
+    in property <[string]> boot_popup_message;
+    in property <string> boot_popup_hint;
+    in property <length> boot_popup_w;
+
+    // The text-input screen: a field and the on-screen keyboard.
+    in property <string> kb_title;
+    in property <string> kb_text;
+    in property <length> kb_field_w;
+    in property <length> kb_cursor_dx;
+    in property <bool> kb_cursor_on;
+    in property <bool> kb_field_focused;
+    in property <string> kb_warning;
+    in property <[KbCell]> kb_cells;
+    in property <length> kb_chrome_x;
+    in property <length> kb_chrome_y;
+    in property <length> kb_chrome_w;
+    in property <length> kb_chrome_h;
+    in property <string> kb_lang_label;
+    in property <string> kb_tab_label;
+    in property <int> kb_tab_focus;
+    in property <int> kb_tab_pressed;
+    in property <[string]> kb_buttons;
+    in property <int> kb_pressed_slot: -1;
+    in property <int> kb_discard: -1;
+
+
+    // The app switcher, over whatever was showing when it opened.
+    in property <[SwitchCard]> switch_cards;
+    in property <bool> switch_can_kill;
+    in property <int> switch_pressed_slot: -1;
+    in property <string> switch_empty;
+
+    // Blocking dialog over whatever screen is showing. Non-empty lines open it.
+    in property <[string]> modal_lines;
+    in property <string> modal_left;
+    in property <string> modal_right;
+    in property <int> modal_pressed_slot: -1;
+
+    idle := IdleBody {
+        visible: root.screen == Screen.idle;
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+        battery_temp: root.battery_temp;
+        cpu_temp: root.cpu_temp;
+        power_mw: root.power_mw;
+        hostname: root.hostname;
+        profile: root.profile;
+        has_profile: root.has_profile;
+        links: root.links;
+        link_scroll: root.link_scroll;
+        buttons: root.idle_buttons;
+        pressed_slot: root.idle_pressed_slot;
+    }
+
+    // The app list and an app's form are both lists of label/value rows, so they
+    // reuse MenuBody rather than duplicating it. Only the model differs.
+    if root.screen == Screen.apps: MenuBody {
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+        items: root.app_items;
+        selected: root.app_selected;
+        // The app list sends every row and scrolls here; an app's own form windows
+        // its rows itself and sends scroll 0 with the real extent on the bar.
+        scroll: root.app_scroll;
+        total: root.app_total;
+        bar_total: root.app_bar_total;
+        bar_offset: root.app_bar_offset;
+        tick: root.tick;
+        pressed: root.pressed;
+        real_frame: true;
+        buttons: root.app_buttons;
+        pressed_slot: root.app_pressed_slot;
+    }
+
+    if root.screen == Screen.app_log: LogBody {
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+        title: root.app_title;
+        lines: root.app_lines;
+        total: root.app_log_total;
+        offset: root.app_log_offset;
+        buttons: root.app_buttons;
+        pressed_slot: root.app_pressed_slot;
+    }
+
+    if root.screen == Screen.detail: DetailBody {
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+        rows: root.detail_rows;
+        breadcrumb: root.breadcrumb;
+        offset: root.detail_offset;
+        buttons: root.detail_buttons;
+        pressed_slot: root.detail_pressed_slot;
+    }
+
+    if root.screen == Screen.ethernet: EthernetBody {
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+        links: root.eth_links;
+        selected: root.eth_selected;
+        breadcrumb: root.breadcrumb;
+        detail_rows: root.eth_detail_rows;
+        detail_offset: root.eth_detail_offset;
+        detail_content_h: root.eth_detail_content_h;
+    }
+
+    if root.screen == Screen.text_input: TextInputBody {
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+        title: root.kb_title;
+        visible_text: root.kb_text;
+        field_w: root.kb_field_w;
+        cursor_dx: root.kb_cursor_dx;
+        cursor_on: root.kb_cursor_on;
+        field_focused: root.kb_field_focused;
+        warning: root.kb_warning;
+        cells: root.kb_cells;
+        chrome_x: root.kb_chrome_x;
+        chrome_y: root.kb_chrome_y;
+        chrome_w: root.kb_chrome_w;
+        chrome_h: root.kb_chrome_h;
+        lang_label: root.kb_lang_label;
+        tab_label: root.kb_tab_label;
+        tab_focus: root.kb_tab_focus;
+        tab_pressed: root.kb_tab_pressed;
+        buttons: root.kb_buttons;
+        pressed_slot: root.kb_pressed_slot;
+        discard: root.kb_discard;
+    }
+
+    if root.screen == Screen.switcher: SwitcherBody {
+        cards: root.switch_cards;
+        can_kill: root.switch_can_kill;
+        pressed_slot: root.switch_pressed_slot;
+        empty_text: root.switch_empty;
+    }
+
+    if root.screen == Screen.boot: BootBody {
+        rows: root.boot_rows;
+        selected: root.boot_selected;
+        scroll: root.boot_scroll;
+        pressed: root.pressed;
+        countdown: root.boot_countdown;
+        remaining: root.boot_remaining;
+        buttons: root.boot_buttons;
+        pressed_slot: root.boot_pressed_slot;
+        loading: root.boot_loading;
+        spin_frame: root.boot_spin_frame;
+        popup_open: root.boot_popup_open;
+        popup_title: root.boot_popup_title;
+        popup_icon: root.boot_popup_icon;
+        popup_icon_w: root.boot_popup_icon_w;
+        popup_icon_h: root.boot_popup_icon_h;
+        popup_size_number: root.boot_popup_size_number;
+        popup_size_unit: root.boot_popup_size_unit;
+        popup_size_slot_w: root.boot_popup_size_slot_w;
+        popup_rows: root.boot_popup_rows;
+        popup_message: root.boot_popup_message;
+        popup_hint: root.boot_popup_hint;
+        popup_w: root.boot_popup_w;
+    }
+
+    if root.screen == Screen.menu: MenuBody {
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+        items: root.items;
+        selected: root.selected;
+        scroll: root.scroll;
+        total: root.total;
+        tick: root.tick;
+        pressed: root.pressed;
+        real_frame: root.real_frame;
+        buttons: root.menu_buttons;
+        pressed_slot: root.menu_pressed_slot;
+        breadcrumb: root.breadcrumb;
+        arrow_pressed: root.arrow_pressed;
+    }
+
+    // Over everything, including the soft bar: the dialog owns both keys it shows.
+    if root.modal_lines.length > 0: Modal {
+        lines: root.modal_lines;
+        left_label: root.modal_left;
+        right_label: root.modal_right;
+        pressed_slot: root.modal_pressed_slot;
+    }
+}
