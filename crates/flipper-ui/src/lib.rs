@@ -3,6 +3,7 @@
 //! Three consumers: flipperos-installer (size-critical, maskrom-loaded),
 //! flipper-boot-menu (Falcon initramfs) and flipctl, the system launcher.
 
+pub mod boot;
 pub mod font;
 pub mod key;
 pub mod layout;
