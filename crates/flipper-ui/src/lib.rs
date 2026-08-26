@@ -8,6 +8,11 @@ pub mod key;
 pub mod layout;
 pub mod paint;
 pub mod pixel;
+pub mod platform;
+#[cfg(feature = "device")]
+pub mod evdev;
+#[cfg(feature = "device")]
+pub mod kms;
 
 /// Design tokens, generated from tokens.toml at build time.
 #[allow(dead_code)]
@@ -18,5 +23,6 @@ pub mod theme {
 pub use font::BitmapFont;
 pub use key::{FlipperKey, KeyEvent};
 pub use paint::Surface;
+pub use platform::{Frame, FrameSink, InputSource};
 pub use pixel::{Gray8, Rect};
 pub use theme::{PANEL_H, PANEL_W};

@@ -5,5 +5,14 @@ edition.workspace = true
 license.workspace = true
 description = "Shared UI component library for the Flipper One 256x144 panel"
 
+[features]
+default = []
+# DRM/KMS panel sink and raw evdev input. Off by default so host-side tests and
+# the golden-image harness build without touching /dev.
+device = ["drm"]
+
+[dependencies]
+drm = { version = "0.14", optional = true }
+
 [build-dependencies]
 flipper-tokens = { path = "../flipper-tokens" }
