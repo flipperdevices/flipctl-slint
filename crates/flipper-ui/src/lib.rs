@@ -10,6 +10,7 @@ pub mod keyboard;
 pub mod layout;
 pub mod net;
 pub mod status;
+pub mod switcher;
 pub mod sysinfo;
 pub mod watch;
 pub mod paint;

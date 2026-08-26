@@ -4,8 +4,7 @@
 // its frame, its opacity and how far it is from the focus; nothing here decides
 // where anything goes. What this file owns is the shape: a rectangle with a
 // radius per corner, drawn from single pixels rather than with border-radius,
-// because the corner is a straight stair and the tabs are square where they meet
-// the card above them.
+// because the corner the design asks for is a straight stair.
 import { FlipperTheme } from "@theme";
 import { SoftBar, SoftButton } from "frame.slint";
 
@@ -22,8 +21,8 @@ export struct SwitchCard {
     r_br: length,
     // The whole card's opacity, for one joining or leaving the carousel.
     alpha: float,
-    // 0 focused, 1 a tab, in between while it moves: the crossfade between the
-    // two styles rides on this.
+    // 0 focused, 1 a card behind it, in between while it moves: the crossfade
+    // between the two styles rides on this.
     pos_clamped: float,
     // The app's last screen, and how visible it is.
     image: image,
