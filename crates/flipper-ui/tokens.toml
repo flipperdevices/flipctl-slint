@@ -1,0 +1,427 @@
+# Design tokens for the Flipper One 256x144 panel.
+#
+# Single source of truth. build.rs generates the Rust and Slint theme from this
+# file; nothing else may contain a colour literal or a layout constant.
+#
+# Every value here was read out of fake-flipctl2 source, not out of its
+# CLAUDE.md. Where the two disagree the code wins and the discrepancy is
+# recorded in docs/inventory.md.
+
+[meta]
+panel_width = 256
+panel_height = 144
+
+# All colours are pure greys (r == g == b). The panel is 8-bit greyscale:
+# flipper-one-display.c takes XRGB8888 and runs drm_fb_xrgb8888_to_gray8, so a
+# non-grey token would shift under the luma conversion. tests/tokens.rs enforces
+# this.
+[color]
+# Canvas ground and primary ink.
+white         = "#ffffff"   # canvas.clear, button default bg, popup body
+black         = "#000000"   # text, frames, icons, scrollbar, press fill
+
+# Greys, each attributed to its only use.
+divider       = "#cccccc"   # menu.js DIVIDER_COLOR, between adjacent MenuLines
+disabled_bg   = "#cccccc"   # canvas.js disabled button ground
+disabled_fg   = "#999999"   # canvas.js disabled button text
+status_dim    = "#999999"   # MenuLine right-aligned status text, DEFAULT state
+# The unselected interface card's outline: a neutral grey whatever the link state,
+# so a disconnected card reads as grey content in a normal frame rather than as a
+# disabled control.
+card_stroke   = "#999999"   # EthernetTab unselected ResponsiveFrame stroke
+# Backdrop behind a card's top-right cluster, and the selector's drill-in bar.
+pill         = "#cccccc"   # EthernetTab pill
+chevron_bar  = "#666666"   # ComponentSelectorFrame chevronColor
+# Rule between sections of the interface dump. Lighter than the menu divider
+# because it separates groups inside one card rather than sibling rows.
+rule_light   = "#e5e5e5"   # ethernet.js MODAL_DIVIDER_COLOR
+chevron_flash = "#222222"   # MenuLine < > arrow tap flash
+popup_edge    = "#d0d0d0"   # drawPopupLeft shadow edge
+keycap_dim    = "#888888"   # keyboard language-switcher label
+# The app switcher's cards. A tab's label and its stroke are the same tone, and
+# the deepest tab is lighter so the stack reads as receding; a card deeper than a
+# tab keeps the plain bar.
+sw_tab      = "#666666"   # app_switcher.js TAB_CONFIG -1 and +1
+sw_tab_deep = "#a7a7a7"   # TAB_CONFIG -2
+sw_bar_deep = "#6e6e6e"   # TITLE_BAR_BG_DEFAULT
+dialog_body   = "#666666"   # keyboard_test.js discard-modal body line
+field_label   = "#6d6d6d"   # desktop.js field labels: Temperature, Hostname:, IPv4:
+
+# Status bar defaults. Callers may override the triple; Desktop passes
+# bg = eee / fg = black.
+bar_bg        = "#000000"
+bar_fg        = "#ffffff"
+bar_dim       = "#cccccc"   # empty 5G signal bars
+# The boot menu's header, which the auto-start progress bar sweeps black over.
+header_bg     = "#d9d9d9"   # boot_menu.js header fill
+bar_bg_light  = "#eeeeee"   # Desktop override
+bar_fg_light  = "#000000"
+
+# Modal scrim. Composited at overlay_alpha over whatever is behind it.
+overlay       = "#ffffff"
+
+[alpha]
+overlay = 0.75
+
+# Every measurement is an integer pixel count. No fractional layout, no scale
+# factor.
+[metric]
+margin_h            = 8     # centred-content left/right margin
+pad_left            = 4     # ui.js PAD_LEFT, status bar and simple-list text
+scrollbar_w         = 3     # ui.js SCROLLBAR_W
+
+status_bar_h        = 13    # ui.js STATUS_BAR_H
+status_pad_top      = 3     # ui.js STATUS_BAR_PAD_TOP
+
+item_h              = 12    # ui.js ITEM_H, plain simple-list row
+
+menu_line_h         = 20    # MenuLine.js H (14px icon + 3 + 3)
+menu_line_w         = 224   # MenuLine.js DEFAULT_W
+icon_pad            = 3     # MenuLine.js ICON_PAD
+icon_text_gap       = 4     # MenuLine.js TEXT_GAP
+text_draw_y         = 3     # MenuLine.js TEXT_DRAW_Y, puts cap top at line y+6
+status_pad_r        = 5     # MenuLine.js STATUS_PAD_R
+
+# Gap between each chevron and the value in a "< ON >" status. MenuLine.js pins
+# it at 15 and measures the middle slot from "OFF" whichever value is showing, so
+# the chevrons hold still when the value changes width.
+toggle_spacing      = 15    # MenuLine.js spacing
+# Gap for the generic "< value >" adjust affordance, e.g. "< 10 sec >". Unlike the
+# ON/OFF toggle above, the value is measured directly rather than given a fixed
+# slot, so the chevrons sit closer and move with it.
+value_spacing       = 6     # MenuLine.js gSpacing
+
+# Ethernet interface cards. One per link, stacked below the breadcrumb. The page
+# is sized so the worst case (three connected links) fits without scrolling:
+# eth_y + 3 * eth_h_connected + 2 * eth_gap = 26 + 102 + 6 = 134 <= 144.
+eth_x               = 4     # ethernet.js TAB_X
+eth_y               = 26    # ethernet.js TAB_Y
+eth_w               = 248   # ethernet.js TAB_W
+eth_h               = 22    # ethernet.js TAB_H, a disconnected link
+eth_h_connected     = 34    # EthernetTab.CONNECTED_H, room for the RX/TX row
+eth_gap             = 3     # ethernet.js TAB_GAP
+eth_icon_pad_l      = 6     # EthernetTab ICON_PAD_L
+eth_icon_pad_t      = 4     # EthernetTab ICON_PAD_T
+eth_text_gap        = 4     # EthernetTab TEXT_GAP
+eth_status_pad_r    = 10    # EthernetTab STATUS_PAD_R
+eth_name_draw_y     = 3     # EthernetTab NAME_DRAW_Y, Born2bSporty sits higher
+eth_info_draw_y     = 4     # EthernetTab INFO_DRAW_Y
+card_pill_h          = 17    # grey backdrop behind the top-right cluster
+card_pill_r          = 4     # its bottom-left radius
+card_chevron_w       = 7     # ComponentSelectorFrame chevronWidth
+eth_bottom_pad_b    = 5     # EthernetTab BOTTOM_INFO_PAD_B
+eth_bottom_pad_l    = 5     # EthernetTab BOTTOM_INFO_PAD_L
+eth_bottom_gap      = 2     # EthernetTab BOTTOM_INFO_GAP, arrow to its value
+eth_bottom_col_gap  = 5     # EthernetTab BOTTOM_INFO_COL_GAP, between columns
+
+# The generic stacked card: an icon, a bold name, an optional second line under it
+# and a right-hand column. The Ethernet card is the same frame with a denser set of
+# things in it; these are the metrics for the plain one, measured off the nmap host
+# list mockup at device resolution rather than eyeballed from it.
+#
+# 26 on a 27 pitch, so three cards sit between the rule and the soft strip. The
+# mockup shows a fourth cut off by the buttons; whole rows are what every other
+# body in this system draws.
+card_x              = 4
+card_w              = 246   # 4..249, clear of the scrollbar at 252
+card_h              = 26
+card_gap            = 1
+card_icon_x         = 9
+card_icon_y         = 6
+card_text_x         = 30
+card_name_y         = 0     # with a second line under it
+card_name_y_alone   = 5     # centred when the card holds one line
+card_info_y         = 13
+card_right_y        = 0     # the right column sits on the name's line
+card_pad_r          = 6
+
+# The cards page's own rows: the title, the rule under it, and the bar a page shows
+# while its app is still working. The bar is the gauge every other screen draws, so
+# its height comes from gauge_h and not from anything here; these are only where it
+# sits and how wide the marker running along it is.
+cards_top_pad       = 14    # rule to the bar, or to the first card without one
+cards_bar_gap       = 2     # bar to first card
+cards_marker_w      = 5
+
+# The verbose interface dump, opened with OK on a connected card. A full-width
+# frame over the page with its own scroll, in pixel space rather than rows because
+# a divider band is 4px while a text row is 12.
+eth_modal_x           = 4     # ethernet.js MODAL_X
+eth_modal_y           = 18    # ethernet.js MODAL_Y
+eth_modal_w           = 248   # ethernet.js MODAL_W
+eth_modal_h           = 122   # ethernet.js MODAL_H
+eth_modal_pad_x       = 6     # ethernet.js MODAL_PAD_X
+eth_modal_pad_y       = 6     # ethernet.js MODAL_PAD_Y
+eth_modal_line_h      = 12    # ethernet.js MODAL_LINE_H
+eth_modal_divider_h   = 4     # ethernet.js MODAL_DIVIDER_H, the band; the rule is 1px
+eth_modal_label_gap   = 4     # ethernet.js MODAL_LABEL_GAP
+eth_modal_indent      = 8     # ethernet.js MODAL_INDENT, list values under a header
+eth_modal_metric_gap  = 12    # ethernet.js MODAL_METRIC_GAP
+eth_modal_icon_gap    = 2     # ethernet.js MODAL_ICON_GAP, arrow to its value
+eth_modal_arrow_dy    = 2     # ethernet.js ARROW_DY, the 7px sprite against the cap row
+
+list_container_x    = 5     # menu.js CONTAINER_X
+# menu.js's value, and the shipping device's. Five 20px rows plus four dividers is
+# 104px, so the list occupies y25..y128 and leaves y129 blank: a one-pixel gap
+# above the 14px strip at y130. Do not close that gap to "use every row" - it puts
+# every row one pixel below the device and the last row hard against the buttons.
+list_container_y    = 25
+list_container_w    = 224   # menu.js CONTAINER_W
+list_viewport_h     = 104   # menu.js, = 5 * 20 + 4 dividers
+
+# Submenus (Network, Settings, ...) sit 3px lower than the main menu: the
+# breadcrumb row occupies the band between the status bar and the container, so
+# submenu.js anchors at STATUS_BAR_H + 15 where the main menu anchors at 25. The
+# comment there records the history - 16, then 14 to fit an extra row above a
+# bottom app button, then back down to 15.
+submenu_container_y = 28    # submenu.js containerY, = status_bar_h + 15
+breadcrumb_x        = 4     # submenu.js breadcrumbX
+breadcrumb_y        = 15    # submenu.js breadcrumbY, = status_bar_h + 2
+
+selector_x          = 4     # menu.js SELECTOR_X
+selector_w_scroll   = 244   # menu.js SELECTOR_W_WITH_SCROLL
+selector_w_full     = 247   # menu.js SELECTOR_W_NO_SCROLL
+selector_h          = 22    # menu.js SELECTOR_H
+selector_y_offset   = -1    # menu.js SELECTOR_Y_OFFSET
+
+scrollbar_x         = 253   # menu.js SCROLLBAR_X
+scrollbar_y         = 15    # menu.js SCROLLBAR_Y
+scrollbar_h         = 127   # menu.js SCROLLBAR_H
+scrollbar_thumb_pad = 1     # menu.js SCROLLBAR_THUMB_PAD
+scrollbar_thumb_min = 5     # ui.js Scrollbar, floor on computed thumb height
+
+# Blocking dialog, e.g. "turn off Airplane mode to use 5G Modem". A 75% white
+# overlay (see [alpha].overlay) under a rounded frame with centred text and two
+# soft buttons. Geometry from menu.js makeAirplaneBlockModal.
+modal_x             = 16
+modal_y             = 40
+modal_w             = 224
+modal_h             = 60
+modal_line_h        = 11
+
+# The boot menu, which has its own denser geometry: a header instead of a status
+# bar, 16px rows instead of 20, and six of them instead of five.
+# The app switcher's title bars. The focused card's is taller for emphasis; every
+# other card keeps the default. The card frames themselves live in switcher.rs,
+# which is where a table of rectangles belongs.
+sw_bar_h          = 14    # app_switcher.js TITLE_BAR_H_DEFAULT
+sw_bar_h_focused  = 16    # TITLE_BAR_H_BY_POSITION[0]
+
+boot_header_h       = 18    # boot_menu.js HEADER_H
+boot_container_y    = 20    # boot_menu.js CONTAINER_Y, the first row's top
+boot_row_h          = 16    # boot_menu.js ROW_H
+# Gap between rows. boot_menu.js leaves 1px and draws no divider; 2px reads better
+# at this row height. Six rows still clear the soft strip: 20 + 6 * 18 = 128.
+boot_row_gap        = 2
+# The loading spinner shown while list-profiles runs, from the 22x20 8-frame strip
+# spinner_22x20px. boot_menu.js centres it horizontally and in what is left of the
+# body below the header, then lifts it 8px.
+boot_spin_w         = 22
+boot_spin_h         = 20
+boot_spin_frames    = 8
+boot_spin_lift      = 8
+# The on-screen keyboard and the text-input screen around it, from ui.js
+# (UI.Keyboard), canvas.js (drawKeyboard) and keyboard_test.js (TextInputScreen).
+# The container is centred horizontally; its y is a hand-tuned 75.
+kb_container_w      = 250   # drawKeyboard CONTAINER_W
+kb_container_h      = 77    # drawKeyboard CONTAINER_H
+kb_container_y      = 75    # UI.Keyboard this.y
+kb_inner_y          = 5     # keyboardY = container y + 5
+kb_btn_w            = 15    # drawKeyboard BTN_W
+kb_btn_h            = 16    # drawKeyboard BTN_H
+kb_wide_w           = 35    # SHIFT_W / SPACE_W / LANG_W, all the same
+# The number row above the QWERTY row. At rest only its top 2px show; the wave
+# lifts the cells near the selection up to POPPED, one BTN_H above the chrome.
+kb_peek_visible     = 2     # PEEK_VISIBLE_H
+kb_peek_fold_lift   = 1     # PEEK_LIFT_FOLDED
+kb_peek_falloff     = 2     # PEEK_FALLOFF_PX, lift lost per column of distance
+kb_glyph_y          = 2     # glyph baseline inside a cell: btnY + 2
+# The title, the auto-sizing input field and the warning under it.
+kb_title_y          = 24
+kb_input_pad        = 6     # INPUT_PAD
+kb_input_min_w      = 150   # INPUT_MIN_W
+kb_input_max_w      = 238   # INPUT_MAX_W
+kb_input_h          = 14
+kb_input_gap        = 14    # inputY = titleY + 14
+kb_warning_gap      = 3     # warning sits 3px under the field
+kb_text_ink_h       = 11    # font cap height, for centring text in the field
+# The two tabs under the keyboard: 123 on the left, backspace on the right.
+kb_tab_w            = 48
+kb_tab_h            = 14
+kb_tab_inset        = 52    # 52px in from each screen edge
+kb_tab_gap_b        = 2     # 2px above the screen bottom
+# The rotated ] the space bar carries: a 9px rule with a 2px stub at each end.
+kb_space_rule_w     = 9
+kb_space_stub_h     = 2
+
+# The Info and Edit popups, from boot_menu.js. The header band carries the icon,
+# the name and a centred size line; the body starts below it.
+popup_hdr_h         = 38    # boot_menu.js HDR
+popup_line_h        = 11    # its Info line pitch
+popup_row_h         = 16    # its Edit action pitch
+popup_pad_h         = 8     # boot_menu.js padH
+popup_size_y        = 24    # the size line, relative to the frame top
+popup_icon_y        = 6     # icon and name, relative to the frame top
+popup_max_w         = 252   # the frame never grows past this
+size_gap            = 4     # boot_menu.js SIZE_GAP, between the size line's parts
+boot_selector_h     = 16    # boot_menu.js SELECTOR_H, the frame fits the row
+boot_icon_box_w     = 12    # boot_menu.js ICON_BOX_W, a fixed column so labels align
+# Gap between the icon column and the profile name. 2 rather than the menu's 4,
+# which sits the name closer to its icon at this row height.
+boot_text_gap       = 2
+# The title sits 2px higher than the prototype draws it, which is a deliberate
+# edit rather than a transcription: boot_menu.js passes y=3.
+boot_title_y        = 1
+boot_auto_y         = 4     # the countdown text keeps its own baseline
+
+# Detail screens (Routing info, Battery info, Disk info, 5G Modem, Update). These
+# are restyled rather than transcribed: the prototype draws them white-on-black in
+# a fourth bitmap font with "[Back]" as literal text, predating its own design
+# system. Same data and row order, drawn like every other screen.
+#
+# A row's text ink, measured rather than assumed: a 16px Busy9px line drawn at
+# the row's top has its first inked row 3 down and spans 9 rows (cap height plus
+# descender). The gauge centres on that band rather than on the row box, so the bar
+# and the label read as one line.
+text_ink_top        = 3
+text_ink_h          = 9
+# Fill height, so the bar is gauge_h + 2 with its border. 7 fills the text's ink
+# band exactly, which is the chosen look; the prototype's own value is 5, which
+# centres on the same band but sits inside it.
+gauge_h             = 7
+# The column a gauge's bar starts in, and the gap between a label and a bar.
+#
+# 30 is the approved column for this screen and every first-party gauge uses it
+# whatever its label says, because these screens are fixed geometry: the battery
+# and disk gauges are labelled with percentages and their bars do not move.
+#
+# A gauge an app describes is sized instead, since the label is the app's to
+# choose: it clears its own label with the gap, never starting before this column,
+# and a gauge with no label at all starts at the margin. That is the one place a
+# label's width decides a position.
+gauge_col           = 30
+gauge_label_gap     = 4
+
+# Horizontal geometry from the Figma export `soft_button_bar`: 5 * 48 + 4 * 4 =
+# 256 exactly, so the slots tile evenly and both outer edges land flush. canvas.js
+# anchored its right button at `screenW - w` instead, leaving a 10px hole.
+#
+# Height stays at canvas.js's 14, matching what the device actually shows. The
+# Figma frame is 17 and the two disagree; 14 is the decision.
+button_h            = 14
+button_w            = 48
+button_gap          = 4
+# 4px stair on both top corners of every button, including the outer two. Bottom
+# corners are square and the buttons run to the bottom of the panel, so there is
+# no bottom border.
+button_corner       = 4
+
+popup_item_h        = 13    # ui.js POPUP_ITEM_H
+popup_pad           = 3     # ui.js POPUP_PAD
+
+key_w               = 15    # ui.js keyboard BTN_W
+key_h               = 16    # ui.js keyboard BTN_H
+key_wide_w          = 35    # shift / space / language, all equal
+key_gap             = 0     # canvas.js BTN_GAP
+keyboard_w          = 250   # ui.js CONTAINER_W
+keyboard_h          = 77    # ui.js CONTAINER_H
+
+msgbox_pad          = 6     # MessageBox.js padding
+msgbox_line_h       = 12    # MessageBox.js line advance
+msgbox_right_pad    = 12    # MessageBox.js textRightPadding
+
+tab_h               = 17    # canvas.js TAB_H
+
+# Idle screen readout positions, all fixed. desktop.js places the battery and CPU
+# glyphs at literal x, which is why neither ever moved; only the power icon was
+# derived from measured text. Tokenised so the whole row is described in one place.
+battery_icon_x      = 36
+cpu_icon_x          = 82
+temp_label_x        = 57
+power_label_x       = 163
+# Gap between a glyph and its reading, from drawThermalCard.
+readout_gap         = 3
+
+# Left edge of the power-flow icon on the idle screen.
+#
+# desktop.js derives this from the CPU reading's measured width
+# (`cpuTempEndX(cpuTempC) + 34`), which makes the icon slide: '1' has an advance of
+# 3 in HaxrCorp while every other digit has 6, so the reading is 3px narrower
+# whenever it contains a 1, and the whole power block jumps. Pinning the position
+# reproduces the intended 34px gap from a reference reading of "55.5" without the
+# jitter. The reference reading "55.5" puts it at
+# 82 + 15 + 3 + 19 + 1 + 4 + 1 + 5 + 34 = 164, nudged 2px left by eye to 162.
+power_icon_x        = 162
+
+# Dimensionless counts. Kept apart from [metric] because those are pixel lengths;
+# a count used as a length is a type error in the generated Slint theme.
+[count]
+list_visible_rows = 5    # menu.js VISIBLE_COUNT
+# Lines an app's log body shows. The body starts at status_bar_h + 18 and the soft
+# strip starts at 130, so 8 lines of item_h fit with the last one clear of the
+# buttons: 31 + 7 * 12 + 11 = 126.
+log_visible_lines = 8
+# Rows the boot menu shows. Six 16px rows from y20 leaves the bottom 16px for the
+# soft strip: 20 + 6 * 16 = 116, and the buttons start at 130.
+boot_visible_rows = 6
+# Rows a detail screen shows. Body starts at submenu_container_y (28) on an item_h
+# pitch, and the last row has to clear the soft strip at 130: 28 + 8 * 12 = 124.
+detail_visible_rows = 8
+msgbox_max_chars  = 25   # MessageBox.js maxLineLength
+
+# drawRoundRect / drawRoundFrame accept these three only; anything else falls
+# back to a square rect.
+[radius]
+small = 2   # popup item selection
+popup = 5   # boot_menu.js popup frame, the only radius-5 shape
+menu  = 3   # MenuSelectorFrame, dialog body
+box   = 4   # MessageBox, bottom-bar button top corners, keyboard container
+
+[timing]
+press_flash_ms   = 30    # bottom-bar button, next scene usually replaces the view
+chevron_flash_ms = 120   # toggle chevron tap, must outlast the 200ms icon tick
+press_commit_ms  = 150   # popup item and keyboard key, the flash must be seen
+icon_frame_ms    = 200   # animated icon strip, 5 fps
+spin_frame_ms    = 100   # boot_menu.js load spinner, 10 fps
+cursor_blink_ms  = 500   # BlinkingKeyboardCursor default
+kb_peek_wave_ms  = 160   # ui.js KB_PEEK_WAVE_MS
+# Caps lock, which the keyboard latches two ways: OK held on the shift key, or
+# two presses of it inside the double window.
+kb_caps_hold_ms  = 1000
+kb_double_ms     = 300
+
+# System-wide rules, decided once and applied everywhere.
+[rule]
+# Long text wraps to a second line rather than truncating or scrolling. Applies
+# wherever there is vertical room: dialogs, MessageBox, titles, detail screens.
+#
+# MenuLine is the one place it cannot apply: a 20px row cannot hold two 16px
+# lines, so a label longer than its row is truncated there. Growing the row would
+# make list height variable and break the five-row viewport.
+overflow = "wrap"
+# Disabled controls keep their white ground and grey only the outline and the
+# label. canvas.js was inconsistent here, filling middle slots white but left and
+# right slots #cccccc; white everywhere is the resolution.
+disabled = "outline-only"
+
+# The three fonts are packed 1bpp bitmap tables with a per-glyph advance width,
+# generated from the flipctl-fonts TTFs by ttf-to-js.py. rows/cols are the glyph
+# frame; advance comes from the table, so text width is a sum, never a
+# multiplication.
+[font.title]
+name = "HaxrCorp4090FlipCTL"
+rows = 13
+cols = 16
+use  = "status bar, titles, dialogs, message box, most scenes"
+
+[font.row]
+name = "Busy9pxFlipCTL"
+rows = 16
+cols = 16
+use  = "MenuLine label and status in DEFAULT state"
+
+[font.row_active]
+name = "Born2bSportyV2FlipCTL"
+rows = 18
+cols = 16
+use  = "MenuLine label and status in SELECTED and PRESSED states"
