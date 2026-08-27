@@ -332,8 +332,8 @@ pub fn profiles() -> Vec<Profile> {
     // filesystem it means. A profile anywhere else therefore never wears the heart,
     // and never can, which is also why Auto Start is not offered for one.
     let stores = stores();
-    let marked = marker(&internal_dev(&stores));
     if stores.is_empty() {
+        let marked = marker("");
         // No lsblk, or nothing recognisable: ask about the booted filesystem alone,
         // which is what this did before there was anything else to ask about.
         return sudo(&["list-profiles"])
@@ -341,13 +341,35 @@ pub fn profiles() -> Vec<Profile> {
             .unwrap_or_default();
     }
 
+    // One thread per drive, and the marker read alongside them.
+    //
+    // A listing mounts that filesystem's top level and walks every subvolume on it,
+    // which is seconds of I/O per drive, and the drives are independent: nothing is
+    // shared and the read-only tools take no lock, only the mutating ones do. Done in
+    // turn, the menu waits for the sum; done at once, for the slowest. The order of
+    // the results is the order of `stores`, so the list on screen does not depend on
+    // which drive answered first.
+    let (marked, listings) = std::thread::scope(|scope| {
+        let mark = scope.spawn(|| marker(&internal_dev(&stores)));
+        let reads: Vec<_> = stores
+            .iter()
+            .map(|store| {
+                scope.spawn(move || {
+                    if store.booted {
+                        sudo(&["list-profiles"])
+                    } else {
+                        sudo(&["list-profiles", "-d", &store.dev])
+                    }
+                })
+            })
+            .collect();
+        let listings: Vec<Option<String>> =
+            reads.into_iter().map(|r| r.join().unwrap_or(None)).collect();
+        (mark.join().unwrap_or_default(), listings)
+    });
+
     let mut out = Vec::new();
-    for store in stores {
-        let listing = if store.booted {
-            sudo(&["list-profiles"])
-        } else {
-            sudo(&["list-profiles", "-d", &store.dev])
-        };
+    for (store, listing) in stores.iter().zip(listings) {
         let Some(listing) = listing else { continue };
         let internal = store.medium == Medium::Internal;
         let marker = if internal { marked.as_str() } else { "" };
@@ -634,6 +656,34 @@ pub fn dtbo(dev: &str, subvol: &str) -> (Vec<String>, Vec<String>) {
 /// it. `Profile::dev` is empty for exactly those, which is what selects this path.
 const BOOTED_ENTRIES: &str = "/boot/loader/entries";
 
+/// A name for one mount, which no other mount of this process will use.
+///
+/// The drives are read one thread each, and every one of them mounts a filesystem to
+/// read its entries. Named per process, as this was, they all mount over the same
+/// directory: the second mount stacks on the first, so a thread reads whatever
+/// filesystem is on top rather than the one it asked for, and which thread that is
+/// depends on the order two mounts land in.
+///
+/// What that looked like: two drives, and each pass one of them reported its entries
+/// while the other reported none, swapping between passes. A profile marked to boot
+/// by itself on the drive that came back empty was then not marked at all -- no
+/// heart on its row, and nothing for the countdown to boot -- until the list was
+/// read again and the race fell the other way.
+///
+/// The device's own name is in here because it makes the mount legible in
+/// /proc/mounts while it exists, and the counter because the same device can be
+/// mounted twice at once: the marker read goes alongside the listings, and on the
+/// internal drive that is the same filesystem twice.
+fn mount_point(dev: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let leaf = dev.rsplit('/').find(|part| !part.is_empty()).unwrap_or("dev");
+    format!(
+        "flipctl-entries.{}.{leaf}.{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
 /// A read-only top-level mount of another filesystem, unmounted when dropped.
 ///
 /// A profile's boot entry lives on the profile's own drive: a card's entry names
@@ -653,7 +703,7 @@ impl TopLevel {
         // /run first, as the tools do: it is tmpfs, root-only, and nobody sweeps it by
         // glob. Whether it can be written is not a question the mode bits answer -- an
         // unprivileged flipctl cannot write root's 0755 /run -- so try and see.
-        let name = format!("flipctl-entries.{}", std::process::id());
+        let name = mount_point(dev);
         let path = ["/run", "/tmp"]
             .into_iter()
             .map(|base| std::path::Path::new(base).join(&name))
@@ -1239,5 +1289,48 @@ mod tests {
         // user's own PATH is not the one a tool of ours runs with.
         assert_eq!(env_supath("#ENV_SUPATH\tPATH=/nope\n"), None);
         assert_eq!(env_supath("ENV_PATH\tPATH=/usr/bin\n"), None);
+    }
+}
+
+#[cfg(test)]
+mod mount_tests {
+    use super::*;
+
+    /// Two mounts never share a directory, whether they are two drives being read at
+    /// once or the same drive read twice, which the marker read does alongside the
+    /// listings.
+    ///
+    /// Sharing one is what made a marked profile lose its heart: the drives are read
+    /// a thread each, the second mount stacked on the first, and a thread read the
+    /// wrong filesystem and reported no entries at all.
+    #[test]
+    fn every_mount_gets_a_directory_of_its_own() {
+        let names = [
+            mount_point("/dev/sda3"),
+            mount_point("/dev/mmcblk0p3"),
+            mount_point("/dev/sda3"),
+        ];
+        let unique: std::collections::HashSet<&String> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "two mounts share a name: {names:?}");
+        // The device is in the name, so the mount is legible in /proc/mounts while
+        // it is there.
+        assert!(names[0].contains("sda3"), "{}", names[0]);
+        assert!(names[1].contains("mmcblk0p3"), "{}", names[1]);
+        // And nothing in it can walk out of /run or /tmp.
+        for name in &names {
+            assert!(!name.contains('/'), "{name}");
+            assert!(!name.contains(".."), "{name}");
+        }
+    }
+
+    /// A device path that is only slashes, or empty, still yields a usable name
+    /// rather than one that resolves to the parent directory.
+    #[test]
+    fn an_odd_device_name_is_still_a_directory_name() {
+        for dev in ["", "/", "///", "/dev/"] {
+            let name = mount_point(dev);
+            assert!(!name.contains('/'), "{dev:?} -> {name}");
+            assert!(name.starts_with("flipctl-entries."), "{dev:?} -> {name}");
+        }
     }
 }
