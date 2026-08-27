@@ -519,17 +519,9 @@ export component BootBody inherits Rectangle {
         height: 100%;
         background: FlipperTheme.white;
 
-        Image {
-            x: Math.floor((parent.width - FlipperTheme.boot_spin_w) / 2 / 1px) * 1px;
-            y: FlipperTheme.boot_booting_spin_y;
-            width: FlipperTheme.boot_spin_w;
-            height: FlipperTheme.boot_spin_h;
-            source: @image-url("../assets/icons/spinner_22x20px.png");
-            source-clip-x: 0;
-            source-clip-y: root.spin_frame * (FlipperTheme.boot_spin_h / 1px);
-            source-clip-width: FlipperTheme.boot_spin_w / 1px;
-            source-clip-height: FlipperTheme.boot_spin_h / 1px;
-        }
+        // No spinner here, unlike every other wait in this program: this screen is
+        // committed once and then the panel is left alone until the machine goes, so a
+        // spinner could only ever stand still, and a still spinner says "hung".
 
         Text {
             width: 100%;

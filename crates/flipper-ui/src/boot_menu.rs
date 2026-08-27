@@ -580,15 +580,12 @@ impl BootMenu {
                 }
                 // Handing over, or the thread is gone: nothing left to say.
                 Ok(Ok(false)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
-                // Still loading the kernel. The frame is asked for here because
-                // nothing else changes while a boot runs, and the takeover's spinner
-                // has to keep turning until the machine goes: a still one reads as a
-                // boot that hung. The boot itself is on its own thread and waits for
-                // none of this.
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    moved = true;
-                    None
-                }
+                // Still loading the kernel, and nothing is asked to change while it
+                // does: a frame committed now is an SPI transfer that leaves the DMA
+                // controller armed for the next kernel to trip over, which is a panic
+                // it cannot even report. The takeover is drawn once and then stands
+                // still. The boot itself is on its own thread and waits for none of it.
+                Err(std::sync::mpsc::TryRecvError::Empty) => None
             },
             None => None,
         };

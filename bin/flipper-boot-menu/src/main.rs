@@ -12,7 +12,7 @@
 //!
 //! Usage: flipper-boot-menu [--kms-device /dev/dri/cardN]
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flipper_ui::boot_menu::{BootMenu, Outcome};
 use flipper_ui::evdev::EvdevSource;
@@ -53,7 +53,18 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
         )));
     }
     eprintln!("panel          {w}x{h}, {}", sink.format());
-    let mut input = EvdevSource::open()?;
+    // The buttons are on i2c and their probe can fail, which it has: the menu then exited
+    // for want of them and init respawned it about once a second, so the panel showed
+    // nothing and the countdown never ran. Draw regardless and keep looking, because a
+    // device whose buttons are dead still has to boot the profile that is marked.
+    let mut input = match EvdevSource::open() {
+        Ok(source) => Some(source),
+        Err(e) => {
+            eprintln!("boot menu      no buttons yet: {e}");
+            None
+        }
+    };
+    let mut looked_for_input = Instant::now();
 
     let window = FlipperSlintPlatform::install();
     let ui = Menu::new().map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -67,15 +78,27 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
 
     let mut frame: Vec<flipper_ui::Gray8> = Vec::new();
     let mut dirty = true;
+    // Whether the takeover has had its one frame; see the loop for why it gets only one.
+    let mut takeover_committed = false;
     // The same 8ms flipctl paces its loop at: the panel takes a frame every 16 to 19
     // milliseconds, so this is twice the rate anything can be shown at and the keys
     // never wait for a frame.
     let pace = Duration::from_millis(8);
 
     loop {
+        // Buttons that were not there at startup may arrive later, so ask again now and
+        // then. Not every frame: opening them walks /dev/input.
+        if input.is_none() && looked_for_input.elapsed() >= Duration::from_secs(1) {
+            looked_for_input = Instant::now();
+            if let Ok(source) = EvdevSource::open() {
+                eprintln!("boot menu      buttons appeared");
+                input = Some(source);
+            }
+        }
+
         // Drained, not sampled: a press and its release arrive as two events and
         // both have to be seen on the turn they land, or a held key reads as stuck.
-        while let Some(event) = input.poll() {
+        while let Some(event) = input.as_mut().and_then(InputSource::poll) {
             dirty = true;
             // What makes the name invalid, which also gates saving it.
             warning = match kb.as_ref() {
@@ -132,12 +155,30 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
             dirty = true;
         }
 
+        // The takeover is committed once and never again: nothing may transfer to the
+        // panel while a kexec loads.
+        //
+        // Measured on the device. A commit is an SPI write over pl330, which keeps that
+        // controller clocked with an event armed; kexec does not reset it, so the next
+        // kernel takes the interrupt during its own probe, walks channels[] with the -1
+        // that means "no channel assigned", and dies on a NULL dereference twenty
+        // milliseconds before its console exists. With frames still going: a panic on
+        // nearly every attempt, dmac0 reading INTEN=0x1. With this one frame only: dmac0
+        // gated and idle, and the boot succeeds. The proper fix is a shutdown hook in the
+        // pl330 driver, after which frames here would be harmless again.
+        let booting = !menu.view().booting.is_empty();
         if dirty {
             dirty = false;
             apply(&ui, &menu, kb.as_ref(), &warning);
             window.request_redraw();
-            if let Some(damage) = render_into(&window, &mut frame) {
-                sink.commit(Frame::new(&frame, PANEL_W, PANEL_H), damage)?;
+            if !booting || !takeover_committed {
+                if let Some(damage) = render_into(&window, &mut frame) {
+                    sink.commit(Frame::new(&frame, PANEL_W, PANEL_H), damage)?;
+                }
+                if booting {
+                    takeover_committed = true;
+                    eprintln!("boot menu      takeover drawn; the panel is left alone from here");
+                }
             }
         }
 
