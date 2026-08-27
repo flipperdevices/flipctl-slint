@@ -1594,6 +1594,26 @@ fn start_profiles_read() -> Option<std::sync::mpsc::Receiver<Vec<flipper_ui::boo
         .map(|_| rx)
 }
 
+/// Boot a profile: the name the panel shows while it happens, and the result.
+///
+/// One path for both ways in, Ok on a row and the countdown running out on the
+/// marked one. The panel is given over to the takeover for as long as this takes,
+/// which is either until the machine leaves or until the load fails and says why.
+#[cfg(feature = "slint")]
+fn start_boot_now(
+    profile: &flipper_ui::boot::Profile,
+) -> Option<(String, std::sync::mpsc::Receiver<Result<(), String>>)> {
+    let name = profile.name.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("boot-now".into())
+        .spawn(move || {
+            let _ = tx.send(flipper_ui::boot::boot_now(&name));
+        })
+        .ok()?;
+    Some((flipper_ui::boot::profile_label(&profile.name), rx))
+}
+
 /// Start one of the Edit actions on a thread, returning the popup state to show.
 ///
 /// Every one of these shells out to a tool that takes seconds to a minute, so none
@@ -2256,6 +2276,8 @@ fn panel(
     let mut boot_selected = 0i32;
     let mut boot_scroll = 0i32;
     let mut boot_started: Option<Instant> = None;
+    // The profile being booted, as the takeover shows it, and the load's answer.
+    let mut booting: Option<(String, std::sync::mpsc::Receiver<Result<(), String>>)> = None;
     // Where the load spinner counts its frames from.
     let boot_spin_at = Instant::now();
     let mut boot_cancelled = false;
@@ -3618,6 +3640,13 @@ fn panel(
                     continue;
                 }
 
+                // Nothing to answer once the kexec is loading: the machine is on
+                // its way out, and Back to a list that is about to stop existing
+                // is not a choice worth offering.
+                if booting.is_some() {
+                    continue;
+                }
+
                 let count = boot_profiles.len() as i32;
                 match event.key {
                     FlipperKey::Down if count > 0 => {
@@ -3625,6 +3654,17 @@ fn panel(
                     }
                     FlipperKey::Up if count > 0 => {
                         boot_selected = (boot_selected - 1).rem_euclid(count);
+                    }
+                    // Boot the one under the cursor. Nothing else acts on a
+                    // choice: U-Boot has no menu and ignores the marker, so this
+                    // and the countdown are the only ways a profile is entered.
+                    FlipperKey::Ok | FlipperKey::Run if count > 0 => {
+                        if let Some(p) = boot_profiles.get(boot_selected as usize) {
+                            eprintln!("boot menu      kexec into {}", p.name);
+                            if let Some((label, rx)) = start_boot_now(p) {
+                                booting = Some((label, rx));
+                            }
+                        }
                     }
                     // Info is slot 1 and Edit slot 3, the two labelled keys.
                     FlipperKey::View if count > 0 => {
@@ -4205,7 +4245,11 @@ fn panel(
                         boot_profiles = list;
                         boot_pending = None;
                         boot_last_shown = -2;
-                        if !boot_cancelled {
+                        // Only when a profile is marked: the countdown boots the
+                        // one wearing the heart, so with nothing marked there is
+                        // nothing to count down to and the menu simply waits.
+                        let marked = boot_profiles.iter().any(|p| p.auto_boot);
+                        if !boot_cancelled && marked {
                             boot_started = Some(Instant::now());
                         }
                     }
@@ -4240,6 +4284,45 @@ fn panel(
                 }
                 _ => 0,
             };
+            // Time up: boot the marked profile. The countdown is cleared first, so
+            // a boot that fails leaves the menu sitting there rather than trying
+            // again every turn.
+            if let Some(at) = boot_started {
+                if !boot_cancelled && booting.is_none() && at.elapsed() >= BOOT_TIMEOUT {
+                    boot_started = None;
+                    boot_cancelled = true;
+                    if let Some(p) = boot_profiles.iter().find(|p| p.auto_boot) {
+                        eprintln!("boot menu      countdown done, kexec into {}", p.name);
+                        if let Some((label, rx)) = start_boot_now(p) {
+                            booting = Some((label, rx));
+                        }
+                    }
+                }
+            }
+
+            // The takeover, and what to do if the machine is still here: a kexec
+            // that would not load is the one boot failure a person can act on, so
+            // it is said rather than swallowed.
+            match booting.as_ref() {
+                Some((label, rx)) => {
+                    screen.set_boot_booting(label.as_str().into());
+                    match rx.try_recv() {
+                        Ok(Err(e)) => {
+                            eprintln!("boot menu      kexec refused: {e}");
+                            booting = None;
+                            screen.set_boot_booting("".into());
+                            popup = Some(Popup::Said(e));
+                            popup_index = 0;
+                            popup_dirty = true;
+                        }
+                        // Loaded and handing over, or the thread is gone: either
+                        // way there is nothing left to say here.
+                        Ok(Ok(())) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    }
+                }
+                None => screen.set_boot_booting("".into()),
+            }
             // The popup's own state: the space read landing, an action finishing,
             // and the rows it shows.
             if let Some(rx) = popup_space_rx.as_ref() {

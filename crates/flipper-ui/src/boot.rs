@@ -427,6 +427,33 @@ fn run(args: &[&str]) -> Result<(), String> {
         .to_string())
 }
 
+/// Boot a profile now, by kexec, and do not come back.
+///
+/// `boot-profile` reads that profile's own BLS entry for the kernel, the initrd and
+/// the command line, assembles its device tree (the running profile's is the live
+/// one; any other profile's is the board base plus the entry's overlays through
+/// fdtoverlay), loads all of it with kexec and hands over. So a profile boots with
+/// its own kernel and its own tree, which is what mounting its root and switching
+/// into it could not do.
+///
+/// U-Boot does not read the auto-boot marker and has no timeout of its own, so this
+/// is the only thing that acts on a choice: the marker says which profile the menu
+/// boots when nobody presses anything, and this is what boots it.
+///
+/// Returns only when it failed. On success the machine is already on its way out.
+///
+/// `FLIPCTL_BOOT_DRY_RUN=1` loads and unloads instead of handing over, which is how
+/// this is tested without losing the session that started it.
+pub fn boot_now(name: &str) -> Result<(), String> {
+    if !valid_name(name) {
+        return Err("invalid name".into());
+    }
+    if std::env::var_os("FLIPCTL_BOOT_DRY_RUN").is_some() {
+        return run(&["boot-profile", "--dry-run", name]);
+    }
+    run(&["boot-profile", name])
+}
+
 /// Point the auto-boot marker at a profile.
 pub fn set_auto_start(id: &str) -> Result<(), String> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {

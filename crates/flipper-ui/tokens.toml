@@ -273,6 +273,13 @@ boot_text_gap       = 2
 # edit rather than a transcription: boot_menu.js passes y=3.
 boot_title_y        = 1
 boot_auto_y         = 4     # the countdown text keeps its own baseline
+# The booting takeover, from boot_menu.js's own render: the spinner, then the word
+# and the profile's name under it, all centred, with the panel's margin either side
+# of a name long enough to wrap. The prototype pitches wrapped lines at 12px; Slint
+# has no line-height on Text, so a two-line name is spaced by the font instead.
+boot_booting_spin_y = 34
+boot_booting_text_y = 74
+boot_booting_name_y = 88
 
 # Detail screens (Routing info, Battery info, Disk info, 5G Modem, Update). These
 # are restyled rather than transcribed: the prototype draws them white-on-black in

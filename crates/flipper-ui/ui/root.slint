@@ -114,6 +114,8 @@ export component Root inherits Window {
     in property <int> boot_pressed_slot: -1;
     in property <bool> boot_loading;
     in property <int> boot_spin_frame;
+    // Non-empty while a profile is being kexec'd, which takes the whole panel.
+    in property <string> boot_booting;
     // The Info or Edit popup over the boot menu.
     in property <bool> boot_popup_open;
     in property <string> boot_popup_title;
@@ -311,6 +313,7 @@ export component Root inherits Window {
         pressed_slot: root.boot_pressed_slot;
         loading: root.boot_loading;
         spin_frame: root.boot_spin_frame;
+        booting: root.boot_booting;
         popup_open: root.boot_popup_open;
         popup_title: root.boot_popup_title;
         popup_icon: root.boot_popup_icon;

@@ -357,6 +357,10 @@ export component BootBody inherits Rectangle {
     in property <bool> loading;
     // Which frame of the load spinner strip to show.
     in property <int> spin_frame;
+    // The profile being booted, or empty. Non-empty takes the whole panel: the
+    // kexec is under way and the list behind it is no longer a choice anyone can
+    // make.
+    in property <string> booting;
 
     width: 100%;
     height: 100%;
@@ -485,6 +489,47 @@ export component BootBody inherits Rectangle {
         text: "(no profiles)";
         font-size: 16px;
         color: FlipperTheme.keycap_dim;
+    }
+
+    // Booting: the panel is given over to it until the handover happens, or until
+    // it fails and the list comes back. Drawn over everything rather than instead
+    // of it, so nothing else has to know this state exists.
+    if root.booting != "": Rectangle {
+        width: 100%;
+        height: 100%;
+        background: FlipperTheme.white;
+
+        Image {
+            x: Math.floor((parent.width - FlipperTheme.boot_spin_w) / 2 / 1px) * 1px;
+            y: FlipperTheme.boot_booting_spin_y;
+            width: FlipperTheme.boot_spin_w;
+            height: FlipperTheme.boot_spin_h;
+            source: @image-url("../assets/icons/spinner_22x20px.png");
+            source-clip-x: 0;
+            source-clip-y: root.spin_frame * (FlipperTheme.boot_spin_h / 1px);
+            source-clip-width: FlipperTheme.boot_spin_w / 1px;
+            source-clip-height: FlipperTheme.boot_spin_h / 1px;
+        }
+
+        Text {
+            width: 100%;
+            y: FlipperTheme.boot_booting_text_y;
+            horizontal-alignment: center;
+            text: "Booting";
+            font-size: 16px;
+            color: FlipperTheme.black;
+        }
+
+        Text {
+            x: FlipperTheme.margin_h;
+            y: FlipperTheme.boot_booting_name_y;
+            width: parent.width - 2 * FlipperTheme.margin_h;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            text: root.booting;
+            font-size: 16px;
+            color: FlipperTheme.black;
+        }
     }
 
     // Scrollbar, from the first row down to the soft strip.
