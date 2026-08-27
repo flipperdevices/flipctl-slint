@@ -552,7 +552,16 @@ impl BootMenu {
                     Some(format!("{label}: loaded OK (dry run)"))
                 }
                 // Handing over, or the thread is gone: nothing left to say.
-                Ok(Ok(false)) | Err(_) => None,
+                Ok(Ok(false)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+                // Still loading the kernel. The frame is asked for here because
+                // nothing else changes while a boot runs, and the takeover's spinner
+                // has to keep turning until the machine goes: a still one reads as a
+                // boot that hung. The boot itself is on its own thread and waits for
+                // none of this.
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    moved = true;
+                    None
+                }
             },
             None => None,
         };
@@ -785,8 +794,14 @@ impl BootMenu {
                 f32::from(w)
             },
             // Info on slot 2 and Edit on slot 4, which is where boot_menu.js puts
-            // them: the outer slots stay empty on this screen.
-            buttons: ["", "Info", "", "Edit", ""],
+            // them: the outer slots stay empty on this screen. Once a boot is under
+            // way `key` answers nothing, so the labels go with it rather than offer
+            // two presses that do not happen.
+            buttons: if self.booting.is_some() {
+                ["", "", "", "", ""]
+            } else {
+                ["", "Info", "", "Edit", ""]
+            },
         }
     }
 }

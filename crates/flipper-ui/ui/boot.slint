@@ -552,8 +552,9 @@ export component BootBody inherits Rectangle {
         }
     }
 
-    // Scrollbar, from the first row down to the soft strip.
-    if root.rows.length > FlipperTheme.boot_visible_rows: Rectangle {
+    // Scrollbar, from the first row down to the soft strip. Gone under the takeover,
+    // which covers the list it belongs to.
+    if root.rows.length > FlipperTheme.boot_visible_rows && root.booting == "": Rectangle {
         x: FlipperTheme.scrollbar_x - 1px;
         y: FlipperTheme.boot_container_y;
         width: FlipperTheme.scrollbar_w;
