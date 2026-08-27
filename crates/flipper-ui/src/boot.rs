@@ -12,6 +12,8 @@
 
 use std::process::{Command, Stdio};
 
+use crate::sysinfo::output;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Profile {
     /// Subvolume name, e.g. `@Minimal` or `@Desktop__My-Games__`.
@@ -28,6 +30,15 @@ pub struct Profile {
     pub origin: String,
     /// Marked to boot next, per the metadata partition.
     pub auto_boot: bool,
+    /// What its filesystem is sitting on. Anything but `Internal` can be listed and
+    /// booted, but never marked: see `stores`.
+    pub medium: Medium,
+    /// The partition it lives on, e.g. `/dev/mmcblk0p3`. Empty for the filesystem
+    /// this system booted from, which every tool takes as its default.
+    pub dev: String,
+    /// The drive that partition is on, e.g. `/dev/sda`, and what to call it.
+    pub disk: String,
+    pub kind: &'static str,
 }
 
 fn sudo(args: &[&str]) -> Option<String> {
@@ -69,6 +80,167 @@ pub fn available() -> bool {
     })
 }
 
+/// The partition type every filesystem of ours carries: the Discoverable Partitions
+/// Spec's Linux root for arm64.
+const ROOT_TYPE: &str = "b921b045-1df0-41c3-af44-4c6f280d3fae";
+
+/// What a filesystem is sitting on.
+///
+/// Kept apart because they are not interchangeable to a person holding the device: a
+/// profile on the machine's own storage is the machine, one on a card is something
+/// they put in and can take out again. Each kind gets its own icon; until the design
+/// has them, everything that is not internal borrows the card's.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Medium {
+    /// The machine's own storage: UFS here, or soldered eMMC elsewhere.
+    #[default]
+    Internal,
+    /// An SD card.
+    Sd,
+    /// A USB stick or disk.
+    Usb,
+    /// A SATA or NVMe drive.
+    Ssd,
+}
+
+impl Medium {
+    /// Which of the four, as the Slint row wants it: 0 internal, 1 card, 2 USB, 3 drive.
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Medium::Internal => 0,
+            Medium::Sd => 1,
+            Medium::Usb => 2,
+            Medium::Ssd => 3,
+        }
+    }
+}
+
+/// A filesystem that can hold profiles.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Store {
+    /// The partition, e.g. `/dev/sda3` or `/dev/mmcblk0p3`.
+    pub dev: String,
+    /// The whole drive it is a partition of, e.g. `/dev/sda`.
+    pub disk: String,
+    /// What it is sitting on.
+    pub medium: Medium,
+    /// What to call that on screen: UFS, eMMC, SD, USB, NVMe, SATA.
+    pub kind: &'static str,
+    /// The filesystem this system booted from.
+    pub booted: bool,
+}
+
+/// What a block device is, from what sysfs says about it.
+///
+/// `lsblk` reports the chain of subsystems a device hangs off and its transport, both
+/// read out of sysfs, and that is what tells these apart. Measured on the device: UFS
+/// reports **no** transport at all and only its controller (`...ufshc...`) in the path,
+/// while an SD card reports `mmc`. So neither the transport alone nor the name alone is
+/// enough, and the removable-media flag is worse than useless: an SD card sets `RM=0`.
+///
+/// mmc covers both a card and soldered eMMC, which are opposite answers to "is this the
+/// machine or something I put in", so the card's own `type` file decides: `SD` for a
+/// card, `MMC` for eMMC.
+/// What it is, and what to call it on screen.
+///
+/// No lsblk column ever says UFS: the internal storage looks like plain SCSI on a
+/// platform bus, model `BWU2A0516B064G`, with an empty transport. Its controller is
+/// the only thing that names it, so the answer comes from the device's sysfs path.
+fn classify(subsystems: &str, tran: &str, disk: &str, hotplug: bool) -> (Medium, &'static str) {
+    let has = |what: &str| subsystems.split(':').any(|s| s == what);
+    if has("usb") {
+        return (Medium::Usb, "USB");
+    }
+    if tran == "nvme" || has("nvme") {
+        return (Medium::Ssd, "NVMe");
+    }
+    if tran == "sata" || has("ata") {
+        return (Medium::Ssd, "SATA");
+    }
+    if tran == "mmc" || has("mmc") {
+        // A card and soldered eMMC are opposite answers to "is this the machine or
+        // something I put in", and mmc covers both, so the card's own type decides.
+        let kind = std::fs::read_to_string(format!("/sys/block/{disk}/device/type"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        return if kind == "MMC" {
+            (Medium::Internal, "eMMC")
+        } else {
+            (Medium::Sd, "SD")
+        };
+    }
+    // The controller, for the buses lsblk does not name.
+    let path = std::fs::canonicalize(format!("/sys/block/{disk}"))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if path.contains("ufshc") || path.contains("ufs") {
+        return (Medium::Internal, "UFS");
+    }
+    // Nothing recognisable. Hotplug is the last clue: something that can be unplugged
+    // is not the machine's own storage, and a USB disk is the likeliest of those.
+    if hotplug {
+        (Medium::Usb, "USB")
+    } else {
+        (Medium::Internal, "disk")
+    }
+}
+
+/// Every filesystem of ours the machine can see, the booted one first.
+///
+/// Found by partition type rather than by filesystem label, because the label
+/// cannot tell them apart: a card written with our own image carries the same
+/// `flipperos` label as the internal storage, on a partition of the same type. What
+/// separates them is hotplug. Note that the removable-media flag does not: an SD
+/// card reports `RM=0` and `HOTPLUG=1`, which is the opposite way round to what the
+/// name suggests.
+pub fn stores() -> Vec<Store> {
+    let Some(listing) = output(&[
+        "lsblk", "-P", "-o", "PATH,PARTTYPE,FSTYPE,HOTPLUG,SUBSYSTEMS,TRAN,PKNAME",
+    ]) else {
+        return Vec::new();
+    };
+    // The booted device, without the subvolume that follows it in brackets.
+    let booted = output(&["findmnt", "-no", "SOURCE", "/"])
+        .map(|s| s.trim().split('[').next().unwrap_or("").to_string())
+        .unwrap_or_default();
+
+    let mut out: Vec<Store> = Vec::new();
+    for line in listing.lines() {
+        let val = |key: &str| -> String {
+            line.split(' ')
+                .find_map(|pair| pair.strip_prefix(&format!("{key}=")))
+                .map(|v| v.trim_matches('"').to_string())
+                .unwrap_or_default()
+        };
+        if !val("PARTTYPE").eq_ignore_ascii_case(ROOT_TYPE) || val("FSTYPE") != "btrfs" {
+            continue;
+        }
+        let dev = val("PATH");
+        if dev.is_empty() {
+            continue;
+        }
+        let parent = val("PKNAME");
+        let (medium, kind) = classify(
+            &val("SUBSYSTEMS"),
+            &val("TRAN"),
+            &parent,
+            val("HOTPLUG") == "1",
+        );
+        out.push(Store {
+            booted: dev == booted,
+            disk: if parent.is_empty() { dev.clone() } else { format!("/dev/{parent}") },
+            medium,
+            kind,
+            dev,
+        });
+    }
+    // The booted filesystem first, then the machine's own, then everything plugged in:
+    // the list on screen reads outward from where you are.
+    out.sort_by_key(|s| (!s.booted, s.medium.as_i32(), s.dev.clone()));
+    out
+}
+
 /// The bootable profiles, in the order `list-profiles` reports them.
 ///
 /// Columns are positional and separated by runs of two or more spaces:
@@ -89,14 +261,51 @@ pub fn profiles() -> Vec<Profile> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
         .unwrap_or_default();
-    let Some(listing) = sudo(&["list-profiles"]) else {
-        return Vec::new();
-    };
-    parse_listing(&listing, &marked)
+
+    // Every filesystem of ours, not just the booted one, so a card's profiles are
+    // offered alongside the machine's own.
+    //
+    // The marker is only applied to the machine's own storage. Ids are per
+    // filesystem and they collide: the card in this device holds ids 263 to 271 and
+    // the internal storage 264 to 272, so a bare id says nothing about which
+    // filesystem it means. A profile anywhere else therefore never wears the heart,
+    // and never can, which is also why Auto Start is not offered for one.
+    let stores = stores();
+    if stores.is_empty() {
+        // No lsblk, or nothing recognisable: ask about the booted filesystem alone,
+        // which is what this did before there was anything else to ask about.
+        return sudo(&["list-profiles"])
+            .map(|listing| parse_listing(&listing, &marked, Medium::Internal, "", "", "disk"))
+            .unwrap_or_default();
+    }
+
+    let mut out = Vec::new();
+    for store in stores {
+        let listing = if store.booted {
+            sudo(&["list-profiles"])
+        } else {
+            sudo(&["list-profiles", "-d", &store.dev])
+        };
+        let Some(listing) = listing else { continue };
+        let internal = store.medium == Medium::Internal;
+        let marker = if internal { marked.as_str() } else { "" };
+        // The booted filesystem is every tool's default, so it needs no device: this
+        // way a profile carries one only when saying which is the point.
+        let dev = if store.booted { "" } else { store.dev.as_str() };
+        out.extend(parse_listing(&listing, marker, store.medium, dev, &store.disk, store.kind));
+    }
+    out
 }
 
 /// The listing, parsed. Split out so it can be tested against real output.
-pub fn parse_listing(listing: &str, marked: &str) -> Vec<Profile> {
+pub fn parse_listing(
+    listing: &str,
+    marked: &str,
+    medium: Medium,
+    dev: &str,
+    disk: &str,
+    kind: &'static str,
+) -> Vec<Profile> {
     let mut out = Vec::new();
     let mut started = false;
     for line in listing.lines() {
@@ -123,6 +332,10 @@ pub fn parse_listing(listing: &str, marked: &str) -> Vec<Profile> {
         let dash_to_empty = |s: String| if s == "-" { String::new() } else { s };
         out.push(Profile {
             auto_boot: !marked.is_empty() && id == marked,
+            medium,
+            dev: dev.to_string(),
+            disk: disk.to_string(),
+            kind,
             name: cols[0].to_string(),
             booted,
             created: cols.get(base + 2).unwrap_or(&"").to_string(),
@@ -440,18 +653,36 @@ fn run(args: &[&str]) -> Result<(), String> {
 /// is the only thing that acts on a choice: the marker says which profile the menu
 /// boots when nobody presses anything, and this is what boots it.
 ///
-/// Returns only when it failed. On success the machine is already on its way out.
+/// Returns `Ok(false)` only when it failed to leave, which on a real boot cannot
+/// happen: the machine is already on its way out. `Ok(true)` is the dry run, which
+/// loaded the image, unloaded it and stayed.
 ///
-/// `FLIPCTL_BOOT_DRY_RUN=1` loads and unloads instead of handing over, which is how
-/// this is tested without losing the session that started it.
-pub fn boot_now(name: &str) -> Result<(), String> {
+/// `FLIPCTL_BOOT_DRY_RUN=1` is that dry run: it proves the entry resolves, the kernel
+/// and initrd are there and the device tree assembles, without losing the session
+/// that asked. The caller has to say so on screen, because nothing else will.
+///
+/// A profile on another filesystem is booted with `-d`, which is what makes it that
+/// card's profile rather than the one of the same name on the internal storage. Names
+/// and subvolume ids both repeat across filesystems, so the device is the only thing
+/// that distinguishes them, and boot-profile reads that device's own BLS entries for
+/// the kernel, initrd and device tree it names.
+pub fn boot_now(p: &Profile) -> Result<bool, String> {
+    let name = p.name.as_str();
     if !valid_name(name) {
         return Err("invalid name".into());
     }
-    if std::env::var_os("FLIPCTL_BOOT_DRY_RUN").is_some() {
-        return run(&["boot-profile", "--dry-run", name]);
+    let dry = std::env::var_os("FLIPCTL_BOOT_DRY_RUN").is_some();
+    let mut args: Vec<&str> = vec!["boot-profile"];
+    if dry {
+        args.push("--dry-run");
     }
-    run(&["boot-profile", name])
+    if !p.dev.is_empty() {
+        args.push("-d");
+        args.push(&p.dev);
+    }
+    args.push(name);
+    run(&args)?;
+    Ok(dry)
 }
 
 /// Point the auto-boot marker at a profile.
@@ -644,6 +875,11 @@ pub fn edit_actions(p: &Profile) -> Vec<&'static str> {
     };
     if p.booted {
         out.retain(|a| *a != "Delete");
+    }
+    // Only the machine's own storage can be marked: the marker is a subvolume id, and
+    // ids are only meaningful inside the filesystem that issued them.
+    if p.medium != Medium::Internal {
+        out.retain(|a| *a != "Auto Start");
     }
     out
 }

@@ -28,6 +28,11 @@ export struct BootRow {
     icon: int,
     // Marked to boot next, which draws a heart after the label.
     auto: bool,
+    // What the profile's filesystem sits on: 0 the machine's own storage, 1 an SD
+    // card, 2 USB, 3 a SATA or NVMe drive. Anything but 0 draws its medium after the
+    // label, and never together with the heart, since only the machine's own storage
+    // can be marked: the marker is a subvolume id and ids repeat across filesystems.
+    medium: int,
 }
 
 component BootLine inherits Rectangle {
@@ -80,6 +85,21 @@ component BootLine inherits Rectangle {
         width: 7px;
         height: 7px;
         source: @image-url("../assets/icons/auto_start_heart.png");
+        colorize: root.ink;
+    }
+
+    // The medium, in the same place the heart would sit. 14x14 with two blank rows top
+    // and bottom, so its ink lands level with the label's.
+    //
+    // One icon for all three for now: the design has a card and nothing else, so USB
+    // and a drive borrow it rather than go unmarked. Each gets its own source here
+    // when they arrive.
+    if root.entry.medium != 0: Image {
+        x: label.x + (label.width - 1px) + 3px;
+        y: 1px;
+        width: FlipperTheme.boot_sd_w;
+        height: FlipperTheme.boot_sd_h;
+        source: @image-url("../assets/icons/sdcard.png");
         colorize: root.ink;
     }
 

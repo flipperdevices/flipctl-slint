@@ -1602,13 +1602,13 @@ fn start_profiles_read() -> Option<std::sync::mpsc::Receiver<Vec<flipper_ui::boo
 #[cfg(feature = "slint")]
 fn start_boot_now(
     profile: &flipper_ui::boot::Profile,
-) -> Option<(String, std::sync::mpsc::Receiver<Result<(), String>>)> {
-    let name = profile.name.clone();
+) -> Option<(String, std::sync::mpsc::Receiver<Result<bool, String>>)> {
+    let p = profile.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("boot-now".into())
         .spawn(move || {
-            let _ = tx.send(flipper_ui::boot::boot_now(&name));
+            let _ = tx.send(flipper_ui::boot::boot_now(&p));
         })
         .ok()?;
     Some((flipper_ui::boot::profile_label(&profile.name), rx))
@@ -2277,7 +2277,7 @@ fn panel(
     let mut boot_scroll = 0i32;
     let mut boot_started: Option<Instant> = None;
     // The profile being booted, as the takeover shows it, and the load's answer.
-    let mut booting: Option<(String, std::sync::mpsc::Receiver<Result<(), String>>)> = None;
+    let mut booting: Option<(String, std::sync::mpsc::Receiver<Result<bool, String>>)> = None;
     // Where the load spinner counts its frames from.
     let boot_spin_at = Instant::now();
     let mut boot_cancelled = false;
@@ -4300,28 +4300,43 @@ fn panel(
                 }
             }
 
-            // The takeover, and what to do if the machine is still here: a kexec
-            // that would not load is the one boot failure a person can act on, so
-            // it is said rather than swallowed.
-            match booting.as_ref() {
+            // The takeover, and the two ways the machine can still be here
+            // afterwards: a kexec that would not load, which is the one boot
+            // failure a person can act on, and a dry run, which loaded the image
+            // and unloaded it again. Both have to take the takeover down and say
+            // so, or the panel claims a boot that never happened.
+            //
+            // What to say is decided while the state is borrowed and acted on
+            // after, because clearing it is what ends the borrow.
+            let said = match booting.as_ref() {
                 Some((label, rx)) => {
                     screen.set_boot_booting(label.as_str().into());
                     match rx.try_recv() {
                         Ok(Err(e)) => {
                             eprintln!("boot menu      kexec refused: {e}");
-                            booting = None;
-                            screen.set_boot_booting("".into());
-                            popup = Some(Popup::Said(e));
-                            popup_index = 0;
-                            popup_dirty = true;
+                            Some(e)
                         }
-                        // Loaded and handing over, or the thread is gone: either
-                        // way there is nothing left to say here.
-                        Ok(Ok(())) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Ok(Ok(true)) => {
+                            eprintln!("boot menu      dry run: {label} loaded and unloaded");
+                            Some(format!("{label}: loaded OK (dry run)"))
+                        }
+                        // Handing over, or the thread is gone: either way there is
+                        // nothing left to say here.
+                        Ok(Ok(false)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => None,
                     }
                 }
-                None => screen.set_boot_booting("".into()),
+                None => {
+                    screen.set_boot_booting("".into());
+                    None
+                }
+            };
+            if let Some(message) = said {
+                booting = None;
+                screen.set_boot_booting("".into());
+                popup = Some(Popup::Said(message));
+                popup_index = 0;
+                popup_dirty = true;
             }
             // The popup's own state: the space read landing, an action finishing,
             // and the rows it shows.
@@ -4419,6 +4434,15 @@ fn panel(
                         let joined = |v: &Vec<String>| {
                             if v.is_empty() { "none".to_string() } else { v.join(" ") }
                         };
+                        // Where it is. First, because on a machine with a card in it
+                        // two profiles can carry the same name, and this is what says
+                        // which one this is.
+                        if !profile.disk.is_empty() {
+                            rows.push(line(format!(
+                                "Drive: {} ({})",
+                                profile.disk, profile.kind
+                            )));
+                        }
                         rows.push(line(format!(
                             "Cloned from: {}",
                             if profile.parent.is_empty() {
@@ -4585,6 +4609,7 @@ fn panel(
                         icon_w: size.0,
                         icon_h: size.1,
                         auto: p.auto_boot,
+                        medium: p.medium.as_i32(),
                         }
                     })
                     .collect();

@@ -273,6 +273,9 @@ boot_text_gap       = 2
 # edit rather than a transcription: boot_menu.js passes y=3.
 boot_title_y        = 1
 boot_auto_y         = 4     # the countdown text keeps its own baseline
+# The SD card marker after a name, from the prototype's own Icons.sdcard.
+boot_sd_w           = 14
+boot_sd_h           = 14
 # The booting takeover, from boot_menu.js's own render: the spinner, then the word
 # and the profile's name under it, all centred, with the panel's margin either side
 # of a name long enough to wrap. The prototype pitches wrapped lines at 12px; Slint

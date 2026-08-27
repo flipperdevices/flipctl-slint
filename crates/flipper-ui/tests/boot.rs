@@ -23,7 +23,7 @@ NAME                      KIND     ID   CREATED              LAST USED  RO  PARE
 /// so the profile you are running would be missing from the list.
 #[test]
 fn the_booted_marker_does_not_shift_the_other_columns() {
-    let rows = boot::parse_listing(LISTING, "280");
+    let rows = boot::parse_listing(LISTING, "280", boot::Medium::Internal, "", "/dev/sda", "UFS");
     let names: Vec<&str> = rows.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(
         names,
@@ -258,7 +258,7 @@ NAME                                        KIND     ID   CREATED              L
 @Minimal                         <- booted  profile  263  2026-08-20 10:34:01  now        rw  @Minimal_968_stock (262)              @Minimal_968_stock (262)
 @TV-Media-Box__TV-Media-Box-clone__         profile  273  2026-08-20 13:40:01  never      rw  @TV-Media-Box (267)                   @TV-Media-Box_968_stock (266)
 ";
-    let profiles = boot::parse_listing(listing, "");
+    let profiles = boot::parse_listing(listing, "", boot::Medium::Internal, "", "/dev/sda", "UFS");
     let by = |name: &str| {
         profiles.iter().find(|p| p.name == name).expect("profile in the listing").clone()
     };
@@ -293,7 +293,7 @@ fn a_rename_builds_a_name_from_the_origin_base() {
 NAME                                   KIND     ID   CREATED              LAST USED  RO  PARENT                     ORIGIN
 @TV-Media-Box__movie-night__           profile  273  2026-08-20 13:40:01  never      rw  @TV-Media-Box (267)        @TV-Media-Box_968_stock (266)
 ";
-    let p = boot::parse_listing(listing, "").remove(0);
+    let p = boot::parse_listing(listing, "", boot::Medium::Internal, "", "/dev/sda", "UFS").remove(0);
     assert_eq!(boot::profile_label(&p.name), "movie night");
     assert_eq!(
         boot::rename_dest(&p, "Movie Night 2"),
@@ -306,3 +306,66 @@ NAME                                   KIND     ID   CREATED              LAST U
     // commit.
     assert_eq!(boot::rename_dest(&p, "  "), "");
 }
+
+/// A card's listing, as `list-profiles -d` prints it.
+///
+/// Two things have to survive: the preamble line before the header, which the booted
+/// listing does not have, and the marker, which must not be applied to a card at all.
+/// The ids here are the ones the card in the test device actually carries, and they
+/// overlap the internal storage's, which is the whole reason a card's profile cannot
+/// wear the heart: a bare subvolume id does not say which filesystem issued it.
+#[test]
+fn a_cards_listing_is_tagged_and_never_marked() {
+    let listing = "\
+Listing /dev/mmcblk0p3, which is not the filesystem you booted from
+
+NAME             KIND     ID   CREATED              LAST USED            RO  PARENT                         ORIGIN
+@Desktop         profile  265  2026-08-20 08:44:06  2026-08-26 10:41:34  rw  @Desktop_966_stock (264)       @Desktop_966_stock (264)
+@Minimal         profile  263  2026-08-20 08:41:48  never                rw  @Minimal_966_stock (262)       @Minimal_966_stock (262)
+";
+
+    // What flipctl passes for a card: no marker, and removable.
+    let rows = boot::parse_listing(listing, "", boot::Medium::Sd, "/dev/mmcblk0p3", "/dev/mmcblk0", "SD");
+    assert_eq!(rows.len(), 2, "the preamble must not be read as a row");
+    assert!(rows.iter().all(|p| p.medium == boot::Medium::Sd), "every row came off the card");
+    assert!(rows.iter().all(|p| !p.auto_boot), "a card's profile is never marked");
+    assert_eq!(rows[0].name, "@Desktop");
+    assert_eq!(rows[0].id, "265");
+    assert!(!rows[0].booted, "the card's profile is not what is running");
+
+    // The same ids on the internal storage, where one of them IS marked: the tag is
+    // what tells them apart, not the id.
+    let own = boot::parse_listing(listing, "265", boot::Medium::Internal, "", "/dev/sda", "UFS");
+    assert!(own[0].auto_boot);
+    assert!(own[0].medium == boot::Medium::Internal);
+}
+
+/// Auto Start is not offered for a card's profile, and everything else still is.
+#[test]
+fn a_cards_profile_cannot_be_marked() {
+    let mut p = boot::Profile { name: "@Minimal".into(), ..Default::default() };
+    assert!(boot::edit_actions(&p).contains(&"Auto Start"));
+    p.medium = boot::Medium::Sd;
+    let actions = boot::edit_actions(&p);
+    assert!(!actions.contains(&"Auto Start"), "got {actions:?}");
+    assert!(actions.contains(&"Clone"), "the rest are unaffected: {actions:?}");
+}
+
+/// A card's rows carry the device that tells them apart from the internal storage's
+/// profiles of the same name.
+#[test]
+fn a_cards_rows_carry_their_device() {
+    let listing = "\
+NAME             KIND     ID   CREATED              LAST USED  RO  PARENT  ORIGIN
+@Desktop         profile  265  2026-08-20 08:44:06  never      rw  -       -
+";
+    let card = boot::parse_listing(listing, "", boot::Medium::Sd, "/dev/mmcblk0p3", "/dev/mmcblk0", "SD");
+    assert_eq!(card[0].dev, "/dev/mmcblk0p3");
+    // What the Info popup's Drive line reads from.
+    assert_eq!(card[0].disk, "/dev/mmcblk0");
+    assert_eq!(card[0].kind, "SD");
+    // The booted filesystem is every tool's default, so its rows name no device.
+    let own = boot::parse_listing(listing, "", boot::Medium::Internal, "", "/dev/sda", "UFS");
+    assert!(own[0].dev.is_empty());
+}
+
