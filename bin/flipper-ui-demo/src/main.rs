@@ -1916,6 +1916,14 @@ fn panel(
         return Err(std::io::Error::other("--headless needs --remote ADDR"));
     }
 
+    // A factory reset of the running profile cannot delete the live root, so it moves
+    // it aside and reboots; the copy is only dead weight once the fresh root is the
+    // one running, which is now. On its own thread because it shells out to the tools
+    // and the panel is not waiting for it.
+    let _ = std::thread::Builder::new()
+        .name("reap-old".into())
+        .spawn(flipper_ui::boot::reap_old_backups);
+
     let mut sink = if headless {
         None
     } else if wayland {

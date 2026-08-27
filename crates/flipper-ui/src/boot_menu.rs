@@ -312,13 +312,22 @@ impl BootMenu {
             self.popup = Some(Popup::Edit);
             return;
         }
+        // Which drive: a name does not say, since the same one exists on more than one.
+        // The rename was started from the selection, so that is the profile it means.
+        let dev = self
+            .selected_profile()
+            .filter(|p| p.name == name)
+            .or_else(|| self.profiles.iter().find(|p| p.name == name))
+            .map(|p| p.dev.clone())
+            .unwrap_or_default();
+
         let (tx, rx) = std::sync::mpsc::channel();
         let from = name.to_string();
         let to = dest.clone();
         self.popup = match std::thread::Builder::new()
             .name("boot-rename".into())
             .spawn(move || {
-                let _ = tx.send(boot::rename(&from, &to).map(|()| false));
+                let _ = tx.send(boot::rename(&dev, &from, &to).map(|()| false));
             }) {
             Ok(_) => Some(Popup::Busy("Renaming".into(), Some(rx))),
             Err(_) => Some(Popup::Said("could not start rename".into())),
@@ -377,18 +386,27 @@ impl BootMenu {
         let p = profile.clone()?;
         let existing = self.profiles.clone();
         let (busy, work): (&str, Work) = match action {
-            "Auto Start" => ("Saving", Box::new(move || boot::set_auto_start(&p.id).map(|_| false))),
+            "Auto Start" => (
+                "Saving",
+                Box::new(move || boot::set_auto_start(&p.dev, &p.id).map(|_| false)),
+            ),
             "Clone" => {
                 let dest = boot::clone_dest(&p, &existing);
-                ("Cloning", Box::new(move || boot::clone(&p.name, &dest).map(|_| false)))
+                (
+                    "Cloning",
+                    Box::new(move || boot::clone(&p.dev, &p.name, &dest).map(|_| false)),
+                )
             }
-            "Delete" => ("Deleting", Box::new(move || boot::delete(&p.name).map(|_| false))),
+            "Delete" => (
+                "Deleting",
+                Box::new(move || boot::delete(&p.dev, &p.name).map(|_| false)),
+            ),
             // The one action that can answer "and now the device has to reboot": the
             // running root is the copy moved aside, so the fresh one is only
             // reachable through a reboot.
             "Factory Reset" => (
                 "Resetting",
-                Box::new(move || boot::factory_reset(&p.name, &p.origin)),
+                Box::new(move || boot::factory_reset(&p.dev, &p.name, &p.origin)),
             ),
             // Rename is not started here: it needs a name first.
             _ => return Some(Popup::Edit),

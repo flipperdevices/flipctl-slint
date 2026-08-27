@@ -165,16 +165,16 @@ fn a_clone_is_named_from_its_source() {
 fn actions_refuse_a_name_that_cannot_be_a_profile() {
     for bad in ["", "@", "Minimal", "@has space", "@semi;colon", "@../escape"] {
         assert!(
-            boot::clone(bad, "@Ok__x__").is_err(),
+            boot::clone("", bad, "@Ok__x__").is_err(),
             "{bad:?} should be refused as a source"
         );
         assert!(
-            boot::clone("@Minimal", bad).is_err(),
+            boot::clone("", "@Minimal", bad).is_err(),
             "{bad:?} should be refused as a destination"
         );
     }
-    assert!(boot::set_auto_start("").is_err());
-    assert!(boot::set_auto_start("not-a-number").is_err());
+    assert!(boot::set_auto_start("", "").is_err());
+    assert!(boot::set_auto_start("", "not-a-number").is_err());
 }
 
 /// Overlays come from the profile's own BLS entry, chosen by its subvol option.
@@ -369,3 +369,23 @@ NAME             KIND     ID   CREATED              LAST USED  RO  PARENT  ORIGI
     assert!(own[0].dev.is_empty());
 }
 
+
+/// What counts as a leftover from a factory reset, and what does not.
+///
+/// The answer decides what gets deleted, so the stamp's shape is checked rather than
+/// assumed: `@Desktop_old_notes` is somebody's own subvolume.
+#[test]
+fn only_stamped_copies_of_the_booted_profile_are_leftovers() {
+    assert!(boot::is_old_backup("@Desktop_old_2026-08-27_14-31-05", "@Desktop"));
+    // create-profile adds a counter when two land in the same second.
+    assert!(boot::is_old_backup("@Desktop_old_2026-08-27_14-31-05_2", "@Desktop"));
+
+    assert!(!boot::is_old_backup("@Desktop_old_notes", "@Desktop"), "not a stamp");
+    assert!(!boot::is_old_backup("@Desktop_old_2026-8-27_14-31-05", "@Desktop"), "short month");
+    assert!(!boot::is_old_backup("@Desktop_old_2026-08-27_14-31-05_x", "@Desktop"), "counter is digits");
+    assert!(!boot::is_old_backup("@Desktop", "@Desktop"), "the profile itself");
+    assert!(
+        !boot::is_old_backup("@Minimal_old_2026-08-27_14-31-05", "@Desktop"),
+        "another profile's leftover may be someone's way back"
+    );
+}

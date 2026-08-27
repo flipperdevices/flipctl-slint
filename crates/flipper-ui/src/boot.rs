@@ -323,12 +323,6 @@ pub fn profiles() -> Vec<Profile> {
     if !available() {
         return Vec::new();
     }
-    // The marker is a subvolume id. Absent or unparseable means nothing is marked.
-    let marked = sudo(&["flipmeta", "get", "boot"])
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
-        .unwrap_or_default();
-
     // Every filesystem of ours, not just the booted one, so a card's profiles are
     // offered alongside the machine's own.
     //
@@ -338,6 +332,7 @@ pub fn profiles() -> Vec<Profile> {
     // filesystem it means. A profile anywhere else therefore never wears the heart,
     // and never can, which is also why Auto Start is not offered for one.
     let stores = stores();
+    let marked = marker(&internal_dev(&stores));
     if stores.is_empty() {
         // No lsblk, or nothing recognisable: ask about the booted filesystem alone,
         // which is what this did before there was anything else to ask about.
@@ -813,20 +808,68 @@ pub fn boot_now(p: &Profile) -> Result<bool, String> {
     Ok(dry)
 }
 
+/// The drive whose metadata partition holds the marker: the machine's own storage.
+///
+/// Empty when that is the filesystem this booted from, which every tool takes as its
+/// default, or when there is no internal store to name.
+fn internal_dev(stores: &[Store]) -> String {
+    stores
+        .iter()
+        .find(|s| s.medium == Medium::Internal && !s.booted)
+        .map(|s| s.dev.clone())
+        .unwrap_or_default()
+}
+
+/// The auto-boot marker: a subvolume id, or empty when nothing is marked.
+///
+/// `flipmeta` finds the metadata partition by its GPT type, and a card written with
+/// our own image carries one too, so with a card in there are two and it refuses to
+/// choose. The marker only ever means the machine's own storage, so that is the drive
+/// named. Absent or unparseable reads as nothing marked.
+fn marker(dev: &str) -> String {
+    let mut args: Vec<&str> = vec!["flipmeta"];
+    if !dev.is_empty() {
+        args.push("-d");
+        args.push(dev);
+    }
+    args.extend(["get", "boot"]);
+    sudo(&args)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or_default()
+}
+
 /// Point the auto-boot marker at a profile.
-pub fn set_auto_start(id: &str) -> Result<(), String> {
+pub fn set_auto_start(dev: &str, id: &str) -> Result<(), String> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
         return Err("no subvolume id".into());
     }
-    run(&["flipmeta", "set", "boot", id])
+    run(&on_dev("flipmeta", dev, &["set", "boot", id]))
 }
 
-/// Copy a profile under a new name.
-pub fn clone(source: &str, dest: &str) -> Result<(), String> {
+/// A tool command against one filesystem, with the drive named unless it is the booted one.
+///
+/// `Profile::dev` is empty for the filesystem this system booted from, which every tool
+/// takes as its default. Anything else has to be named, or the tool acts on the booted
+/// drive instead: profile names repeat across drives, so deleting a card's @Minimal
+/// would delete the machine's own. In an initramfs there is no default to fall back on
+/// either -- the root is `rootfs`, which is not a block device, and the tool refuses.
+fn on_dev<'a>(tool: &'a str, dev: &'a str, rest: &[&'a str]) -> Vec<&'a str> {
+    let mut args: Vec<&str> = vec![tool];
+    if !dev.is_empty() {
+        args.push("-d");
+        args.push(dev);
+    }
+    args.extend(rest.iter().copied());
+    args
+}
+
+/// Copy a profile under a new name, on the drive the profile is on.
+pub fn clone(dev: &str, source: &str, dest: &str) -> Result<(), String> {
     if !valid_name(source) || !valid_name(dest) {
         return Err("invalid name".into());
     }
-    run(&["create-profile", "-y", source, dest])
+    run(&on_dev("create-profile", dev, &["-y", source, dest]))
 }
 
 /// Delete a profile, clearing the auto-boot marker if it pointed at it.
@@ -834,19 +877,107 @@ pub fn clone(source: &str, dest: &str) -> Result<(), String> {
 /// Order matters: the id has to be read before the subvolume goes, or there is
 /// nothing left to compare the marker against and autoboot would be left pointing
 /// at something deleted.
-pub fn delete(name: &str) -> Result<(), String> {
+pub fn delete(dev: &str, name: &str) -> Result<(), String> {
     if !valid_name(name) {
         return Err("invalid name".into());
     }
-    let was_marked = profiles()
+    let marked = profiles()
         .into_iter()
-        .find(|p| p.name == name)
-        .is_some_and(|p| p.auto_boot);
-    run(&["delete-profile", "-y", name])?;
-    if was_marked {
-        run(&["flipmeta", "del", "boot"])?;
+        .find(|p| p.name == name && p.auto_boot && p.dev == dev);
+    run(&on_dev("delete-profile", dev, &["-y", name]))?;
+    if let Some(p) = marked {
+        run(&on_dev("flipmeta", &p.dev, &["del", "boot"]))?;
     }
     Ok(())
+}
+
+/// Remove the `_old_<stamp>` copy a factory reset of the booted profile left behind.
+///
+/// `--no-keep` cannot drop the live root, so `create-profile` moves it aside and the
+/// machine reboots into the fresh one. Once that has happened the copy is dead weight,
+/// and this is the first moment anything can say so, which is why it runs at startup
+/// rather than as part of the reset.
+///
+/// Only the booted profile's own copies go: a leftover belonging to any other profile
+/// may still be someone's way back, and a hand-made backup is not ours to delete. The
+/// boot menu never calls this, having no booted profile of ours to reason about.
+pub fn reap_old_backups() {
+    if !available() {
+        return;
+    }
+    let Some(booted) = sudo(&["findmnt", "-no", "FSROOT", "/"]) else {
+        return;
+    };
+    let booted = booted.trim().trim_start_matches('/');
+    if booted.is_empty() || !valid_name(booted) {
+        return;
+    }
+    // Named rather than left to the tools' default. The booted profile is on the
+    // booted filesystem by definition, but a leftover is deleted here and a delete
+    // aimed at a filesystem by assumption is not one to leave to assumption: profile
+    // names repeat across drives, so a default that ever went elsewhere would delete
+    // another drive's subvolume of the same name.
+    let dev = stores()
+        .into_iter()
+        .find(|s| s.booted)
+        .map(|s| s.dev)
+        .unwrap_or_default();
+    let on_dev = |rest: &[&str]| -> Vec<String> {
+        let mut args: Vec<String> = vec![rest[0].to_string()];
+        if !dev.is_empty() {
+            args.push("-d".into());
+            args.push(dev.clone());
+        }
+        args.extend(rest[1..].iter().map(|a| a.to_string()));
+        args
+    };
+    let list = on_dev(&["list-profiles"]);
+    let Some(listing) = sudo(&list.iter().map(String::as_str).collect::<Vec<_>>()) else {
+        return;
+    };
+    for line in listing.lines() {
+        let name = line.split("  ").next().unwrap_or("").trim();
+        if !is_old_backup(name, booted) {
+            continue;
+        }
+        let del = on_dev(&["delete-profile", "-y", name]);
+        match run(&del.iter().map(String::as_str).collect::<Vec<_>>()) {
+            Ok(()) => eprintln!("boot           reaped leftover backup {name}"),
+            Err(e) => eprintln!("boot           could not reap {name}: {e}"),
+        }
+    }
+}
+
+/// Whether `name` is a `<booted>_old_<stamp>` copy, with create-profile's own stamp
+/// shape: `YYYY-MM-DD_HH-MM-SS`, plus the `_<n>` it adds when two land in one second.
+///
+/// Spelled out rather than pattern-matched loosely, because the answer decides what
+/// gets deleted: `@Desktop_old_notes` is someone's subvolume, not a leftover.
+pub fn is_old_backup(name: &str, booted: &str) -> bool {
+    let Some(stamp) = name
+        .strip_prefix(booted)
+        .and_then(|rest| rest.strip_prefix("_old_"))
+    else {
+        return false;
+    };
+    let (stamp, extra) = match stamp.split_once('_') {
+        // The date, then the time, then anything more is the collision counter.
+        Some((date, rest)) => match rest.split_once('_') {
+            Some((time, n)) => (format!("{date}_{time}"), Some(n)),
+            None => (format!("{date}_{rest}"), None),
+        },
+        None => return false,
+    };
+    if extra.is_some_and(|n| n.is_empty() || !n.chars().all(|c| c.is_ascii_digit())) {
+        return false;
+    }
+    // YYYY-MM-DD_HH-MM-SS: digits where digits belong, separators where they belong.
+    let shape = "dddd-dd-dd_dd-dd-dd";
+    stamp.len() == shape.len()
+        && stamp.chars().zip(shape.chars()).all(|(c, s)| match s {
+            'd' => c.is_ascii_digit(),
+            sep => c == sep,
+        })
 }
 
 /// Replace a profile with a fresh copy of the stock it came from.
@@ -857,7 +988,7 @@ pub fn delete(name: &str) -> Result<(), String> {
 ///
 /// Returns true when the profile reset was the running one, which means the
 /// caller has to reboot: the root now mounted is the copy that was moved aside.
-pub fn factory_reset(name: &str, origin: &str) -> Result<bool, String> {
+pub fn factory_reset(dev: &str, name: &str, origin: &str) -> Result<bool, String> {
     if !valid_name(name) || !valid_name(origin) {
         return Err("invalid name".into());
     }
@@ -871,24 +1002,24 @@ pub fn factory_reset(name: &str, origin: &str) -> Result<bool, String> {
         .find(|p| p.name == name)
         .is_some_and(|p| p.booted);
 
-    run(&["create-profile", "-y", "--no-keep", origin, name])?;
+    run(&on_dev("create-profile", dev, &["-y", "--no-keep", origin, name]))?;
 
     if was_marked {
         if let Some(fresh) = profiles().into_iter().find(|p| p.name == name) {
             if !fresh.id.is_empty() {
-                set_auto_start(&fresh.id)?;
+                set_auto_start(&fresh.dev, &fresh.id)?;
             }
         }
     }
     Ok(booted)
 }
 
-/// Rename a profile's label.
-pub fn rename(name: &str, dest: &str) -> Result<(), String> {
+/// Rename a profile's label, on the drive the profile is on.
+pub fn rename(dev: &str, name: &str, dest: &str) -> Result<(), String> {
     if !valid_name(name) || !valid_name(dest) {
         return Err("invalid name".into());
     }
-    run(&["rename-profile", name, dest])
+    run(&on_dev("rename-profile", dev, &[name, dest]))
 }
 
 /// The destination name a clone of `p` should take.
