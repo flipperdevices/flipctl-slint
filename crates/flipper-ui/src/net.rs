@@ -17,6 +17,8 @@
 //! the next read reconciles if the radio refused.
 
 use std::process::{Command, Stdio};
+
+use crate::sysinfo::output;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -48,22 +50,6 @@ pub struct Net {
     pub ssid: String,
 }
 
-/// Run a command and return its stdout, or None if it could not be run.
-///
-/// Every failure is the same as "unknown" here: a missing nmcli, a refused
-/// D-Bus call and a timeout all mean the same thing to the menu, which keeps
-/// showing its last known value.
-fn output(args: &[&str]) -> Option<String> {
-    let out = Command::new(args[0])
-        .args(&args[1..])
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8(out.stdout).ok()
-}
 
 /// `nmcli -t -f WIFI,WWAN radio` prints one line, `<wifi>:<wwan>`.
 fn read_radio() -> Option<(bool, bool)> {
