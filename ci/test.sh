@@ -1,7 +1,7 @@
 #!/bin/sh
 # Everything CI runs. Use this rather than a bare `cargo test`.
 #
-# The rendering tests are gated on the `slint` feature, which is not a default, so
+# The rendering tests are gated on the `screens` feature, which is not a default, so
 # a bare `cargo test` compiles none of them and reports success while they are
 # broken. That happened: a change to the ListItem struct left three of them
 # failing to compile and the suite still went green.
@@ -13,7 +13,7 @@ echo "== token and font tests (no renderer) =="
 cargo test --quiet
 
 echo "== rendering tests (needs the compiled components) =="
-cargo test --quiet -p flipper-ui --features slint
+cargo test --quiet -p flipper-ui --features screens
 
 echo "== the browser view (needs the remote feature) =="
 cargo test --quiet -p flipper-ui --features remote

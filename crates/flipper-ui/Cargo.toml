@@ -35,7 +35,17 @@ gpu = [
 # Slint software renderer targeting Gray8. No backend: we own KMS and input, so
 # `renderer-software` is taken on its own and the LinuxKMS backend (with its
 # libinput/libxkbcommon/fontconfig tree) is never pulled in.
-slint = ["dep:slint", "dep:slint-build", "dep:i-slint-common"]
+#
+# The renderer and the glue that paints a Slint window into a panel frame, and
+# nothing else. A consumer that composes its own screens from ui/ takes this and
+# compiles its own entry file, the way an app does, so it links one set of
+# components rather than two.
+slint = ["dep:slint", "dep:i-slint-common"]
+# The screens themselves: ui/screens.slint compiled into this crate as `ui`, which
+# is Root and therefore every screen there is. flipctl wants this; the boot menu and
+# the installer draw one screen each and would otherwise pay for a second component
+# set and a second glyph atlas beside their own.
+screens = ["slint", "dep:slint-build"]
 
 [dependencies]
 # getifaddrs, for the idle screen's IPv4 addresses. procfs exposes IPv6 as text

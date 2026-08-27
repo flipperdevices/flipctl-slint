@@ -17,7 +17,7 @@ fn main() {
     let theme_slint = out.join("theme.slint");
     write_if_changed(&theme_slint, &slint_theme(&doc));
 
-    #[cfg(feature = "slint")]
+    #[cfg(feature = "screens")]
     compile_slint(&theme_slint);
 }
 
@@ -31,7 +31,7 @@ fn main() {
 /// SLINT_FONT_SIZES is pinned to 16 and must stay there: the FlipCTL fonts are
 /// pixel fonts on a 64-unit design-pixel grid at 1024 units/em, so they
 /// rasterise with zero partial coverage at 16px and antialias at anything else.
-#[cfg(feature = "slint")]
+#[cfg(feature = "screens")]
 fn compile_slint(theme: &std::path::Path) {
     println!("cargo:rerun-if-changed=ui");
 

@@ -2,7 +2,7 @@
 //!
 //! Only built with `--features slint`, since it needs the compiled components.
 
-#![cfg(feature = "slint")]
+#![cfg(feature = "screens")]
 
 mod support;
 

@@ -5,7 +5,7 @@
 //! the bar's own border, then look for ink to the left of it. A structural
 //! argument about the layout would have passed while the screen was wrong.
 
-#![cfg(feature = "slint")]
+#![cfg(feature = "screens")]
 
 use flipper_ui::slint_render::{render_frame, FlipperSlintPlatform};
 use flipper_ui::theme::{self, metric};

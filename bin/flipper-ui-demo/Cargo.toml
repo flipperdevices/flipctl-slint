@@ -9,7 +9,7 @@ description = "Walks every flipper-ui component on the panel, a serial console o
 default = []
 device = ["flipper-ui/device"]
 remote = ["flipper-ui/remote"]
-slint = ["flipper-ui/slint", "dep:png", "dep:slint"]
+slint = ["flipper-ui/screens", "dep:png", "dep:slint"]
 # Present through a compositor rather than to the card, and take its keys.
 wayland = ["flipper-ui/wayland"]
 # Let the GPU turn a hosted app's frames into panel frames.
