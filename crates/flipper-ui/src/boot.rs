@@ -754,13 +754,22 @@ fn run(args: &[&str]) -> Result<(), String> {
         String::from_utf8_lossy(&out.stderr),
         String::from_utf8_lossy(&out.stdout)
     );
-    Err(text
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("failed")
-        .trim()
-        .to_string())
+    // A tool's own last line is its error and goes on screen as it stands. A tool that
+    // fails silently leaves only its exit status, which is a fact for the log and not
+    // for a 256x144 panel: the screen says what happened, the log says what to chase.
+    // Reporting nothing at all is the one thing that must not happen -- a bare
+    // "failed" on both is how a stack overflow in a shell shim went three rounds
+    // undiagnosed.
+    if let Some(line) = text.lines().rev().find(|l| !l.trim().is_empty()) {
+        return Err(line.trim().to_string());
+    }
+    use std::os::unix::process::ExitStatusExt;
+    match (out.status.code(), out.status.signal()) {
+        (Some(code), _) => eprintln!("tool           {} exited {code}, saying nothing", args[0]),
+        (_, Some(sig)) => eprintln!("tool           {} killed by signal {sig}", args[0]),
+        _ => eprintln!("tool           {} died without a status", args[0]),
+    }
+    Err("the tool gave no answer".into())
 }
 
 /// Boot a profile now, by kexec, and do not come back.
