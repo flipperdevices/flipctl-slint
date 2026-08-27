@@ -424,6 +424,15 @@ impl BootMenu {
     /// Boot the profile under the cursor, and give the panel over to saying so.
     fn boot_selected(&mut self) {
         let Some(p) = self.selected_profile().cloned() else { return };
+        // Whatever was being read stops mattering here, and a read of ours in flight is
+        // not free: a size walk holds a top-level mount for seconds, and the machine
+        // leaves with that filesystem still mounted. The answers are dropped so nothing
+        // new starts and no spinner outlives the takeover; boot-profile unmounts what
+        // the tools still hold before it jumps.
+        self.popup = None;
+        self.space_rx = None;
+        self.space_key = None;
+        self.dtbo_rx = None;
         eprintln!("boot menu      kexec into {} on {}", p.name, if p.dev.is_empty() { "the booted filesystem" } else { p.dev.as_str() });
         let (tx, rx) = std::sync::mpsc::channel();
         let label = boot::profile_label(&p.name);
