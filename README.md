@@ -1,0 +1,2 @@
+# flipctl-slint
+FlipCTL app
