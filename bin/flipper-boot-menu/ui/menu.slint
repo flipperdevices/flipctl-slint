@@ -1,0 +1,113 @@
+// The boot menu's window: one screen, and the keyboard a rename needs.
+//
+// Both bodies come from flipctl's own widget library, so this program draws the same
+// pixels flipctl does on the same screen. What is not here is everything else flipctl
+// has: no idle screen, no menus, no detail pages, no switcher, no app list.
+//
+// The fonts have to be reached by whichever file the compiler is pointed at, and
+// this one is it: without them the panel's pixel fonts fall back to a system face.
+import { PanelFonts } from "@flipctl/fonts.slint";
+import { BootBody, BootRow, BootPopupRow } from "@flipctl/boot.slint";
+import { TextInputBody, KbCell } from "@flipctl/keyboard.slint";
+import { FlipperTheme } from "@theme";
+
+export { BootRow, BootPopupRow, KbCell }
+
+export component Menu inherits Window {
+    width: 256px;
+    height: 144px;
+    background: FlipperTheme.white;
+    default-font-family: PanelFonts.title;
+    default-font-size: 16px;
+
+    // The keyboard takes the whole panel while it is up, so the two are exclusive.
+    in property <bool> keyboard;
+
+    in property <[BootRow]> rows;
+    in property <int> selected;
+    in property <int> scroll;
+    in property <int> countdown: -1;
+    in property <int> remaining;
+    in property <[string]> buttons;
+    in property <bool> loading;
+    in property <int> spin_frame;
+    in property <string> booting;
+
+    in property <bool> popup_open;
+    in property <string> popup_title;
+    in property <int> popup_icon;
+    in property <length> popup_icon_w;
+    in property <length> popup_icon_h;
+    in property <string> popup_size_number;
+    in property <string> popup_size_unit;
+    in property <length> popup_size_slot_w;
+    in property <[BootPopupRow]> popup_rows;
+    in property <[string]> popup_message;
+    in property <string> popup_hint;
+    in property <length> popup_w;
+
+    in property <string> kb_title;
+    in property <string> kb_text;
+    in property <length> kb_field_w;
+    in property <length> kb_cursor_dx;
+    in property <bool> kb_cursor_on;
+    in property <bool> kb_field_focused;
+    in property <string> kb_warning;
+    in property <[KbCell]> kb_cells;
+    in property <length> kb_chrome_x;
+    in property <length> kb_chrome_y;
+    in property <length> kb_chrome_w;
+    in property <length> kb_chrome_h;
+    in property <string> kb_lang_label;
+    in property <string> kb_tab_label;
+    in property <int> kb_tab_focus;
+    in property <int> kb_tab_pressed;
+    in property <int> kb_discard: -1;
+    in property <[string]> kb_buttons;
+
+    if !root.keyboard: BootBody {
+        rows: root.rows;
+        selected: root.selected;
+        scroll: root.scroll;
+        countdown: root.countdown;
+        remaining: root.remaining;
+        buttons: root.buttons;
+        loading: root.loading;
+        spin_frame: root.spin_frame;
+        booting: root.booting;
+
+        popup_open: root.popup_open;
+        popup_title: root.popup_title;
+        popup_icon: root.popup_icon;
+        popup_icon_w: root.popup_icon_w;
+        popup_icon_h: root.popup_icon_h;
+        popup_size_number: root.popup_size_number;
+        popup_size_unit: root.popup_size_unit;
+        popup_size_slot_w: root.popup_size_slot_w;
+        popup_rows: root.popup_rows;
+        popup_message: root.popup_message;
+        popup_hint: root.popup_hint;
+        popup_w: root.popup_w;
+    }
+
+    if root.keyboard: TextInputBody {
+        title: root.kb_title;
+        visible_text: root.kb_text;
+        field_w: root.kb_field_w;
+        cursor_dx: root.kb_cursor_dx;
+        cursor_on: root.kb_cursor_on;
+        field_focused: root.kb_field_focused;
+        warning: root.kb_warning;
+        cells: root.kb_cells;
+        chrome_x: root.kb_chrome_x;
+        chrome_y: root.kb_chrome_y;
+        chrome_w: root.kb_chrome_w;
+        chrome_h: root.kb_chrome_h;
+        lang_label: root.kb_lang_label;
+        tab_label: root.kb_tab_label;
+        tab_focus: root.kb_tab_focus;
+        tab_pressed: root.kb_tab_pressed;
+        discard: root.kb_discard;
+        buttons: root.kb_buttons;
+    }
+}

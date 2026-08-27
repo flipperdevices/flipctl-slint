@@ -1,0 +1,25 @@
+# The boot menu, on its own.
+#
+# The first thing the device runs: it lists the profiles it can find and kexecs into
+# the one chosen. Everything it draws and every decision it makes comes from
+# flipper-ui; what is here is the loop, the panel and the keys.
+#
+# `screens` is deliberately absent from the flipper-ui dependency: that feature
+# compiles Root and with it every screen flipctl has, and this program draws one. It
+# compiles its own entry file instead, against the same widgets.
+[package]
+name = "flipper-boot-menu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Flipper One boot menu: choose a profile, kexec into it"
+
+[dependencies]
+# The workspace dependency carries no default features, so naming the two this
+# needs is the whole of it: `screens` is what is deliberately absent.
+flipper-ui = { workspace = true, features = ["device", "slint"] }
+slint = { version = "1.17", default-features = false, features = ["compat-1-2", "renderer-software", "std", "unsafe-single-threaded"] }
+
+[build-dependencies]
+flipper-tokens = { path = "../../crates/flipper-tokens" }
+slint-build = "1.17"

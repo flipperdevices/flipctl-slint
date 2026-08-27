@@ -5,6 +5,7 @@ members = [
     "crates/flipper-ui",
     "crates/flipctl-app",
     "bin/flipper-ui-demo",
+    "bin/flipper-boot-menu",
 ]
 # Apps are not listed here. Each app crate carries its own empty [workspace]
 # table, which keeps it independent without this file having to name it: a user

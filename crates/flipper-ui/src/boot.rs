@@ -41,9 +41,27 @@ pub struct Profile {
     pub kind: &'static str,
 }
 
+/// One of the profile tools, ready to run.
+///
+/// Through sudo, unless we are already root. That is not an optimisation: the boot
+/// menu image is an initramfs whose only user is root and which carries no sudo at
+/// all, so going through it there fails every call with ENOENT. The failure is
+/// silent by design here -- a tool that cannot answer means "unknown" -- so the
+/// symptom was an empty profile list on a machine full of profiles.
+fn tool(args: &[&str]) -> Command {
+    if unsafe { libc::geteuid() } == 0 {
+        let mut cmd = Command::new(args[0]);
+        cmd.args(&args[1..]);
+        cmd
+    } else {
+        let mut cmd = Command::new("sudo");
+        cmd.args(args);
+        cmd
+    }
+}
+
 fn sudo(args: &[&str]) -> Option<String> {
-    let out = Command::new("sudo")
-        .args(args)
+    let out = tool(args)
         .stderr(Stdio::null())
         .output()
         .ok()?;
@@ -618,8 +636,7 @@ fn valid_name(name: &str) -> bool {
 }
 
 fn run(args: &[&str]) -> Result<(), String> {
-    let out = Command::new("sudo")
-        .args(args)
+    let out = tool(args)
         .output()
         .map_err(|e| format!("cannot run {}: {e}", args[0]))?;
     if out.status.success() {

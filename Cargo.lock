@@ -1168,6 +1168,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "flipper-boot-menu"
+version = "0.1.0"
+dependencies = [
+ "flipper-tokens",
+ "flipper-ui",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
 name = "flipper-tokens"
 version = "0.1.0"
 dependencies = [
