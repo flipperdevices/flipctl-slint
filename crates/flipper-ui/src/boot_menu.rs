@@ -316,10 +316,9 @@ impl BootMenu {
 
     /// Open a popup and start the two reads it fills its lines from.
     ///
-    /// Separate threads on purpose. The overlays are a directory listing and land at
-    /// once; the space measurement runs du and compsize over every subvolume and
-    /// takes about a minute. Sharing a thread would hold the instant one behind the
-    /// slow one, so both lines would sit on the spinner for the whole minute.
+    /// Separate threads on purpose. Each shells out to a tool that mounts the top
+    /// level, and the space measurement walks the subvolume on top of that, so
+    /// sharing a thread would hold the faster line behind the slower one.
     fn open_popup(&mut self, which: Popup) {
         self.popup = Some(which);
         self.popup_index = 0;
@@ -330,20 +329,22 @@ impl BootMenu {
 
         let (tx, rx) = std::sync::mpsc::channel();
         let name = p.name.clone();
+        let dev = p.dev.clone();
         self.space_rx = std::thread::Builder::new()
             .name("boot-space".into())
             .spawn(move || {
-                let _ = tx.send(boot::space(&name));
+                let _ = tx.send(boot::space(&dev, &name));
             })
             .ok()
             .map(|_| rx);
 
         let (tx, rx) = std::sync::mpsc::channel();
         let name = p.name.clone();
+        let dev = p.dev.clone();
         self.dtbo_rx = std::thread::Builder::new()
             .name("boot-dtbo".into())
             .spawn(move || {
-                let _ = tx.send(boot::dtbo(&name));
+                let _ = tx.send(boot::dtbo(&dev, &name));
             })
             .ok()
             .map(|_| rx);

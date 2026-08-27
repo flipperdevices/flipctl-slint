@@ -41,6 +41,37 @@ pub struct Profile {
     pub kind: &'static str,
 }
 
+/// The PATH to run a tool with: root's, as this system declares it.
+///
+/// A tool resolves programs of its own -- boot-profile calls kexec, the size walk
+/// calls btrfs -- and those live in the sbin directories, which a login session's
+/// PATH leaves out. A child inherits ours, so a boot started from flipctl died with
+/// "kexec not installed (kexec-tools)" on a machine carrying /usr/sbin/kexec.
+///
+/// Read rather than written down: `ENV_SUPATH` in /etc/login.defs is where a system
+/// states what root's PATH is, so it stays right when the system changes and a list
+/// of directories here would not. None where nothing states one, which is the boot
+/// menu image: the launcher sets the PATH there and inheriting it is correct.
+///
+/// Read once. A system does not move its programs mid-session, and this is asked
+/// again for every tool that runs.
+fn tool_path() -> Option<&'static str> {
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| env_supath(&std::fs::read_to_string("/etc/login.defs").ok()?))
+        .as_deref()
+}
+
+/// `ENV_SUPATH` out of an /etc/login.defs, which states it as `ENV_SUPATH PATH=...`.
+fn env_supath(defs: &str) -> Option<String> {
+    defs.lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.strip_prefix("ENV_SUPATH"))
+        .filter_map(|value| value.trim().strip_prefix("PATH="))
+        .map(str::to_string)
+        .next()
+}
+
 /// One of the profile tools, ready to run.
 ///
 /// Through sudo, unless we are already root. That is not an optimisation: the boot
@@ -49,15 +80,23 @@ pub struct Profile {
 /// silent by design here -- a tool that cannot answer means "unknown" -- so the
 /// symptom was an empty profile list on a machine full of profiles.
 fn tool(args: &[&str]) -> Command {
-    if unsafe { libc::geteuid() } == 0 {
-        let mut cmd = Command::new(args[0]);
+    // By absolute path where we can find one, so it does not matter what PATH the
+    // program was started with.
+    let program = which(args[0]).unwrap_or_else(|| args[0].into());
+    let mut cmd = if unsafe { libc::geteuid() } == 0 {
+        let mut cmd = Command::new(program);
         cmd.args(&args[1..]);
         cmd
     } else {
         let mut cmd = Command::new("sudo");
-        cmd.args(args);
+        cmd.arg(program);
+        cmd.args(&args[1..]);
         cmd
+    };
+    if let Some(path) = tool_path() {
+        cmd.env("PATH", path);
     }
+    cmd
 }
 
 fn sudo(args: &[&str]) -> Option<String> {
@@ -88,14 +127,24 @@ fn sudo(args: &[&str]) -> Option<String> {
 /// while `sudo list-profiles` would have answered.
 pub fn available() -> bool {
     static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FOUND.get_or_init(|| {
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        let admin = ["/usr/local/sbin", "/usr/sbin", "/sbin"]
-            .map(std::path::PathBuf::from);
-        std::env::split_paths(&path)
-            .chain(admin)
-            .any(|dir| dir.join("list-profiles").is_file())
-    })
+    *FOUND.get_or_init(|| which("list-profiles").is_some())
+}
+
+/// Where a tool of ours is, or None.
+///
+/// PATH plus the administration directories, and the answer is a path rather than a
+/// yes: whatever finds a tool has to be what runs it, or the two disagree. They did.
+/// `available()` looked in the sbin directories while the invocation was a bare name
+/// resolved through the child's PATH, which on Debian includes /usr/local/sbin and
+/// under BusyBox init does not -- so the boot menu image found the tools, ran none of
+/// them, and drew an empty list with nothing to say about it.
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let admin = ["/usr/local/sbin", "/usr/sbin", "/sbin"].map(std::path::PathBuf::from);
+    std::env::split_paths(&path)
+        .chain(admin)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
 }
 
 /// The partition type every filesystem of ours carries: the Discoverable Partitions
@@ -530,11 +579,21 @@ pub struct Space {
 ///
 /// Sizes are the tool's own strings ("3.5GB") and are never reformatted, so every
 /// view of the same number agrees.
-pub fn space(name: &str) -> Option<Space> {
+///
+/// `dev` names the filesystem the profile is on, as `boot_now` does and for the same
+/// reason: the tool finds its own device from the mounted root, and there is no
+/// mounted root of ours in an initramfs, nor the right one for a profile on a card.
+pub fn space(dev: &str, name: &str) -> Option<Space> {
     if !valid_name(name) {
         return None;
     }
-    parse_space(&sudo(&["btrfs-show-space", "-q", name])?)
+    let mut args: Vec<&str> = vec!["btrfs-show-space", "-q"];
+    if !dev.is_empty() {
+        args.push("-d");
+        args.push(dev);
+    }
+    args.push(name);
+    parse_space(&sudo(&args)?)
 }
 
 /// The `KEY=value` pairs `btrfs-show-space <@subvol>` prints.
@@ -566,8 +625,60 @@ pub fn parse_space(out: &str) -> Option<Space> {
 ///
 /// System and user overlays are split by path: a drop-in under /etc/kernel/dtbo is
 /// something someone added, anything else ships with the image.
-pub fn dtbo(subvol: &str) -> (Vec<String>, Vec<String>) {
-    dtbo_in(std::path::Path::new("/boot/loader/entries"), subvol)
+pub fn dtbo(dev: &str, subvol: &str) -> (Vec<String>, Vec<String>) {
+    if dev.is_empty() {
+        return dtbo_in(std::path::Path::new(BOOTED_ENTRIES), subvol);
+    }
+    match TopLevel::ro(dev) {
+        Some(top) => dtbo_in(&top.path.join("boot/loader/entries"), subvol),
+        None => (Vec::new(), Vec::new()),
+    }
+}
+
+/// The entries of the filesystem this system booted from, shared by every profile on
+/// it. `Profile::dev` is empty for exactly those, which is what selects this path.
+const BOOTED_ENTRIES: &str = "/boot/loader/entries";
+
+/// A read-only top-level mount of another filesystem, unmounted when dropped.
+///
+/// A profile's boot entry lives on the profile's own drive: a card's entry names
+/// kernels only that card has, and an initramfs has no /boot of ours at all. Read-only
+/// because reading is all this is for, and subvolid=5 because that is where the
+/// entries are, as the tools mount it.
+///
+/// Drop does the unmounting so a read that returns early, or panics, cannot leave the
+/// filesystem mounted: this runs while a popup is open, and the drive it holds is one
+/// someone may pull out.
+struct TopLevel {
+    path: std::path::PathBuf,
+}
+
+impl TopLevel {
+    fn ro(dev: &str) -> Option<Self> {
+        // /run first, as the tools do: it is tmpfs, root-only, and nobody sweeps it by
+        // glob. Whether it can be written is not a question the mode bits answer -- an
+        // unprivileged flipctl cannot write root's 0755 /run -- so try and see.
+        let name = format!("flipctl-entries.{}", std::process::id());
+        let path = ["/run", "/tmp"]
+            .into_iter()
+            .map(|base| std::path::Path::new(base).join(&name))
+            .find(|path| std::fs::create_dir_all(path).is_ok())?;
+        let mount = TopLevel { path };
+        let target = mount.path.to_str()?;
+        match run(&["mount", "-t", "btrfs", "-o", "ro,subvolid=5", dev, target]) {
+            Ok(()) => Some(mount),
+            Err(_) => None,
+        }
+    }
+}
+
+impl Drop for TopLevel {
+    fn drop(&mut self) {
+        if let Some(target) = self.path.to_str() {
+            let _ = run(&["umount", target]);
+        }
+        let _ = std::fs::remove_dir(&self.path);
+    }
 }
 
 /// `dtbo`, against a given entries directory. Split out so it can be tested.
@@ -951,5 +1062,33 @@ pub fn size_parts(s: &str) -> (String, String) {
         (s.to_string(), String::new())
     } else {
         (num.to_string(), unit.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::env_supath;
+
+    /// Both samples are real files: Debian trixie on the device, and the Arch host.
+    /// The separator is a tab in both, and the value carries the PATH= prefix.
+    #[test]
+    fn reads_root_path_as_a_system_states_it() {
+        let debian = "ENV_SUPATH\tPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
+                      ENV_PATH\tPATH=/usr/local/bin:/usr/bin:/bin\n";
+        assert_eq!(
+            env_supath(debian).as_deref(),
+            Some("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        );
+
+        let arch = "# comments and blank lines\n\nENV_SUPATH\tPATH=/usr/local/sbin:/usr/local/bin:/usr/bin\n";
+        assert_eq!(
+            env_supath(arch).as_deref(),
+            Some("/usr/local/sbin:/usr/local/bin:/usr/bin")
+        );
+
+        // A commented-out declaration states nothing, and neither does ENV_PATH: the
+        // user's own PATH is not the one a tool of ours runs with.
+        assert_eq!(env_supath("#ENV_SUPATH\tPATH=/nope\n"), None);
+        assert_eq!(env_supath("ENV_PATH\tPATH=/usr/bin\n"), None);
     }
 }
