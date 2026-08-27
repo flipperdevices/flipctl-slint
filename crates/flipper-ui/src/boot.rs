@@ -746,6 +746,15 @@ fn run(args: &[&str]) -> Result<(), String> {
         .output()
         .map_err(|e| format!("cannot run {}: {e}", args[0]))?;
     if out.status.success() {
+        // A tool that succeeded can still have something to say, and it says it on
+        // stderr: boot-profile warns there when it has to boot a profile without
+        // this machine's memory node. Swallowing that is how a broken graft sat through
+        // several hangs, each looking exactly like the bug it was meant to fix.
+        for line in String::from_utf8_lossy(&out.stderr).lines() {
+            if !line.trim().is_empty() {
+                eprintln!("tool           {}", line.trim());
+            }
+        }
         return Ok(());
     }
     // The tools put the useful line last, on either stream.
