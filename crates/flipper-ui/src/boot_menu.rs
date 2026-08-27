@@ -10,6 +10,7 @@
 //! Nothing here mentions Slint. `view()` returns plain data, which each binary maps
 //! onto its own compiled components.
 
+use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
@@ -131,6 +132,14 @@ pub struct BootMenu {
     space: Option<Space>,
     space_rx: Option<Receiver<Option<Space>>>,
     space_done: bool,
+    /// Sizes already measured, by drive and profile: the same profile name exists on
+    /// more than one drive and they are different sizes. Kept because the measurement
+    /// walks the subvolume and takes seconds, and nothing here can change a profile's
+    /// size, so a second look at one costs nothing. Only answers are kept; a failed
+    /// measurement is asked again.
+    measured: HashMap<(String, String), Space>,
+    /// What the running measurement will be filed under.
+    space_key: Option<(String, String)>,
     dtbo: Option<(Vec<String>, Vec<String>)>,
     dtbo_rx: Option<Receiver<(Vec<String>, Vec<String>)>>,
     /// Where the spinners count their frames from.
@@ -162,6 +171,8 @@ impl BootMenu {
             space: None,
             space_rx: None,
             space_done: false,
+            measured: HashMap::new(),
+            space_key: None,
             dtbo: None,
             dtbo_rx: None,
             spin_at: Instant::now(),
@@ -327,16 +338,23 @@ impl BootMenu {
         self.dtbo = None;
         let Some(p) = self.selected_profile().cloned() else { return };
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        let name = p.name.clone();
-        let dev = p.dev.clone();
-        self.space_rx = std::thread::Builder::new()
-            .name("boot-space".into())
-            .spawn(move || {
-                let _ = tx.send(boot::space(&dev, &name));
-            })
-            .ok()
-            .map(|_| rx);
+        let key = (p.dev.clone(), p.name.clone());
+        if let Some(space) = self.measured.get(&key) {
+            self.space = Some(space.clone());
+            self.space_done = true;
+        } else {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let name = p.name.clone();
+            let dev = p.dev.clone();
+            self.space_key = Some(key);
+            self.space_rx = std::thread::Builder::new()
+                .name("boot-space".into())
+                .spawn(move || {
+                    let _ = tx.send(boot::space(&dev, &name));
+                })
+                .ok()
+                .map(|_| rx);
+        }
 
         let (tx, rx) = std::sync::mpsc::channel();
         let name = p.name.clone();
@@ -441,13 +459,19 @@ impl BootMenu {
         if let Some(rx) = self.space_rx.as_ref() {
             match rx.try_recv() {
                 Ok(space) => {
+                    if let (Some(key), Some(measured)) = (self.space_key.take(), space.as_ref()) {
+                        self.measured.insert(key, measured.clone());
+                    }
                     self.space = space;
                     self.space_done = true;
                     self.space_rx = None;
                     moved = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => moved = true,
-                Err(_) => self.space_rx = None,
+                Err(_) => {
+                    self.space_rx = None;
+                    self.space_key = None;
+                }
             }
         }
         if let Some(rx) = self.dtbo_rx.as_ref() {
