@@ -993,3 +993,54 @@ pub fn fit_input(text: &str, cursor: usize, inner_w: i32) -> Fitted {
     }
     out(a, b, true, true)
 }
+
+/// The placed keyboard and its field, as data.
+///
+/// The fitting, the placement and the labels are the work; mapping this onto a
+/// generated `KbCell` is not. Two programs draw this screen -- flipctl and the boot
+/// menu -- and they have different compiled components, so what they share is this.
+pub struct View {
+    pub title: String,
+    /// The text as much of it as fits, with the cursor's offset inside it.
+    pub text: String,
+    pub field_w: f32,
+    pub cursor_dx: f32,
+    pub cursor_on: bool,
+    pub field_focused: bool,
+    pub warning: String,
+    pub cells: Vec<Placed>,
+    pub chrome: (f32, f32, f32, f32),
+    pub lang_label: &'static str,
+    pub tab_label: &'static str,
+    pub tab_focus: i32,
+    pub tab_pressed: i32,
+    /// Which row of the discard prompt is highlighted, or -1 when it is not up.
+    pub discard: i32,
+}
+
+impl TextInput {
+    /// Everything on screen, as data. `warning` is the caller's, because what makes a
+    /// name invalid depends on what it is naming.
+    pub fn view(&self, warning: &str, cursor_on: bool) -> View {
+        use crate::theme::metric::KB_INPUT_PAD;
+        let field_w = field_w(i32::from(crate::font::TITLE.text_width(&self.text)));
+        let fitted = fit_input(&self.text, self.cursor, field_w - 2 * KB_INPUT_PAD);
+        let (cx, cy, cw, ch) = self.chrome();
+        View {
+            title: self.title.clone(),
+            text: fitted.visible,
+            field_w: field_w as f32,
+            cursor_dx: fitted.cursor_dx as f32,
+            cursor_on,
+            field_focused: self.focus == Focus::Field,
+            warning: warning.to_string(),
+            cells: self.placed(),
+            chrome: (cx as f32, cy as f32, cw as f32, ch as f32),
+            lang_label: self.layout.label(),
+            tab_label: self.layout.tab_label(),
+            tab_focus: self.tab_focus(),
+            tab_pressed: self.tab_pressed(),
+            discard: self.discard.map_or(-1, |at| at as i32),
+        }
+    }
+}

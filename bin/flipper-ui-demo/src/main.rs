@@ -1039,26 +1039,6 @@ fn wrap_log(line: &str) -> Vec<String> {
     out
 }
 
-/// Which popup is open over the boot menu, and what it is doing.
-///
-/// Info is read-only. Edit lists the actions for the selected profile, asks before
-/// the destructive ones, and reports what happened: the tools take tens of seconds,
-/// so "working" and "failed" are states the screen has to have.
-#[cfg(feature = "slint")]
-enum Popup {
-    Info,
-    Edit,
-    /// Waiting for a yes on the action at this index.
-    Confirm(usize),
-    /// An action is running; the string is what to call it while it does. No
-    /// receiver means there is nothing left to wait for: the device is on its way
-    /// down, so the message stays up until it goes.
-    Busy(String, Option<std::sync::mpsc::Receiver<Result<bool, String>>>),
-    /// Finished: what to say. The message is the tool's own words either way, so
-    /// there is nothing else to vary on.
-    Said(String),
-}
-
 /// Go back to a card: an app takes the keys, one of our screens is navigated to.
 ///
 /// Both live in the same stack, so the switcher does not have to know the
@@ -1486,24 +1466,63 @@ fn card_of(
     }
 }
 
-/// Why the current name cannot be used, or an empty string.
+/// Hand the boot menu's view to Slint.
 ///
-/// Recomputed on every key, as the prototype's validator is, so the warning and
-/// the refusal of Done are always the same verdict.
+/// The menu decided all of this; what is left here is the mapping onto Root's own
+/// generated types, which the boot menu image cannot share because its components
+/// are its own.
 #[cfg(feature = "slint")]
-fn rename_warning(
-    input: &flipper_ui::keyboard::TextInput,
-    profile: &flipper_ui::boot::Profile,
-    existing: &[flipper_ui::boot::Profile],
-) -> String {
-    let dest = flipper_ui::boot::rename_dest(profile, &input.text);
-    if dest.is_empty() {
-        return "Name required".into();
-    }
-    if dest != profile.name && existing.iter().any(|p| p.name == dest) {
-        return "Name already exists".into();
-    }
-    String::new()
+fn apply_boot(screen: &flipper_ui::ui::Root, menu: &flipper_ui::boot_menu::BootMenu) {
+    let view = menu.view();
+
+    let rows: Vec<flipper_ui::ui::BootRow> = view
+        .rows
+        .iter()
+        .map(|r| flipper_ui::ui::BootRow {
+            label: r.label.as_str().into(),
+            status: r.status.as_str().into(),
+            icon: r.icon,
+            icon_w: r.icon_w,
+            icon_h: r.icon_h,
+            auto: r.auto,
+            medium: r.medium,
+        })
+        .collect();
+    screen.set_boot_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    screen.set_boot_selected(view.selected);
+    screen.set_boot_scroll(view.scroll);
+    screen.set_boot_countdown(view.countdown);
+    screen.set_boot_remaining(view.remaining);
+    screen.set_boot_loading(view.loading);
+    screen.set_boot_spin_frame(view.spin_frame);
+    screen.set_boot_booting(view.booting.as_str().into());
+    screen.set_boot_buttons(demo::labels(&view.buttons));
+
+    screen.set_boot_popup_open(view.popup_open);
+    screen.set_boot_popup_title(view.popup_title.as_str().into());
+    screen.set_boot_popup_icon(view.popup_icon);
+    // The popup header uses the larger 14x14 icons, not the row's.
+    screen.set_boot_popup_icon_w(14.0);
+    screen.set_boot_popup_icon_h(14.0);
+    screen.set_boot_popup_size_number(view.size_num.as_str().into());
+    screen.set_boot_popup_size_unit(view.size_unit.as_str().into());
+    screen.set_boot_popup_size_slot_w(view.size_slot_w);
+    screen.set_boot_popup_w(view.popup_w);
+    let lines: Vec<flipper_ui::ui::BootPopupRow> = view
+        .popup_lines
+        .iter()
+        .map(|l| flipper_ui::ui::BootPopupRow {
+            kind: l.kind,
+            text: l.text.as_str().into(),
+            selected: l.selected,
+            heart: l.heart,
+        })
+        .collect();
+    screen.set_boot_popup_rows(slint::ModelRc::new(slint::VecModel::from(lines)));
+    let message: Vec<slint::SharedString> =
+        view.popup_message.iter().map(|m| m.as_str().into()).collect();
+    screen.set_boot_popup_message(slint::ModelRc::new(slint::VecModel::from(message)));
+    screen.set_boot_popup_hint(view.popup_button.as_str().into());
 }
 
 /// Hand the placed keyboard and the field to Slint.
@@ -1558,157 +1577,6 @@ fn apply_text_input(
     screen.set_kb_tab_pressed(input.tab_pressed());
     screen.set_kb_buttons(demo::labels(&["Cancel", "", "", "", "Done"]));
     screen.set_kb_discard(input.discard.map_or(-1, |at| at as i32));
-}
-
-/// Start a rename on a thread, the way every other profile action runs.
-#[cfg(feature = "slint")]
-fn start_rename(name: String, dest: String) -> Popup {
-    let (tx, rx) = std::sync::mpsc::channel();
-    if std::thread::Builder::new()
-        .name("boot-rename".into())
-        .spawn(move || {
-            let _ = tx.send(flipper_ui::boot::rename(&name, &dest).map(|()| false));
-        })
-        .is_err()
-    {
-        return Popup::Said("could not start rename".into());
-    }
-    Popup::Busy("Renaming".into(), Some(rx))
-}
-
-/// Read the profile list on a thread.
-///
-/// The two sudo tools take 650ms together, which blocked the loop long enough that
-/// the press flash sat on screen for the whole read and the menu looked slow to
-/// open. Both the menu opening and an action finishing go through here, so the
-/// list after a Clone or a Delete is read exactly the way the first one was.
-#[cfg(feature = "slint")]
-fn start_profiles_read() -> Option<std::sync::mpsc::Receiver<Vec<flipper_ui::boot::Profile>>> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("boot-profiles".into())
-        .spawn(move || {
-            let _ = tx.send(flipper_ui::boot::profiles());
-        })
-        .ok()
-        .map(|_| rx)
-}
-
-/// Boot a profile: the name the panel shows while it happens, and the result.
-///
-/// One path for both ways in, Ok on a row and the countdown running out on the
-/// marked one. The panel is given over to the takeover for as long as this takes,
-/// which is either until the machine leaves or until the load fails and says why.
-#[cfg(feature = "slint")]
-fn start_boot_now(
-    profile: &flipper_ui::boot::Profile,
-) -> Option<(String, std::sync::mpsc::Receiver<Result<bool, String>>)> {
-    let p = profile.clone();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("boot-now".into())
-        .spawn(move || {
-            let _ = tx.send(flipper_ui::boot::boot_now(&p));
-        })
-        .ok()?;
-    Some((flipper_ui::boot::profile_label(&profile.name), rx))
-}
-
-/// Start one of the Edit actions on a thread, returning the popup state to show.
-///
-/// Every one of these shells out to a tool that takes seconds to a minute, so none
-/// of them can run on the render loop. The message each reports is the tool's own
-/// last line, because that is where these tools put the reason.
-#[cfg(feature = "slint")]
-fn start_boot_action(
-    action: &str,
-    profile: Option<flipper_ui::boot::Profile>,
-    existing: Vec<flipper_ui::boot::Profile>,
-) -> Option<Popup> {
-    use flipper_ui::boot;
-
-    let p = profile?;
-    let (busy, work): (&str, Box<dyn FnOnce() -> Result<bool, String> + Send>) = match action {
-        "Auto Start" => (
-            "Saving",
-            Box::new(move || boot::set_auto_start(&p.id).map(|_| false)),
-        ),
-        "Clone" => {
-            let dest = boot::clone_dest(&p, &existing);
-            (
-                "Cloning",
-                Box::new(move || boot::clone(&p.name, &dest).map(|_| false)),
-            )
-        }
-        "Delete" => (
-            "Deleting",
-            Box::new(move || boot::delete(&p.name).map(|_| false)),
-        ),
-        // The one action that can answer "and now the device has to reboot": the
-        // running root is the copy moved aside, so the fresh one is only reachable
-        // through a reboot.
-        "Factory Reset" => (
-            "Resetting",
-            Box::new(move || boot::factory_reset(&p.name, &p.origin)),
-        ),
-        // Rename is not started here: it needs a name first, so the caller opens
-        // the keyboard and starts the action when that comes back.
-        _ => return Some(Popup::Edit),
-    };
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("boot-action".into())
-        .spawn(move || {
-            let _ = tx.send(work());
-        })
-        .ok()?;
-    Some(Popup::Busy(busy.to_string(), Some(rx)))
-}
-
-/// Read the selected profile's disk space on a thread.
-///
-/// btrfs-show-space measures every subvolume with du and compsize, which takes
-/// tens of seconds, so the popup opens with the line blank and fills it in.
-#[cfg(feature = "slint")]
-/// Start the popup's two reads.
-///
-/// Separate threads on purpose. The overlays are a directory listing and land at
-/// once; the space measurement runs du and compsize over every subvolume and takes
-/// about a minute. Sharing a thread would hold the instant one behind the slow one,
-/// so both lines would sit on the spinner for the whole minute.
-#[cfg(feature = "slint")]
-fn spawn_popup_reads(
-    profiles: &[flipper_ui::boot::Profile],
-    selected: i32,
-) -> (
-    Option<std::sync::mpsc::Receiver<Option<flipper_ui::boot::Space>>>,
-    Option<std::sync::mpsc::Receiver<(Vec<String>, Vec<String>)>>,
-) {
-    let Some(name) = profiles.get(selected as usize).map(|p| p.name.clone()) else {
-        return (None, None);
-    };
-
-    let (space_tx, space_rx) = std::sync::mpsc::channel();
-    let for_space = name.clone();
-    let space = std::thread::Builder::new()
-        .name("boot-space".into())
-        .spawn(move || {
-            let _ = space_tx.send(flipper_ui::boot::space(&for_space));
-        })
-        .ok()
-        .map(|_| space_rx);
-
-    let (dtbo_tx, dtbo_rx) = std::sync::mpsc::channel();
-    let dtbo = std::thread::Builder::new()
-        .name("boot-dtbo".into())
-        .spawn(move || {
-            let _ = dtbo_tx.send(flipper_ui::boot::dtbo(&name));
-        })
-        .ok()
-        .map(|_| dtbo_rx);
-
-    (space, dtbo)
 }
 
 /// The package names, wrapped to lines that fit the dialog.
@@ -2266,33 +2134,16 @@ fn panel(
     // behaviour as an app's own log: watch it live, or read what went past.
     let mut deps_follow = true;
 
-    // The boot menu.
-    //
-    // The countdown starts when the profiles have been read, not when the screen
-    // opens: counting down to boot something not yet listed would be a race. Any
-    // key cancels it, because a person pressing buttons is not waiting for the
-    // default to be chosen for them.
-    let mut boot_profiles: Vec<flipper_ui::boot::Profile> = Vec::new();
-    let mut boot_selected = 0i32;
-    let mut boot_scroll = 0i32;
-    let mut boot_started: Option<Instant> = None;
-    // The profile being booted, as the takeover shows it, and the load's answer.
-    let mut booting: Option<(String, std::sync::mpsc::Receiver<Result<bool, String>>)> = None;
-    // Where the load spinner counts its frames from.
-    let boot_spin_at = Instant::now();
-    let mut boot_cancelled = false;
-    // The last countdown percentage pushed, so the rows are rebuilt when the bar
-    // moves and not on every iteration.
-    let mut boot_last_shown = -2i32;
-    // The profile read in flight, if any.
-    let mut boot_pending: Option<std::sync::mpsc::Receiver<Vec<flipper_ui::boot::Profile>>> = None;
-
-    let mut popup: Option<Popup> = None;
-    let mut popup_index = 0usize;
+    // The boot menu, while it is open. All of it -- the profiles, the cursor, the
+    // countdown, the popups and their actions -- lives in flipper-ui, because the
+    // boot menu image draws the same screen and neither copy would stay the same as
+    // the other for long. What is left here is the keyboard a rename asks for, and
+    // where Back goes.
+    let mut boot: Option<flipper_ui::boot_menu::BootMenu> = None;
     // The text-input screen, open only while something is being named. It carries
-    // the profile it will rename, because the list can be re-read while it is up.
+    // the name it will rename, because the list can be re-read while it is up.
     let mut kb: Option<flipper_ui::keyboard::TextInput> = None;
-    let mut kb_profile = flipper_ui::boot::Profile::default();
+    let mut kb_for = String::new();
     let mut kb_dirty = false;
     let mut kb_cursor_shown = false;
     // When the card in front was last photographed. Cards are refreshed as the
@@ -2314,26 +2165,6 @@ fn panel(
             }
         };
     }
-    // Space and overlays for the selected profile, read on a thread because
-    // btrfs-show-space measures every subvolume.
-    let mut popup_space: Option<flipper_ui::boot::Space> = None;
-    // Whether the read has come back at all, which is not the same as it having
-    // found something: btrfs-show-space refuses some subvolume names it lists in
-    // its own whole-filesystem report. Without this the spinner cannot tell "still
-    // measuring" from "measured, no answer" and spins forever.
-    let mut popup_space_done = false;
-    let mut popup_space_rx: Option<std::sync::mpsc::Receiver<Option<flipper_ui::boot::Space>>> = None;
-    let mut popup_dtbo_rx: Option<std::sync::mpsc::Receiver<(Vec<String>, Vec<String>)>> = None;
-    let mut popup_dirty = false;
-    // Overlays for the selected profile, read with the space.
-    let mut popup_dtbo: Option<(Vec<String>, Vec<String>)> = None;
-    // Drives the "-\|/" frames while a value is still being read.
-    let spin_at = Instant::now();
-    // When the spinner frame was last pushed, so it advances on its own.
-    let mut spin_shown = Instant::now();
-
-    /// How long the boot menu waits before starting the default.
-    const BOOT_TIMEOUT: Duration = Duration::from_secs(5);
 
     // The Ethernet page's selected card, and its open dump.
     let mut eth_selected = 0i32;
@@ -3521,29 +3352,31 @@ fn panel(
                         FlipperKey::Run => press.only(4, Instant::now() + flash),
                         _ => {}
                     }
-                    let warning = rename_warning(input, &kb_profile, &boot_profiles);
+                    let being = flipper_ui::boot::Profile {
+                        name: kb_for.clone(),
+                        ..Default::default()
+                    };
+                    let existing = boot.as_ref().map(|m| m.profiles()).unwrap_or(&[]);
+                    let warning =
+                        flipper_ui::boot::rename_warning(&input.text, &being, existing);
                     match input.key(event.key, warning.is_empty()) {
                         Some(flipper_ui::keyboard::Exit::Save(text)) => {
-                            let dest = flipper_ui::boot::rename_dest(&kb_profile, &text);
-                            // Saving the name it already has is not a rename.
-                            popup = if dest.is_empty() || dest == kb_profile.name {
-                                Some(Popup::Edit)
-                            } else {
-                                eprintln!("boot action    rename {} -> {dest}", kb_profile.name);
-                                Some(start_rename(kb_profile.name.clone(), dest))
-                            };
+                            if let Some(menu) = boot.as_mut() {
+                                menu.renamed(&kb_for, Some(&text));
+                                apply_boot(&screen, menu);
+                            }
                             kb = None;
                             press.cancel();
-                            popup_dirty = true;
                             screen.set_screen(Screen::Boot);
-                            boot_last_shown = -2;
                         }
                         Some(flipper_ui::keyboard::Exit::Cancel) => {
+                            if let Some(menu) = boot.as_mut() {
+                                menu.renamed(&kb_for, None);
+                                apply_boot(&screen, menu);
+                            }
                             kb = None;
                             press.cancel();
-                            popup_dirty = true;
                             screen.set_screen(Screen::Boot);
-                            boot_last_shown = -2;
                         }
                         None => kb_dirty = true,
                     }
@@ -3552,161 +3385,38 @@ fn panel(
             }
 
             if screen.get_screen() == Screen::Boot {
-                // Any key cancels the countdown, including the one that moves the
-                // selection: a person choosing a profile is not waiting for the
-                // default to be chosen for them.
-                boot_cancelled = true;
-
-                if let Some(open) = popup.take() {
-                    let profile = boot_profiles.get(boot_selected as usize).cloned();
-                    let actions = profile
-                        .as_ref()
-                        .map(flipper_ui::boot::edit_actions)
-                        .unwrap_or_default();
-                    popup_dirty = true;
-                    match open {
-                        // Read-only: any way out closes it.
-                        Popup::Info => match event.key {
-                            FlipperKey::Escape
-                            | FlipperKey::Back
-                            | FlipperKey::Ok
-                            | FlipperKey::Run
-                            | FlipperKey::Edit => {}
-                            _ => popup = Some(Popup::Info),
-                        },
-                        Popup::Edit => match event.key {
-                            FlipperKey::Down => {
-                                popup_index = (popup_index + 1) % actions.len().max(1);
-                                popup = Some(Popup::Edit);
-                            }
-                            FlipperKey::Up => {
-                                popup_index =
-                                    (popup_index + actions.len().saturating_sub(1))
-                                        % actions.len().max(1);
-                                popup = Some(Popup::Edit);
-                            }
-                            FlipperKey::Ok | FlipperKey::Run => {
-                                // Auto Start is reversible and immediate; the rest
-                                // change or destroy a profile, so they ask first.
-                                match actions.get(popup_index).copied() {
-                                    Some("Auto Start") => {
-                                        popup = start_boot_action(
-                                            "Auto Start",
-                                            profile.clone(),
-                                            boot_profiles.clone(),
-                                        );
-                                    }
-                                    // Rename asks for the name first. The popup
-                                    // stays as it was, so backing out of the
-                                    // keyboard returns to the same list of
-                                    // actions.
-                                    Some("Rename") => {
-                                        let p = profile.clone().unwrap_or_default();
-                                        kb = Some(flipper_ui::keyboard::TextInput::new(
-                                            "Profile name",
-                                            &flipper_ui::boot::profile_label(&p.name),
-                                        ));
-                                        kb_profile = p;
-                                        kb_dirty = true;
-                                        popup = Some(Popup::Edit);
-                                        screen.set_screen(Screen::TextInput);
-                                    }
-                                    Some(_) => popup = Some(Popup::Confirm(popup_index)),
-                                    None => {}
-                                }
-                            }
-                            FlipperKey::Escape | FlipperKey::Back => {}
-                            _ => popup = Some(Popup::Edit),
-                        },
-                        Popup::Confirm(at) => match event.key {
-                            FlipperKey::Ok | FlipperKey::Run => {
-                                popup = start_boot_action(
-                                    actions.get(at).copied().unwrap_or(""),
-                                    profile.clone(),
-                                    boot_profiles.clone(),
-                                );
-                            }
-                            // Anything else is a no, and returns to the list.
-                            _ => popup = Some(Popup::Edit),
-                        },
-                        // Not interruptible: stopping a create-profile halfway
-                        // would leave a half-made subvolume.
-                        Popup::Busy(what, rx) => popup = Some(Popup::Busy(what, rx)),
-                        // The only thing this says is why an action failed, so
-                        // any key dismisses it and the list stands: a failed
-                        // action changed nothing to re-read.
-                        Popup::Said(_) => {}
-                    }
-                    continue;
+                let Some(menu) = boot.as_mut() else { continue };
+                let outcome = menu.key(event);
+                // Push what the key changed. Only tick() did this before, which is
+                // every landing but no key at all: the cursor moved, the popup
+                // opened, and the panel went on showing the frame before it, which
+                // reads exactly like a screen ignoring its buttons.
+                if !matches!(outcome, flipper_ui::boot_menu::Outcome::Leave) {
+                    apply_boot(&screen, menu);
                 }
-
-                // Nothing to answer once the kexec is loading: the machine is on
-                // its way out, and Back to a list that is about to stop existing
-                // is not a choice worth offering.
-                if booting.is_some() {
-                    continue;
-                }
-
-                let count = boot_profiles.len() as i32;
-                match event.key {
-                    FlipperKey::Down if count > 0 => {
-                        boot_selected = (boot_selected + 1).rem_euclid(count);
-                    }
-                    FlipperKey::Up if count > 0 => {
-                        boot_selected = (boot_selected - 1).rem_euclid(count);
-                    }
-                    // Boot the one under the cursor. Nothing else acts on a
-                    // choice: U-Boot has no menu and ignores the marker, so this
-                    // and the countdown are the only ways a profile is entered.
-                    FlipperKey::Ok | FlipperKey::Run if count > 0 => {
-                        if let Some(p) = boot_profiles.get(boot_selected as usize) {
-                            eprintln!("boot menu      kexec into {}", p.name);
-                            if let Some((label, rx)) = start_boot_now(p) {
-                                booting = Some((label, rx));
-                            }
-                        }
-                    }
-                    // Info is slot 1 and Edit slot 3, the two labelled keys.
-                    FlipperKey::View if count > 0 => {
-                        popup = Some(Popup::Info);
-                        popup_index = 0;
-                        popup_dirty = true;
-                        popup_space = None;
-                        popup_space_done = false;
-                        popup_dtbo = None;
-                        let (sp, dt) = spawn_popup_reads(&boot_profiles, boot_selected);
-                        popup_space_rx = sp;
-                        popup_dtbo_rx = dt;
-                    }
-                    FlipperKey::Edit if count > 0 => {
-                        popup = Some(Popup::Edit);
-                        popup_index = 0;
-                        popup_dirty = true;
-                        popup_space = None;
-                        popup_space_done = false;
-                        popup_dtbo = None;
-                        let (sp, dt) = spawn_popup_reads(&boot_profiles, boot_selected);
-                        popup_space_rx = sp;
-                        popup_dtbo_rx = dt;
-                    }
-                    FlipperKey::Escape | FlipperKey::Back => {
-                        // The selection is left as it was. This screen never moved
-                        // it, so restoring the stack's copy would put the cursor
-                        // wherever the last drill-in happened to store.
+                match outcome {
+                    flipper_ui::boot_menu::Outcome::Stay => {}
+                    // Back out to the menu this was opened from. The selection there
+                    // is left as it was: this screen never moved it, so restoring the
+                    // stack's copy would put the cursor wherever the last drill-in
+                    // happened to store.
+                    flipper_ui::boot_menu::Outcome::Leave => {
+                        boot = None;
                         let menu = stack.last().unwrap().0;
                         demo::apply_menu(&screen, menu, &net_now);
                         screen.set_screen(Screen::Menu);
                     }
-                    _ => {}
+                    // A rename needs a name, and the keyboard is this program's.
+                    flipper_ui::boot_menu::Outcome::Rename { name, label } => {
+                        kb = Some(flipper_ui::keyboard::TextInput::new("Profile name", &label));
+                        kb_for = name;
+                        kb_dirty = true;
+                        screen.set_screen(Screen::TextInput);
+                    }
                 }
-                let visible = flipper_ui::theme::count::BOOT_VISIBLE_ROWS;
-                boot_scroll = boot_scroll.clamp(
-                    (boot_selected - visible + 1).max(0),
-                    boot_selected.min((count - visible).max(0)),
-                );
-                boot_last_shown = -2;
                 continue;
             }
+
 
             let visible = demo::rows(stack.last().unwrap().0);
             let rows = visible.len() as i32;
@@ -3984,19 +3694,18 @@ fn panel(
                             eprintln!("detail         {}", which.title());
                         }
                         demo::Act::Boot => {
-                            boot_pending = start_profiles_read();
-                            boot_profiles.clear();
-                            boot_selected = 0;
-                            boot_scroll = 0;
-                            boot_cancelled = false;
-                            // The countdown starts when the list lands, not now:
-                            // counting down to boot something not yet read would be
-                            // a race.
-                            boot_started = None;
-                            boot_last_shown = -2;
+                            // The menu owns its own state, including the read it
+                            // starts here and the countdown that begins when the
+                            // list lands: counting down to boot something not yet
+                            // read would be a race.
+                            let menu = flipper_ui::boot_menu::BootMenu::open(
+                                flipper_ui::theme::count::BOOT_VISIBLE_ROWS as i32,
+                            );
+                            apply_boot(&screen, &menu);
+                            boot = Some(menu);
                             screen.set_breadcrumb("".into());
                             screen.set_screen(Screen::Boot);
-                            eprintln!("screen         boot menu, {} profiles", boot_profiles.len());
+                            eprintln!("screen         boot menu");
                         }
                         demo::Act::Reboot => {
                             eprintln!("action         reboot");
@@ -4230,395 +3939,27 @@ fn panel(
                 if kb_dirty {
                     kb_dirty = false;
                     kb_cursor_shown = cursor_on;
-                    let warning = rename_warning(input, &kb_profile, &boot_profiles);
+                    let being = flipper_ui::boot::Profile {
+                        name: kb_for.clone(),
+                        ..Default::default()
+                    };
+                    let existing = boot.as_ref().map(|m| m.profiles()).unwrap_or(&[]);
+                    let warning =
+                        flipper_ui::boot::rename_warning(&input.text, &being, existing);
                     apply_text_input(&screen, input, &warning, cursor_on);
                 }
             }
         }
 
-        // The boot menu's countdown, and its rows when something moved.
+        // The boot menu, while it is the screen showing: everything that lands on
+        // its own -- the profile read, the popup's two reads, an action finishing,
+        // the countdown running out, the boot answering -- and then the view it
+        // produces, mapped onto this program's own components.
         if screen.get_screen() == Screen::Boot {
-            if let Some(rx) = boot_pending.as_ref() {
-                match rx.try_recv() {
-                    Ok(list) => {
-                        eprintln!("boot menu      {} profiles", list.len());
-                        boot_profiles = list;
-                        boot_pending = None;
-                        boot_last_shown = -2;
-                        // Only when a profile is marked: the countdown boots the
-                        // one wearing the heart, so with nothing marked there is
-                        // nothing to count down to and the menu simply waits.
-                        let marked = boot_profiles.iter().any(|p| p.auto_boot);
-                        if !boot_cancelled && marked {
-                            boot_started = Some(Instant::now());
-                        }
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                    Err(_) => boot_pending = None,
+            if let Some(menu) = boot.as_mut() {
+                if menu.tick() {
+                    apply_boot(&screen, menu);
                 }
-            }
-            // The load spinner picks its frame from the clock, so it needs a
-            // repaint asked for while the read runs: nothing else changes, and
-            // without one the strip sits on a single frame for the whole read.
-            {
-                use flipper_ui::theme::{metric::BOOT_SPIN_FRAMES, timing::SPIN_FRAME_MS};
-                let loading = boot_pending.is_some();
-                screen.set_boot_loading(loading);
-                if loading {
-                    let frame = (boot_spin_at.elapsed().as_millis() / SPIN_FRAME_MS as u128)
-                        % BOOT_SPIN_FRAMES as u128;
-                    screen.set_boot_spin_frame(frame as i32);
-                }
-            }
-            let percent = match boot_started {
-                Some(at) if !boot_cancelled => {
-                    let elapsed = at.elapsed().min(BOOT_TIMEOUT);
-                    (elapsed.as_secs_f32() / BOOT_TIMEOUT.as_secs_f32() * 100.0) as i32
-                }
-                // Cancelled, or never started: no bar and no countdown text.
-                _ => -1,
-            };
-            let remaining = match boot_started {
-                Some(at) if !boot_cancelled => {
-                    (BOOT_TIMEOUT.saturating_sub(at.elapsed()).as_secs_f32().ceil()) as i32
-                }
-                _ => 0,
-            };
-            // Time up: boot the marked profile. The countdown is cleared first, so
-            // a boot that fails leaves the menu sitting there rather than trying
-            // again every turn.
-            if let Some(at) = boot_started {
-                if !boot_cancelled && booting.is_none() && at.elapsed() >= BOOT_TIMEOUT {
-                    boot_started = None;
-                    boot_cancelled = true;
-                    if let Some(p) = boot_profiles.iter().find(|p| p.auto_boot) {
-                        eprintln!("boot menu      countdown done, kexec into {}", p.name);
-                        if let Some((label, rx)) = start_boot_now(p) {
-                            booting = Some((label, rx));
-                        }
-                    }
-                }
-            }
-
-            // The takeover, and the two ways the machine can still be here
-            // afterwards: a kexec that would not load, which is the one boot
-            // failure a person can act on, and a dry run, which loaded the image
-            // and unloaded it again. Both have to take the takeover down and say
-            // so, or the panel claims a boot that never happened.
-            //
-            // What to say is decided while the state is borrowed and acted on
-            // after, because clearing it is what ends the borrow.
-            let said = match booting.as_ref() {
-                Some((label, rx)) => {
-                    screen.set_boot_booting(label.as_str().into());
-                    match rx.try_recv() {
-                        Ok(Err(e)) => {
-                            eprintln!("boot menu      kexec refused: {e}");
-                            Some(e)
-                        }
-                        Ok(Ok(true)) => {
-                            eprintln!("boot menu      dry run: {label} loaded and unloaded");
-                            Some(format!("{label}: loaded OK (dry run)"))
-                        }
-                        // Handing over, or the thread is gone: either way there is
-                        // nothing left to say here.
-                        Ok(Ok(false)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
-                        Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                    }
-                }
-                None => {
-                    screen.set_boot_booting("".into());
-                    None
-                }
-            };
-            if let Some(message) = said {
-                booting = None;
-                screen.set_boot_booting("".into());
-                popup = Some(Popup::Said(message));
-                popup_index = 0;
-                popup_dirty = true;
-            }
-            // The popup's own state: the space read landing, an action finishing,
-            // and the rows it shows.
-            if let Some(rx) = popup_space_rx.as_ref() {
-                if let Ok(space) = rx.try_recv() {
-                    popup_space = space;
-                    popup_space_done = true;
-                    popup_space_rx = None;
-                    popup_dirty = true;
-                }
-            }
-            // The spinner is a frame of "-\|/" chosen by elapsed time, so it only
-            // changes if something asks for a repaint. Nothing else does while a
-            // read is in flight, so it has to be asked for here or the frame sits
-            // still for the whole minute the measurement takes.
-            if (popup_space_rx.is_some()
-                || popup_dtbo_rx.is_some()
-                || matches!(popup, Some(Popup::Busy(..))))
-                && spin_shown.elapsed() >= Duration::from_millis(120)
-            {
-                spin_shown = Instant::now();
-                popup_dirty = true;
-            }
-            if let Some(rx) = popup_dtbo_rx.as_ref() {
-                if let Ok(dtbo) = rx.try_recv() {
-                    popup_dtbo = Some(dtbo);
-                    popup_dtbo_rx = None;
-                    popup_dirty = true;
-                }
-            }
-            // A finished action says nothing: the popup closes and the list is
-            // read again, which is the answer. Only a failure has something to
-            // report, and it waits for a key.
-            if let Some(Popup::Busy(what, Some(rx))) = popup.as_ref() {
-                match rx.try_recv() {
-                    Ok(Ok(rebooting)) => {
-                        eprintln!("boot action    {what} done, rebooting={rebooting}");
-                        popup = if rebooting {
-                            Some(Popup::Busy("Rebooting".into(), None))
-                        } else {
-                            popup_index = 0;
-                            boot_pending = start_profiles_read();
-                            boot_profiles.clear();
-                            boot_selected = 0;
-                            boot_scroll = 0;
-                            boot_last_shown = -2;
-                            None
-                        };
-                        popup_dirty = true;
-                    }
-                    Ok(Err(e)) => {
-                        eprintln!("boot action    {what} failed: {e}");
-                        popup = Some(Popup::Said(e));
-                        popup_dirty = true;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                    Err(_) => {
-                        popup = Some(Popup::Said("action stopped".into()));
-                        popup_dirty = true;
-                    }
-                }
-            }
-
-            if popup_dirty {
-                popup_dirty = false;
-                let profile = boot_profiles.get(boot_selected as usize).cloned().unwrap_or_default();
-                // The popup header uses the larger 14px icons, not the row's.
-                // headerIcon's set: every one of these is 14x14.
-                let icon = match flipper_ui::boot::icon_key(&profile.name, &profile.origin) {
-                    "minimal" => 1,
-                    "desktop" => 2,
-                    "router" => 3,
-                    "media" => 4,
-                    "graphics" => 5,
-                    _ => 6,
-                };
-                let size = (14.0, 14.0);
-                let mut rows: Vec<flipper_ui::ui::BootPopupRow> = Vec::new();
-                let mut message: Vec<slint::SharedString> = Vec::new();
-                let mut button = String::new();
-
-                let line = |text: String| flipper_ui::ui::BootPopupRow {
-                    kind: 0,
-                    text: text.as_str().into(),
-                    selected: false,
-                    heart: false,
-                };
-                // A value still being read shows a spinner frame, as the prototype
-                // does, so the line does not change width as it lands.
-                let spin = ["-", "\\", "|", "/"][(spin_at.elapsed().as_millis() / 120) as usize % 4];
-
-                match popup.as_ref() {
-                    Some(Popup::Info) => {
-                        let dt = popup_dtbo.as_ref();
-                        let joined = |v: &Vec<String>| {
-                            if v.is_empty() { "none".to_string() } else { v.join(" ") }
-                        };
-                        // Where it is. First, because on a machine with a card in it
-                        // two profiles can carry the same name, and this is what says
-                        // which one this is.
-                        if !profile.disk.is_empty() {
-                            rows.push(line(format!(
-                                "Drive: {} ({})",
-                                profile.disk, profile.kind
-                            )));
-                        }
-                        rows.push(line(format!(
-                            "Cloned from: {}",
-                            if profile.parent.is_empty() {
-                                "-".to_string()
-                            } else {
-                                flipper_ui::boot::display_name(&profile.parent)
-                            }
-                        )));
-                        rows.push(line(format!(
-                            "Factory: {}",
-                            if profile.origin.is_empty() {
-                                "-".to_string()
-                            } else {
-                                profile.origin.trim_start_matches('@').to_string()
-                            }
-                        )));
-                        rows.push(line(format!(
-                            "Last used: {}",
-                            flipper_ui::boot::info_last_used(
-                                &profile.last_used,
-                                std::time::SystemTime::now()
-                            )
-                        )));
-                        rows.push(line(format!(
-                            "DTBO system: {}",
-                            dt.map_or(spin.to_string(), |(sys, _)| joined(sys))
-                        )));
-                        rows.push(line(format!(
-                            "DTBO user: {}",
-                            dt.map_or(spin.to_string(), |(_, usr)| joined(usr))
-                        )));
-                    }
-                    Some(Popup::Edit) => {
-                        for (i, action) in flipper_ui::boot::edit_actions(&profile).iter().enumerate() {
-                            rows.push(flipper_ui::ui::BootPopupRow {
-                                kind: 1,
-                                text: (*action).into(),
-                                selected: i == popup_index,
-                                heart: *action == "Auto Start" && profile.auto_boot,
-                            });
-                        }
-                    }
-                    Some(Popup::Confirm(at)) => {
-                        let action = flipper_ui::boot::edit_actions(&profile)
-                            .get(*at)
-                            .copied()
-                            .unwrap_or("");
-                        message.push(format!("{action}").as_str().into());
-                        message.push(
-                            flipper_ui::boot::display_name(&profile.name).as_str().into(),
-                        );
-                        button = "OK = yes    Back = no".into();
-                    }
-                    Some(Popup::Busy(what, _)) => {
-                        message.push(format!("{what} {spin}").as_str().into());
-                    }
-                    Some(Popup::Said(msg)) => {
-                        message.push(msg.as_str().into());
-                        button = "Press any key".into();
-                    }
-                    None => {}
-                }
-
-                // The exclusive size: what deleting this profile alone would free,
-                // which is the number the popup labels "Size".
-                let (num, unit) = match (popup_space.as_ref(), popup_space_done) {
-                    (Some(sp), _) => flipper_ui::boot::size_parts(&sp.unique),
-                    // Asked and got nothing: "?" as sizeParts gives for a null,
-                    // rather than a spinner that never stops.
-                    (None, true) => ("?".to_string(), String::new()),
-                    (None, false) => (spin.to_string(), String::new()),
-                };
-                screen.set_boot_popup_open(popup.is_some());
-                screen.set_boot_popup_title(
-                    flipper_ui::boot::display_name(&profile.name)
-                        .trim_matches(['[', ']'])
-                        .into(),
-                );
-                screen.set_boot_popup_icon(icon);
-                screen.set_boot_popup_icon_w(size.0);
-                screen.set_boot_popup_icon_h(size.1);
-                // While loading, the slot is the widest spinner frame; once the
-                // value lands it is the value's own width.
-                screen.set_boot_popup_size_slot_w(if popup_space.is_some() || popup_space_done {
-                    0.0
-                } else {
-                    let w = ["-", "\\", "|", "/"]
-                        .iter()
-                        .map(|f| flipper_ui::font::TITLE.text_width(f))
-                        .max()
-                        .unwrap_or(0);
-                    f32::from(w)
-                });
-                screen.set_boot_popup_size_number(num.as_str().into());
-                screen.set_boot_popup_size_unit(unit.as_str().into());
-                // The frame is sized to its content, as boot_menu.js does:
-                //
-                //     min(252, max(sizeLine, nameLine, body + 2 * padH) + 12)
-                //
-                // Measured here because Slint cannot take a maximum across a model,
-                // and because the advance tables are on this side. The name is in
-                // Born2bSportyV2 and everything else in HaxrCorp, so two tables are
-                // involved.
-                {
-                    use flipper_ui::font::{ROW_ACTIVE, TITLE};
-                    use flipper_ui::theme::metric::{POPUP_MAX_W, POPUP_PAD_H, SIZE_GAP};
-
-                    let size_line = TITLE.text_width("Size:")
-                        + SIZE_GAP as u16
-                        + TITLE.text_width(&num)
-                        + if unit.is_empty() {
-                            0
-                        } else {
-                            SIZE_GAP as u16 + TITLE.text_width(&unit)
-                        };
-                    let name_line = POPUP_PAD_H as u16
-                        + size.0 as u16
-                        + 4
-                        + ROW_ACTIVE.text_width(&flipper_ui::boot::display_name(&profile.name))
-                        + POPUP_PAD_H as u16;
-                    // The body is whichever of the two lists is showing.
-                    let mut body = 0u16;
-                    for row in &rows {
-                        body = body.max(TITLE.text_width(row.text.as_str()));
-                    }
-                    for line in &message {
-                        body = body.max(TITLE.text_width(line.as_str()));
-                    }
-                    if !button.is_empty() {
-                        body = body.max(TITLE.text_width(&button));
-                    }
-                    let widest = size_line
-                        .max(name_line)
-                        .max(body + 2 * POPUP_PAD_H as u16);
-                    screen.set_boot_popup_w(
-                        f32::from((widest + 12).min(POPUP_MAX_W as u16)),
-                    );
-                }
-                screen.set_boot_popup_hint(button.as_str().into());
-                screen.set_boot_popup_message(slint::ModelRc::new(slint::VecModel::from(message)));
-                screen.set_boot_popup_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
-            }
-
-            if percent != boot_last_shown {
-                boot_last_shown = percent;
-                let rows: Vec<flipper_ui::ui::BootRow> = boot_profiles
-                    .iter()
-                    .map(|p| {
-                        let (icon, size) = match flipper_ui::boot::icon_key(&p.name, &p.origin) {
-                            "minimal" => (1, (10.0, 8.0)),
-                            "desktop" => (2, (10.0, 8.0)),
-                            "router" => (3, (9.0, 7.0)),
-                            "media" => (4, (10.0, 8.0)),
-                            "graphics" => (5, (10.0, 8.0)),
-                            _ => (6, (14.0, 14.0)),
-                        };
-                        flipper_ui::ui::BootRow {
-                        label: flipper_ui::boot::display_name(&p.name).as_str().into(),
-                        status: flipper_ui::boot::used_ago(&p.last_used, std::time::SystemTime::now())
-                            .as_str()
-                            .into(),
-                        icon: icon,
-                        // Each sprite's own size, so none is stretched.
-                        icon_w: size.0,
-                        icon_h: size.1,
-                        auto: p.auto_boot,
-                        medium: p.medium.as_i32(),
-                        }
-                    })
-                    .collect();
-                screen.set_boot_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
-                screen.set_boot_selected(boot_selected);
-                screen.set_boot_scroll(boot_scroll);
-                screen.set_boot_countdown(percent);
-                screen.set_boot_remaining(remaining);
-                screen.set_boot_buttons(demo::labels(&["", "Info", "", "Edit", ""]));
             }
         }
 

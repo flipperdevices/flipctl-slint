@@ -814,6 +814,22 @@ fn label_of(name: &str) -> Option<&str> {
     (!label.is_empty()).then_some(label)
 }
 
+/// Why the name being typed cannot be used, or empty when it can.
+///
+/// Shown under the field and used to gate saving, so both have one answer. A name
+/// that resolves to what the profile is already called is allowed here and refused
+/// later: retyping the same name is not an error, it just is not a rename.
+pub fn rename_warning(text: &str, profile: &Profile, existing: &[Profile]) -> String {
+    let dest = rename_dest(profile, text);
+    if dest.is_empty() {
+        return "Name required".into();
+    }
+    if dest != profile.name && existing.iter().any(|p| p.name == dest) {
+        return "Name already exists".into();
+    }
+    String::new()
+}
+
 /// The label to seed the Rename field with: dashes read as spaces, and a name
 /// with no label offered whole.
 pub fn profile_label(name: &str) -> String {

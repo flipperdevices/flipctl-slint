@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod boot;
+pub mod boot_menu;
 pub mod font;
 pub mod key;
 pub mod keyboard;
