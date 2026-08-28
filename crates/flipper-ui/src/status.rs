@@ -404,13 +404,17 @@ fn power_mw() -> Option<i32> {
     None
 }
 
-/// Booted subvolume from `rootflags=subvol=...`, minus the leading `@`.
+/// Booted subvolume from `rootflags=subvol=...`, named the way the boot menu names it.
+///
+/// Through `boot::display_name` rather than by trimming the `@` here: a profile has one
+/// name on this machine, and the idle screen showing `Desktop__Desktop-clone__` where
+/// the menu shows `[Desktop clone]` makes the same profile look like two.
 fn booted_profile() -> String {
     read("/proc/cmdline")
         .unwrap_or_default()
         .split_whitespace()
         .find_map(|arg| arg.strip_prefix("rootflags=")?.strip_prefix("subvol="))
-        .map(|s| s.trim_start_matches('@').to_string())
+        .map(crate::boot::display_name)
         .unwrap_or_default()
 }
 

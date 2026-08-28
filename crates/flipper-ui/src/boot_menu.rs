@@ -468,7 +468,7 @@ impl BootMenu {
         self.dtbo_rx = None;
         crate::logline!("boot menu      kexec into {} on {}", p.name, if p.dev.is_empty() { "the booted filesystem" } else { p.dev.as_str() });
         let (tx, rx) = std::sync::mpsc::channel();
-        let label = boot::profile_label(&p.name);
+        let label = boot::display_name(&p.name);
         if std::thread::Builder::new()
             .name("boot-now".into())
             .spawn(move || {
