@@ -10,6 +10,7 @@ pub mod font;
 pub mod key;
 pub mod keyboard;
 pub mod layout;
+pub mod log;
 pub mod net;
 pub mod status;
 pub mod switcher;

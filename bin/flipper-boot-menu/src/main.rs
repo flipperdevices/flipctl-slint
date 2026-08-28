@@ -27,7 +27,7 @@ slint::include_modules!();
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        eprintln!("Usage: flipper-boot-menu [--kms-device /dev/dri/cardN]");
+        flipper_ui::logline!("Usage: flipper-boot-menu [--kms-device /dev/dri/cardN]");
         return std::process::ExitCode::SUCCESS;
     }
     let card = args
@@ -38,7 +38,7 @@ fn main() -> std::process::ExitCode {
     match run(card.as_deref()) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("boot menu      {e}");
+            flipper_ui::logline!("boot menu      {e}");
             std::process::ExitCode::FAILURE
         }
     }
@@ -52,7 +52,7 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
             "panel reports {w}x{h}, this build is compiled for {PANEL_W}x{PANEL_H}"
         )));
     }
-    eprintln!("panel          {w}x{h}, {}", sink.format());
+    flipper_ui::logline!("panel          {w}x{h}, {}", sink.format());
     // The buttons are on i2c and their probe can fail, which it has: the menu then exited
     // for want of them and init respawned it about once a second, so the panel showed
     // nothing and the countdown never ran. Draw regardless and keep looking, because a
@@ -60,7 +60,7 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
     let mut input = match EvdevSource::open() {
         Ok(source) => Some(source),
         Err(e) => {
-            eprintln!("boot menu      no buttons yet: {e}");
+            flipper_ui::logline!("boot menu      no buttons yet: {e}");
             None
         }
     };
@@ -80,6 +80,8 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
     let mut dirty = true;
     // Whether the takeover has had its one frame; see the loop for why it gets only one.
     let mut takeover_committed = false;
+    // Whether anything has reached the panel yet, for the one line that says so.
+    let mut drawn = false;
     // The same 8ms flipctl paces its loop at: the panel takes a frame every 16 to 19
     // milliseconds, so this is twice the rate anything can be shown at and the keys
     // never wait for a frame.
@@ -91,7 +93,7 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
         if input.is_none() && looked_for_input.elapsed() >= Duration::from_secs(1) {
             looked_for_input = Instant::now();
             if let Ok(source) = EvdevSource::open() {
-                eprintln!("boot menu      buttons appeared");
+                flipper_ui::logline!("boot menu      buttons appeared");
                 input = Some(source);
             }
         }
@@ -174,10 +176,14 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
             if !booting || !takeover_committed {
                 if let Some(damage) = render_into(&window, &mut frame) {
                     sink.commit(Frame::new(&frame, PANEL_W, PANEL_H), damage)?;
+                    if !drawn {
+                        drawn = true;
+                        flipper_ui::logline!("boot menu      first frame on the panel");
+                    }
                 }
                 if booting {
                     takeover_committed = true;
-                    eprintln!("boot menu      takeover drawn; the panel is left alone from here");
+                    flipper_ui::logline!("boot menu      takeover drawn; the panel is left alone from here");
                 }
             }
         }

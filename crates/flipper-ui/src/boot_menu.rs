@@ -359,7 +359,15 @@ impl BootMenu {
             self.space_rx = std::thread::Builder::new()
                 .name("boot-space".into())
                 .spawn(move || {
-                    let _ = tx.send(boot::space(&dev, &name));
+                    let at = Instant::now();
+                    let space = boot::space(&dev, &name);
+                    crate::logline!(
+                        "boot           size {} in {:.3}s: {}",
+                        name,
+                        at.elapsed().as_secs_f64(),
+                        space.as_ref().map_or("unknown", |s| s.total.as_str())
+                    );
+                    let _ = tx.send(space);
                 })
                 .ok()
                 .map(|_| rx);
@@ -371,7 +379,16 @@ impl BootMenu {
         self.dtbo_rx = std::thread::Builder::new()
             .name("boot-dtbo".into())
             .spawn(move || {
-                let _ = tx.send(boot::dtbo(&dev, &name));
+                let at = Instant::now();
+                let (system, user) = boot::dtbo(&dev, &name);
+                crate::logline!(
+                    "boot           overlays {} in {:.3}s: {} system, {} user",
+                    name,
+                    at.elapsed().as_secs_f64(),
+                    system.len(),
+                    user.len()
+                );
+                let _ = tx.send((system, user));
             })
             .ok()
             .map(|_| rx);
@@ -433,7 +450,7 @@ impl BootMenu {
         self.space_rx = None;
         self.space_key = None;
         self.dtbo_rx = None;
-        eprintln!("boot menu      kexec into {} on {}", p.name, if p.dev.is_empty() { "the booted filesystem" } else { p.dev.as_str() });
+        crate::logline!("boot menu      kexec into {} on {}", p.name, if p.dev.is_empty() { "the booted filesystem" } else { p.dev.as_str() });
         let (tx, rx) = std::sync::mpsc::channel();
         let label = boot::profile_label(&p.name);
         if std::thread::Builder::new()
@@ -461,7 +478,7 @@ impl BootMenu {
         if let Some(rx) = self.pending.as_ref() {
             match rx.try_recv() {
                 Ok(list) => {
-                    eprintln!("boot menu      {} profiles", list.len());
+                    crate::logline!("boot menu      {} profiles", list.len());
                     self.profiles = list;
                     self.pending = None;
                     moved = true;
@@ -472,6 +489,13 @@ impl BootMenu {
                     // because counting down against an empty list is a race.
                     if !self.cancelled && self.profiles.iter().any(|p| p.auto_boot) {
                         self.started = Some(Instant::now());
+                        if let Some(p) = self.profiles.iter().find(|p| p.auto_boot) {
+                            crate::logline!(
+                                "boot menu      countdown {}s to {}",
+                                TIMEOUT.as_secs(),
+                                p.name
+                            );
+                        }
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -516,7 +540,7 @@ impl BootMenu {
         if let Some(Popup::Busy(what, Some(rx))) = self.popup.as_ref() {
             match rx.try_recv() {
                 Ok(Ok(rebooting)) => {
-                    eprintln!("boot action    {what} done, rebooting={rebooting}");
+                    crate::logline!("boot action    {what} done, rebooting={rebooting}");
                     self.popup = if rebooting {
                         Some(Popup::Busy("Rebooting".into(), None))
                     } else {
@@ -526,7 +550,7 @@ impl BootMenu {
                     moved = true;
                 }
                 Ok(Err(e)) => {
-                    eprintln!("boot action    {what} failed: {e}");
+                    crate::logline!("boot action    {what} failed: {e}");
                     self.popup = Some(Popup::Said(e));
                     moved = true;
                 }
@@ -553,7 +577,7 @@ impl BootMenu {
                 self.started = None;
                 self.cancelled = true;
                 if let Some(at) = self.profiles.iter().position(|p| p.auto_boot) {
-                    eprintln!("boot menu      countdown done");
+                    crate::logline!("boot menu      countdown done");
                     self.selected = at as i32;
                     self.boot_selected();
                 }
@@ -571,11 +595,11 @@ impl BootMenu {
         let said = match self.booting.as_ref() {
             Some((label, rx)) => match rx.try_recv() {
                 Ok(Err(e)) => {
-                    eprintln!("boot menu      kexec refused: {e}");
+                    crate::logline!("boot menu      kexec refused: {e}");
                     Some(e)
                 }
                 Ok(Ok(true)) => {
-                    eprintln!("boot menu      dry run: {label} loaded and unloaded");
+                    crate::logline!("boot menu      dry run: {label} loaded and unloaded");
                     Some(format!("{label}: loaded OK (dry run)"))
                 }
                 // Handing over, or the thread is gone: nothing left to say.

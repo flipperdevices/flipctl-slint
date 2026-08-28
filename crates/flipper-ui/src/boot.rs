@@ -333,12 +333,21 @@ pub fn profiles() -> Vec<Profile> {
     // filesystem it means. A profile anywhere else therefore never wears the heart,
     // and never can, which is also why Auto Start is not offered for one.
     let stores = stores();
+    for s in &stores {
+        crate::logline!(
+            "boot           drive {} on {} ({}{})",
+            s.dev,
+            s.disk,
+            s.kind,
+            if s.booted { ", booted" } else { "" }
+        );
+    }
     if stores.is_empty() {
         let marked = marker("");
         // No lsblk, or nothing recognisable: ask about the booted filesystem alone,
         // which is what this did before there was anything else to ask about.
         let Some(listing) = sudo(&["list-profiles"]) else {
-            eprintln!("boot           list-profiles answered nothing; no profiles to show");
+            crate::logline!("boot           list-profiles answered nothing; no profiles to show");
             return Vec::new();
         };
         return parse_listing(&listing, &marked, Medium::Internal, "", "", "disk");
@@ -353,16 +362,33 @@ pub fn profiles() -> Vec<Profile> {
     // the results is the order of `stores`, so the list on screen does not depend on
     // which drive answered first.
     let (marked, listings) = std::thread::scope(|scope| {
-        let mark = scope.spawn(|| marker(&internal_dev(&stores)));
+        let mark = scope.spawn(|| {
+            let at = std::time::Instant::now();
+            let marked = marker(&internal_dev(&stores));
+            crate::logline!(
+                "boot           marker {} in {:.3}s",
+                if marked.is_empty() { "none" } else { marked.as_str() },
+                at.elapsed().as_secs_f64()
+            );
+            marked
+        });
         let reads: Vec<_> = stores
             .iter()
             .map(|store| {
                 scope.spawn(move || {
-                    if store.booted {
+                    let at = std::time::Instant::now();
+                    let listing = if store.booted {
                         sudo(&["list-profiles"])
                     } else {
                         sudo(&["list-profiles", "-d", &store.dev])
-                    }
+                    };
+                    crate::logline!(
+                        "boot           listed {} in {:.3}s, {} rows",
+                        store.dev,
+                        at.elapsed().as_secs_f64(),
+                        listing.as_deref().map_or(0, |l| l.lines().count())
+                    );
+                    listing
                 })
             })
             .collect();
@@ -376,7 +402,7 @@ pub fn profiles() -> Vec<Profile> {
         let Some(listing) = listing else {
             // A drive that answers nothing is not the same as a drive with no
             // profiles, and only the log can tell the two apart afterwards.
-            eprintln!(
+            crate::logline!(
                 "boot           list-profiles answered nothing for {}",
                 if store.booted { "the booted filesystem" } else { store.dev.as_str() }
             );
@@ -813,7 +839,7 @@ fn run(args: &[&str]) -> Result<(), String> {
         // several hangs, each looking exactly like the bug it was meant to fix.
         for line in String::from_utf8_lossy(&out.stderr).lines() {
             if !line.trim().is_empty() {
-                eprintln!("tool           {}", line.trim());
+                crate::logline!("tool           {}", line.trim());
             }
         }
         return Ok(());
@@ -835,9 +861,9 @@ fn run(args: &[&str]) -> Result<(), String> {
     }
     use std::os::unix::process::ExitStatusExt;
     match (out.status.code(), out.status.signal()) {
-        (Some(code), _) => eprintln!("tool           {} exited {code}, saying nothing", args[0]),
-        (_, Some(sig)) => eprintln!("tool           {} killed by signal {sig}", args[0]),
-        _ => eprintln!("tool           {} died without a status", args[0]),
+        (Some(code), _) => crate::logline!("tool           {} exited {code}, saying nothing", args[0]),
+        (_, Some(sig)) => crate::logline!("tool           {} killed by signal {sig}", args[0]),
+        _ => crate::logline!("tool           {} died without a status", args[0]),
     }
     Err("the tool gave no answer".into())
 }
@@ -1021,8 +1047,8 @@ pub fn reap_old_backups() {
         }
         let del = on_dev(&["delete-profile", "-y", name]);
         match run(&del.iter().map(String::as_str).collect::<Vec<_>>()) {
-            Ok(()) => eprintln!("boot           reaped leftover backup {name}"),
-            Err(e) => eprintln!("boot           could not reap {name}: {e}"),
+            Ok(()) => crate::logline!("boot           reaped leftover backup {name}"),
+            Err(e) => crate::logline!("boot           could not reap {name}: {e}"),
         }
     }
 }
