@@ -3703,11 +3703,16 @@ fn panel(
                         }
                         demo::Act::Boot => {
                             // The menu owns its own state, including the read it
-                            // starts here and the countdown that begins when the
-                            // list lands: counting down to boot something not yet
-                            // read would be a race.
+                            // starts here.
+                            //
+                            // No auto-start: this menu was opened by somebody
+                            // already using the machine, so there is nothing for a
+                            // timer to rescue and the only thing it could do is
+                            // take the session away from whoever opened it. The
+                            // standalone boot menu keeps it.
                             let menu = flipper_ui::boot_menu::BootMenu::open(
                                 flipper_ui::theme::count::BOOT_VISIBLE_ROWS as i32,
+                                flipper_ui::boot_menu::AutoStart::Off,
                             );
                             apply_boot(&screen, &menu);
                             boot = Some(menu);

@@ -14,7 +14,7 @@
 
 use std::time::{Duration, Instant};
 
-use flipper_ui::boot_menu::{BootMenu, Outcome};
+use flipper_ui::boot_menu::{AutoStart, BootMenu, Outcome};
 use flipper_ui::evdev::EvdevSource;
 use flipper_ui::kms::KmsSink;
 use flipper_ui::slint_render::{render_into, FlipperSlintPlatform};
@@ -70,7 +70,7 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
     let ui = Menu::new().map_err(|e| std::io::Error::other(e.to_string()))?;
     ui.show().map_err(|e| std::io::Error::other(e.to_string()))?;
 
-    let mut menu = BootMenu::open(BOOT_VISIBLE_ROWS as i32);
+    let mut menu = BootMenu::open(BOOT_VISIBLE_ROWS as i32, AutoStart::Countdown);
     // The keyboard a rename asks for, and the profile it is renaming.
     let mut kb: Option<keyboard::TextInput> = None;
     let mut kb_for = String::new();

@@ -47,6 +47,20 @@ enum Popup {
 }
 
 /// What the caller has to do about a key the menu could not finish itself.
+/// Whether the marked profile starts itself when nothing is pressed.
+///
+/// It is the standalone boot menu's whole reason for existing: a machine left alone
+/// has to reach a system. Reached from a booted profile there is nothing to rescue and
+/// nobody absent, so a menu opened there counts down to replacing the session that
+/// opened it, which is never what was asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoStart {
+    /// Count down, then boot the marked profile.
+    Countdown,
+    /// Never boot by itself: the menu waits for a key, with no timer and no bar.
+    Off,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// Handled. Redraw and carry on.
@@ -126,6 +140,7 @@ pub struct BootMenu {
     /// When the countdown started, and whether a key has stopped it.
     started: Option<Instant>,
     cancelled: bool,
+    auto_start: AutoStart,
     booting: Option<(String, Receiver<Result<bool, String>>)>,
     popup: Option<Popup>,
     popup_index: usize,
@@ -151,7 +166,7 @@ pub struct BootMenu {
 impl BootMenu {
     /// Open the menu: the profile read starts now, on a thread, because listing them
     /// walks every subvolume on every filesystem and the screen has to appear first.
-    pub fn open(visible: i32) -> Self {
+    pub fn open(visible: i32, auto_start: AutoStart) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let started = std::thread::Builder::new()
             .name("boot-profiles".into())
@@ -165,6 +180,7 @@ impl BootMenu {
             selected: 0,
             started: None,
             cancelled: false,
+            auto_start,
             booting: None,
             popup: None,
             popup_index: 0,
@@ -487,7 +503,10 @@ impl BootMenu {
                     // marked there is nothing to count down to and the menu waits.
                     // Started when the list lands rather than when the screen opens,
                     // because counting down against an empty list is a race.
-                    if !self.cancelled && self.profiles.iter().any(|p| p.auto_boot) {
+                    if self.auto_start == AutoStart::Countdown
+                        && !self.cancelled
+                        && self.profiles.iter().any(|p| p.auto_boot)
+                    {
                         self.started = Some(Instant::now());
                         if let Some(p) = self.profiles.iter().find(|p| p.auto_boot) {
                             crate::logline!(
@@ -562,7 +581,7 @@ impl BootMenu {
             }
         }
         if restart_read {
-            let again = Self::open(self.visible);
+            let again = Self::open(self.visible, self.auto_start);
             self.profiles = Vec::new();
             self.pending = again.pending;
             self.selected = 0;
