@@ -320,9 +320,10 @@ pub fn stores() -> Vec<Store> {
 /// which is why the offset is computed rather than fixed. Anything that is not a
 /// `profile` is skipped: `_old` backups are leftovers, not somewhere to boot.
 pub fn profiles() -> Vec<Profile> {
-    if !available() {
-        return Vec::new();
-    }
+    // No check that the tools are there: they ship in the boot menu image, and an
+    // image without them has nothing to do. flipctl still checks, to hide its Boot
+    // row on a machine with no profile tools at all.
+    //
     // Every filesystem of ours, not just the booted one, so a card's profiles are
     // offered alongside the machine's own.
     //
@@ -336,9 +337,11 @@ pub fn profiles() -> Vec<Profile> {
         let marked = marker("");
         // No lsblk, or nothing recognisable: ask about the booted filesystem alone,
         // which is what this did before there was anything else to ask about.
-        return sudo(&["list-profiles"])
-            .map(|listing| parse_listing(&listing, &marked, Medium::Internal, "", "", "disk"))
-            .unwrap_or_default();
+        let Some(listing) = sudo(&["list-profiles"]) else {
+            eprintln!("boot           list-profiles answered nothing; no profiles to show");
+            return Vec::new();
+        };
+        return parse_listing(&listing, &marked, Medium::Internal, "", "", "disk");
     }
 
     // One thread per drive, and the marker read alongside them.
@@ -370,7 +373,15 @@ pub fn profiles() -> Vec<Profile> {
 
     let mut out = Vec::new();
     for (store, listing) in stores.iter().zip(listings) {
-        let Some(listing) = listing else { continue };
+        let Some(listing) = listing else {
+            // A drive that answers nothing is not the same as a drive with no
+            // profiles, and only the log can tell the two apart afterwards.
+            eprintln!(
+                "boot           list-profiles answered nothing for {}",
+                if store.booted { "the booted filesystem" } else { store.dev.as_str() }
+            );
+            continue;
+        };
         let internal = store.medium == Medium::Internal;
         let marker = if internal { marked.as_str() } else { "" };
         // The booted filesystem is every tool's default, so it needs no device: this
