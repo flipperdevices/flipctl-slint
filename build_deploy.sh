@@ -71,6 +71,8 @@ if [ "$MODE" = status ]; then
     run "systemctl is-active $UNIT.service || true"
     run "sudo ss -ltnp 2>/dev/null | grep -E ':(8899|$PORT) ' || echo 'nothing listening'"
     run "systemctl is-active cog-seat1.service || true" | sed 's/^/cog-seat1: /'
+    run "systemctl is-active fake-flipctl-node-server.service || true" \
+        | sed 's/^/prototype: /'
     run "sudo journalctl -u $UNIT -n 12 --no-pager -o cat 2>/dev/null || true"
     exit 0
 fi
@@ -123,9 +125,12 @@ fi
 ARGS="--remote 0.0.0.0:$PORT --assets crates/flipper-ui/assets/remote"
 [ -n "$PEER" ] && ARGS="$ARGS --peer $PEER"
 if [ "$MODE" = panel ]; then
-    # The panel is single-owner: cog holds card0 and has to let go first.
-    echo "== stopping cog-seat1 to release the panel =="
+    # The panel is single-owner. cog holds card0 and has to let go first, and the
+    # prototype draws on that same glass through cog, so it goes too: headless mode
+    # is where the two share, and this mode is where we take it.
+    echo "== stopping cog-seat1 and the prototype to release the panel =="
     run "sudo systemctl stop cog-seat1.service" || true
+    run "sudo systemctl stop fake-flipctl-node-server.service" || true
     ARGS="--panel $ARGS"
 else
     # Headless leaves the panel to whoever has it, so the prototype can keep
