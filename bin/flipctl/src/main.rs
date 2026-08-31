@@ -4349,6 +4349,11 @@ fn panel(
                     "first frame committed: {}x{} panel, damage {}x{} at ({}, {})",
                     PANEL_W, PANEL_H, damage.w, damage.h, damage.x, damage.y
                 );
+                // And to the kernel log, where the rest of the boot is: this is the
+                // moment the panel stops being blank, so it is the only line in here
+                // worth timestamping against the driver messages around it. The boot
+                // menu logs its own progress the same way.
+                flipper_ui::logline!("flipctl        first frame on the panel");
             }
             if let Some(t) = key_at.take() {
                 eprintln!(

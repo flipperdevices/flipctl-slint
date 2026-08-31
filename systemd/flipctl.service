@@ -31,6 +31,10 @@ DeviceAllow=/dev/dri/by-path/platform-2acf0000.spi-cs-0-card rw
 DeviceAllow=/dev/dri/by-path/platform-27800000.gpu-render rw
 DeviceAllow=char-input rw
 DeviceAllow=/dev/tty0 rw
+# The kernel log, where flipctl puts the moment the panel lights up. It writes the node
+# through sudo, as it does every privileged thing, but the cgroup's device filter applies to
+# that child as much as to us, so without this line the write fails however root it is.
+DeviceAllow=/dev/kmsg rw
 
 # The installed layout, not a build tree: the binary is /usr/bin/flipctl and its
 # apps and assets are under /usr/share/flipctl. A deploy installs over those paths
