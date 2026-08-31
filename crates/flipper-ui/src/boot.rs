@@ -868,14 +868,19 @@ fn run(args: &[&str]) -> Result<(), String> {
     Err("the tool gave no answer".into())
 }
 
-/// Boot a profile now, by kexec, and do not come back.
+/// Boot a profile now, and do not come back.
 ///
-/// `boot-profile` reads that profile's own BLS entry for the kernel, the initrd and
-/// the command line, assembles its device tree (the running profile's is the live
-/// one; any other profile's is the board base plus the entry's overlays through
-/// fdtoverlay), loads all of it with kexec and hands over. So a profile boots with
-/// its own kernel and its own tree, which is what mounting its root and switching
-/// into it could not do.
+/// `boot-profile` picks one of two ways over, and says in the kernel log which one it
+/// took. A profile whose kernel and device tree are the ones already running is
+/// pivoted into: its root is put in place and PID 1 handed over, which costs a mount
+/// rather than a second kernel boot. From the boot menu's initramfs that is
+/// switch_root; from a booted profile it is systemd's soft-reboot, which replaces
+/// userspace without touching the kernel. Everything else is kexec'd, which is the
+/// only way a profile
+/// boots with a kernel or a tree of its own: the tool reads that profile's BLS entry
+/// for the kernel, the initrd and the command line, assembles its device tree (the
+/// running profile's is the live one; any other profile's is the board base plus the
+/// entry's overlays through fdtoverlay), loads all of it and hands over.
 ///
 /// U-Boot does not read the auto-boot marker and has no timeout of its own, so this
 /// is the only thing that acts on a choice: the marker says which profile the menu

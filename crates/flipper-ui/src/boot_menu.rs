@@ -109,7 +109,7 @@ pub struct View {
     /// The profile read is still in flight, so the list shows a spinner.
     pub loading: bool,
     pub spin_frame: i32,
-    /// Non-empty while a profile is being kexec'd, which takes the whole panel.
+    /// Non-empty while a profile is being booted, which takes the whole panel.
     pub booting: String,
     pub popup_open: bool,
     pub popup_title: String,
@@ -466,7 +466,7 @@ impl BootMenu {
         self.space_rx = None;
         self.space_key = None;
         self.dtbo_rx = None;
-        crate::logline!("boot menu      kexec into {} on {}", p.name, if p.dev.is_empty() { "the booted filesystem" } else { p.dev.as_str() });
+        crate::logline!("boot menu      boot {} on {}", p.name, if p.dev.is_empty() { "the booted filesystem" } else { p.dev.as_str() });
         let (tx, rx) = std::sync::mpsc::channel();
         let label = boot::display_name(&p.name);
         if std::thread::Builder::new()
@@ -607,14 +607,14 @@ impl BootMenu {
             }
         }
 
-        // The two ways the machine can still be here after a boot: a kexec that would
-        // not load, which is the one boot failure a person can act on, and a dry run,
-        // which loaded the image and unloaded it again. Both have to take the takeover
-        // down and say so, or the panel claims a boot that never happened.
+        // The two ways the machine can still be here after a boot: a boot that would not
+        // load, which is the one boot failure a person can act on, and a dry run, which
+        // loaded the image and unloaded it again. Both have to take the takeover down and
+        // say so, or the panel claims a boot that never happened.
         let said = match self.booting.as_ref() {
             Some((label, rx)) => match rx.try_recv() {
                 Ok(Err(e)) => {
-                    crate::logline!("boot menu      kexec refused: {e}");
+                    crate::logline!("boot menu      boot refused: {e}");
                     Some(e)
                 }
                 Ok(Ok(true)) => {
