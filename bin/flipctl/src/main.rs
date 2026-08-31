@@ -186,6 +186,7 @@ mod demo {
             .filter(|r| match r.act {
                 Act::Boot => flipper_ui::boot::available(),
                 Act::Apps => can_host_apps(),
+                Act::Flipctl2 => flipper_ui::old_flipctl_loader::available(),
                 _ => true,
             })
             .collect()
@@ -250,6 +251,10 @@ mod demo {
         Detail(Detail),
         /// The boot menu, which lists the bootable profiles.
         Boot,
+        /// Hand the panel to the flipctl2 prototype: stop this build, start the
+        /// browser that draws that one. There is no way back from the panel,
+        /// which is what makes it a testing row rather than a menu entry.
+        Flipctl2,
         /// A scene the prototype has and this port does not. Named so the dialog
         /// can say which one, rather than the row silently doing nothing.
         Unported,
@@ -376,8 +381,9 @@ mod demo {
     /// label, an icon and the active-label nudge. Submenus use the status column;
     /// the main menu does not.
     ///
-    /// Files, Router, Boot Menu, Testing and the two target apps have scenes in
-    /// the prototype that this port has not taken yet.
+    /// Files, Router, Boot Menu and the two target apps have scenes in the
+    /// prototype that this port has not taken yet. Testing goes to the prototype
+    /// itself rather than porting its scene.
     pub static MAIN: Menu = Menu {
         title: "",
         rows: &[
@@ -386,7 +392,7 @@ mod demo {
             Row { label: "Apps", icon: 3, frames: 9, stat: Stat::None, act: Act::Apps },
             Row { label: "Files", icon: 4, frames: 10, stat: Stat::None, act: Act::Nothing },
             Row { label: "Network", icon: 5, frames: 10, stat: Stat::None, act: Act::Sub(&NETWORK) },
-            Row { label: "Testing", icon: 6, frames: 9, stat: Stat::None, act: Act::Unported },
+            Row { label: "Testing: flipctl2", icon: 6, frames: 9, stat: Stat::None, act: Act::Flipctl2 },
             Row { label: "Settings", icon: 7, frames: 10, stat: Stat::None, act: Act::Sub(&SETTINGS) },
         ],
     };
@@ -3723,6 +3729,13 @@ fn panel(
                         demo::Act::Reboot => {
                             eprintln!("action         reboot");
                             flipper_ui::net::reboot();
+                        }
+                        // Nothing to draw while this happens: the handover stops
+                        // us, so the last frame on the panel is this menu until
+                        // cog takes over.
+                        demo::Act::Flipctl2 => {
+                            eprintln!("action         flipctl2");
+                            flipper_ui::old_flipctl_loader::start();
                         }
                         // The prototype blocks this row while airplane mode is on
                         // and offers to turn it off, rather than failing silently.

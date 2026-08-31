@@ -12,6 +12,7 @@ pub mod keyboard;
 pub mod layout;
 pub mod log;
 pub mod net;
+pub mod old_flipctl_loader;
 pub mod status;
 pub mod switcher;
 pub mod sysinfo;
