@@ -306,9 +306,11 @@ impl Idle {
 
     /// Hostname and booted profile, read once.
     ///
-    /// The profile is the `rootflags=subvol=` the kernel booted with, so it cannot
-    /// change without a reboot. The hostname can in principle, but not without
-    /// something restarting anyway, and polling either on a timer is pure waste.
+    /// The profile is the subvolume `/` is mounted from, and it cannot change under a
+    /// running flipctl: entering another profile restarts userspace even when it does not
+    /// restart the kernel, so this process is replaced either way. The hostname can change
+    /// in principle, but not without something restarting anyway, and polling either on a
+    /// timer is pure waste.
     pub fn read_identity(&mut self) {
         self.hostname = read("/proc/sys/kernel/hostname").unwrap_or_default();
         self.profile = booted_profile();
@@ -404,17 +406,32 @@ fn power_mw() -> Option<i32> {
     None
 }
 
-/// Booted subvolume from `rootflags=subvol=...`, named the way the boot menu names it.
+/// The running profile: the subvolume `/` is mounted from, named the way the boot menu
+/// names it.
+///
+/// From the mount, not from `rootflags=subvol=` on the kernel command line. A pivot
+/// replaces the root without restarting the kernel -- systemd's soft-reboot, which is how
+/// `boot-profile` enters a profile whose kernel and device tree are already running -- so
+/// the command line still names the profile we came *from*, and the idle screen said
+/// Desktop while the clone was running.
+///
+/// Field 4 of a `/proc/self/mountinfo` line is the directory within the filesystem that
+/// this mount was made from, which for a btrfs subvolume root is `/@<profile>`. A plain
+/// file read, so this stays out of the business of shelling out to `findmnt`.
 ///
 /// Through `boot::display_name` rather than by trimming the `@` here: a profile has one
 /// name on this machine, and the idle screen showing `Desktop__Desktop-clone__` where
 /// the menu shows `[Desktop clone]` makes the same profile look like two.
 fn booted_profile() -> String {
-    read("/proc/cmdline")
+    read("/proc/self/mountinfo")
         .unwrap_or_default()
-        .split_whitespace()
-        .find_map(|arg| arg.strip_prefix("rootflags=")?.strip_prefix("subvol="))
-        .map(crate::boot::display_name)
+        .lines()
+        .find_map(|line| {
+            let mut field = line.split_whitespace();
+            let root = field.nth(3)?;
+            (field.next()? == "/").then_some(root)
+        })
+        .map(|root| crate::boot::display_name(root.trim_start_matches('/')))
         .unwrap_or_default()
 }
 
