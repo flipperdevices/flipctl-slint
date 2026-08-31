@@ -58,43 +58,59 @@ The host toolchain usually has no aarch64 std, so this is built on the device or
 in the dev container, never on the local host.
 
     export CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
-    cargo build --release -p flipper-ui-demo --features device,slint,remote
+    cargo build --release -p flipctl --features device,slint,remote
 
 LTO off and 16 codegen units are for build speed while iterating; drop both for a
 size-measured build.
 
 ## Run
 
-On the panel, which needs `cog-seat1.service` stopped first because it holds
-`card0`:
+What runs on the machine is `/usr/bin/flipctl` under `flipctl.service`, the same
+one the image boots. A deploy installs over that path and restarts the unit; the
+build tree is where the build happens and nothing more. From the host:
 
-    sudo systemctl stop cog-seat1.service
-    sudo ./target/release/flipper-ui-demo --panel
+    ./build_deploy.sh --panel      # the panel and its buttons
+    ./build_deploy.sh              # browser only, leaving the panel alone
 
-Browser only, leaving the panel to whatever owns it, with a side-by-side against
-the fake-flipctl2 prototype:
+or on the device, in the tree the deploy copied over:
 
-    sudo systemd-run --unit=flipper-ui-demo --collect \
-      --working-directory=$PWD \
-      $PWD/target/release/flipper-ui-demo --headless \
-      --remote 0.0.0.0:9999 --peer 127.0.0.1:8899 \
-      --assets crates/flipper-ui/assets/remote
+    ./run_me.sh
 
-Then open `http://<device>:9999/`: both screens side by side, an overlay that
-counts differing pixels, and a control pad laid out like the hardware.
+A deploy brings the binary, the browser view's assets and the apps this checkout
+carries, as sources: an app is built where it sits, so its directory is owned by
+the user flipctl runs as. Apps a machine has of its own are left alone.
+
+The mode, the port and the peer live in a deploy drop-in,
+`/etc/systemd/system/flipctl.service.d/50-deploy.conf`, rewritten by every deploy.
+Delete it and the machine runs exactly what the image ships: `--panel` on 8899
+with the installed assets.
+
+`systemd-run --unit=flipctl` is not an option, and the error is worth knowing:
+the image installs `/etc/systemd/system/flipctl.service`, and a transient unit
+cannot take a name that already has a fragment file on disk, stopped or not
+(`Unit flipctl.service was already loaded or has a fragment file`).
+
+A one-off out of the build tree is still the way to measure, since it takes flags
+the unit does not carry, and it needs the panel's owner stopped first:
+
+    sudo systemctl stop cog-seat1.service flipctl.service
+    sudo ./target/release/flipctl --panel
+
+Then open `http://<device>:8899/`: our screen, an overlay that counts differing
+pixels against a peer if one is set, and a control pad laid out like the hardware.
 `--frames N` exits after N commits and reports timings; `--bench` measures the
 ceiling.
 
-The peer is the prototype's own server, which runs on the device as a unit and
-holds port 8899:
+8899 is the port the fake-flipctl2 prototype's own server used to hold, and cog
+still loads `http://localhost:8899`, so flipctl now answers the URL that kiosk
+opens. There is no default peer for the same reason: comparing against 8899 would
+be comparing against ourselves. Point `--peer` at a prototype wherever one is
+actually running:
 
-    systemctl status fake-flipctl-node-server    # what --peer talks to
-    sudo systemctl stop fake-flipctl-node-server # free 8899, drop the comparison
-    sudo systemctl start fake-flipctl-node-server
+    PEER=127.0.0.1:8900 ./build_deploy.sh   # a prototype moved off 8899
 
-Stopping it costs nothing but the side-by-side: drop `--peer` and the page shows
-our screen alone. Worth stopping when measuring, since it serves the same browser
-and shares the machine.
+The two cannot share a machine on one port, and the prototype is what has to move,
+since its server binds 8899 and its browser asks for it.
 
 ## Tests
 

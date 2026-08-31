@@ -32,20 +32,26 @@ DeviceAllow=/dev/dri/by-path/platform-27800000.gpu-render rw
 DeviceAllow=char-input rw
 DeviceAllow=/dev/tty0 rw
 
-WorkingDirectory=/home/user/flipctl-slint
+# The installed layout, not a build tree: the binary is /usr/bin/flipctl and its
+# apps and assets are under /usr/share/flipctl. A deploy installs over those paths
+# and restarts this unit, so there is one flipctl on the machine and one place it
+# runs from.
+WorkingDirectory=/usr/share/flipctl
 StandardOutput=journal
 StandardError=journal
-ExecStart=/home/user/flipctl-slint/target/release/flipper-ui-demo --panel \
-    --remote 0.0.0.0:9999 --assets crates/flipper-ui/assets/remote
+ExecStart=/usr/bin/flipctl --panel \
+    --remote 0.0.0.0:8899 --assets /usr/share/flipctl/assets/remote
 
 # Stopping the unit does not stop what it started: PAMName=login puts these
 # processes in a logind session scope rather than the service's own cgroup, so a
-# restart used to leave the previous flipctl alive, still holding port 9999, and the
+# restart used to leave the previous flipctl alive, still holding the remote view's
+# port, and the
 # new one came up with no endpoint for Back or the app switcher.
-ExecStopPost=-/usr/bin/pkill -x flipper-ui-demo
-ExecStopPost=-/usr/bin/pkill -x cage
-ExecStopPost=-/usr/bin/pkill -x crispy-doom
-ExecStopPost=-/usr/bin/pkill -x foot
+#
+# sway covers the hosted apps: it is the parent of every one of them, so killing it
+# takes the cages, the terminals and the games with it.
+ExecStopPost=-/usr/bin/pkill -x flipctl
+ExecStopPost=-/usr/bin/pkill -x sway
 Restart=on-failure
 RestartSec=2
 
