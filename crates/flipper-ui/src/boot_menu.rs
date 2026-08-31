@@ -196,6 +196,22 @@ impl BootMenu {
         }
     }
 
+    /// Put the cursor on the profile the countdown would boot.
+    ///
+    /// The highlighted row is what a person reads as "this is what happens next", so it has
+    /// to be the marked one rather than whatever sorts first: otherwise the menu shows one
+    /// profile and boots another when the countdown ends, and pressing OK on what looks
+    /// selected boots something else again. Nothing marked leaves the cursor alone, and so
+    /// does a list that arrived after somebody already started moving around in it.
+    fn select_marked(&mut self) {
+        if self.cancelled {
+            return;
+        }
+        if let Some(at) = self.profiles.iter().position(|p| p.auto_boot) {
+            self.selected = at as i32;
+        }
+    }
+
     /// The profiles as listed, for a caller judging a new name against them.
     pub fn profiles(&self) -> &[Profile] {
         &self.profiles
@@ -497,6 +513,7 @@ impl BootMenu {
                     crate::logline!("boot menu      {} profiles", list.len());
                     self.profiles = list;
                     self.pending = None;
+                    self.select_marked();
                     moved = true;
                     // The countdown only runs when there is something for it to
                     // boot: it enters the profile wearing the heart, so with nothing
