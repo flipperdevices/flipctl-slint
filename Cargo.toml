@@ -4,7 +4,7 @@ members = [
     "crates/flipper-tokens",
     "crates/flipper-ui",
     "crates/flipctl-app",
-    "bin/flipper-ui-demo",
+    "bin/flipctl",
     "bin/flipper-boot-menu",
 ]
 # Apps are not listed here. Each app crate carries its own empty [workspace]

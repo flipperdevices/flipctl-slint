@@ -4016,7 +4016,7 @@ SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
-  * flipper-ui-demo 0.1.0 (https://crates.io/crates/flipper-ui-demo)
+  * flipctl 0.1.0 (https://crates.io/crates/flipctl)
   * flipper-tokens 0.1.0 (https://crates.io/crates/flipper-tokens)
   * flipper-ui 0.1.0 (https://crates.io/crates/flipper-ui)
   * chrono 0.4.45 (https://github.com/chronotope/chrono)

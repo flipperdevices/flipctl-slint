@@ -1,5 +1,5 @@
 [package]
-name = "flipper-ui-demo"
+name = "flipctl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

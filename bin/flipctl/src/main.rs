@@ -59,7 +59,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("flipper-ui-demo: {e}");
+            eprintln!("flipctl: {e}");
             ExitCode::FAILURE
         }
     }
@@ -70,7 +70,7 @@ fn main() -> ExitCode {
 const EMPTY_BUTTONS: [String; 0] = [];
 
 const USAGE: &str = "\
-usage: flipper-ui-demo [--panel [--kms-device PATH]] [--png PATH]
+usage: flipctl [--panel [--kms-device PATH]] [--png PATH]
 
   --panel        drive the real 256x144 SPI panel and its buttons
   --wayland      present to the compositor that owns the panel, and take its keys
@@ -457,7 +457,7 @@ mod detail {
         std::env::var("FLIPPER_UPDATE_BRANCH").unwrap_or_else(|_| "dev".into())
     }
     fn update_unit() -> String {
-        std::env::var("FLIPPER_UPDATE_UNIT").unwrap_or_else(|_| "flipper-ui-demo.service".into())
+        std::env::var("FLIPPER_UPDATE_UNIT").unwrap_or_else(|_| "flipctl.service".into())
     }
 
     fn row(label: &str, value: &str) -> DetailRow {

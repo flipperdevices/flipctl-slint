@@ -36,7 +36,7 @@ if cargo about --version >/dev/null 2>&1; then
     # dependency whose license is not in about.toml's accepted list.
     tmp=$(mktemp)
     cargo about generate --fail \
-        --manifest-path bin/flipper-ui-demo/Cargo.toml \
+        --manifest-path bin/flipctl/Cargo.toml \
         --features device,slint,remote,wayland,gpu \
         -c about.toml about.hbs -o "$tmp" >/dev/null 2>&1
     if cmp -s "$tmp" THIRD-PARTY-LICENSES.md; then

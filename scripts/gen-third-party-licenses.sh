@@ -26,7 +26,7 @@ fi
 # --fail: error out if any linked crate uses a license not in about.toml's
 # `accepted` list, so a new dependency can never silently ship unlicensed.
 cargo about generate --fail \
-    --manifest-path bin/flipper-ui-demo/Cargo.toml \
+    --manifest-path bin/flipctl/Cargo.toml \
     --features device,slint,remote,wayland,gpu \
     -c about.toml about.hbs -o THIRD-PARTY-LICENSES.md
 echo "wrote THIRD-PARTY-LICENSES.md"

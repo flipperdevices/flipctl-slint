@@ -82,11 +82,11 @@ Built on the Flipper One itself (aarch64, 8 cores), since the host toolchain has
 only `x86_64-unknown-linux-gnu` std. rustc 1.97.1 via rustup; that profile has no
 `rustc`/`cargo` in apt.
 
-    cargo build --release -p flipper-ui-demo --features device,slint
+    cargo build --release -p flipctl --features device,slint
     # 8m21s cold, 23s incremental, with CARGO_PROFILE_RELEASE_LTO=false
     # and CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 for build speed
 
-    readelf -d target/release/flipper-ui-demo | grep NEEDED
+    readelf -d target/release/flipctl | grep NEEDED
     NEEDED  libgcc_s.so.1
     NEEDED  libm.so.6
     NEEDED  libc.so.6
@@ -112,8 +112,8 @@ the throughput figure is meaningless.
 ```
 rustup target add aarch64-unknown-linux-musl
 cargo build --release --target aarch64-unknown-linux-musl \
-    -p flipper-ui-demo --features device,slint
-aarch64-linux-gnu-readelf -d target/aarch64-unknown-linux-musl/release/flipper-ui-demo \
+    -p flipctl --features device,slint
+aarch64-linux-gnu-readelf -d target/aarch64-unknown-linux-musl/release/flipctl \
     | grep NEEDED
 ```
 
