@@ -1943,6 +1943,9 @@ fn panel(
         return Err(std::io::Error::other("rebuild with --features wayland"));
     } else {
         let sink = KmsSink::open(kms_device.map(std::path::Path::new))?;
+        // Before the first modeset, not after: logind activates this session a moment after
+        // the unit starts, and until it does the kernel refuses master.
+        sink.wait_for_master(std::time::Duration::from_secs(10))?;
         let (w, h) = sink.size();
         if (w, h) != (PANEL_W, PANEL_H) {
             return Err(std::io::Error::other(format!(

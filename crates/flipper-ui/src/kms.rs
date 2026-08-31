@@ -357,6 +357,50 @@ impl KmsSink {
         self.detached
     }
 
+    /// Wait until the kernel will hand us DRM master, for at most `limit`.
+    ///
+    /// flipctl takes the panel through a logind session (`PAMName=login`, for seat1's
+    /// devices), and the kernel refuses SET_MASTER until logind has made that session the
+    /// active one on the seat. That happens a moment after the unit starts, so a flipctl
+    /// that opens the card and modesets immediately dies with EACCES on its first commit.
+    ///
+    /// It used to be hidden: the session scope itself took ~1.8s to come up, by which time
+    /// the session was active, so the race never showed. Removing that delay exposed it, and
+    /// the failure was expensive, because systemd's `RestartSec=2` then cost more than the
+    /// wait it had replaced. Waiting here is what makes an earlier start worth anything.
+    pub fn wait_for_master(&self, limit: std::time::Duration) -> std::io::Result<()> {
+        let began = std::time::Instant::now();
+        let mut waited = false;
+        loop {
+            match self.card.acquire_master_lock() {
+                Ok(()) => {
+                    if waited {
+                        crate::logline!(
+                            "panel          DRM master granted after {}ms",
+                            began.elapsed().as_millis()
+                        );
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    if began.elapsed() >= limit {
+                        return Err(e);
+                    }
+                    if !waited {
+                        crate::logline!("panel          waiting for DRM master on this seat");
+                        waited = true;
+                    }
+                    // 100ms, and a 10s ceiling, so the whole wait is at most a hundred
+                    // ioctls: the panel is a tenth of a second late at worst and nothing
+                    // spins while the seat settles. A tighter poll buys nothing here, since
+                    // what is being waited for is logind activating a session, which takes
+                    // hundreds of milliseconds, not microseconds.
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+    }
+
     /// Take it back, and put our own frame up again.
     ///
     /// Whoever had the panel in the meantime left something else on it, and the
