@@ -70,10 +70,14 @@ MUX_DIR=$(mktemp -d)
 trap 'ssh -O exit -o ControlPath="$MUX_DIR/s" "$USER_@$HOST" 2>/dev/null; rm -rf "$MUX_DIR"' EXIT
 MUX=(-o ControlMaster=auto -o ControlPath="$MUX_DIR/s" -o ControlPersist=60)
 
+# Host keys are never stored: the device is reflashed often and every flash brings new
+# ones, so a remembered key turns the next deploy into "REMOTE HOST IDENTIFICATION HAS
+# CHANGED" and a manual ssh-keygen -R before anything works again.
+KEYS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 if [ -n "${PASS:-}" ] && command -v sshpass >/dev/null; then
-    SSH=(sshpass -p "$PASS" ssh -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR "${MUX[@]}")
+    SSH=(sshpass -p "$PASS" ssh "${KEYS[@]}" "${MUX[@]}")
 else
-    SSH=(ssh -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR "${MUX[@]}")
+    SSH=(ssh "${KEYS[@]}" "${MUX[@]}")
 fi
 run() { "${SSH[@]}" "$USER_@$HOST" "$@"; }
 
@@ -188,11 +192,28 @@ run "cd ~/$DEST && \
        | sudo tar xf - -C $SHARE && \
      for a in apps/*/; do sudo chown -R $USER_:$USER_ '$SHARE'/\$a; done"
 
+# The unit itself, where the machine has none. Stock profiles do not ship it -- it has
+# always been installed by hand -- so a deploy onto a freshly installed profile otherwise
+# builds, installs the binary, and then has nothing to restart. Never overwritten: a
+# machine whose unit someone has tuned keeps it, and only the drop-in below is ours.
+if ! run "systemctl cat $UNIT.service >/dev/null 2>&1"; then
+    echo "== installing $UNIT.service, which this profile does not have =="
+    run "sudo tee /etc/systemd/system/$UNIT.service >/dev/null" < "$(dirname "$0")/systemd/$UNIT.service"
+    run "sudo systemctl enable $UNIT.service" 2>&1 | tail -1
+fi
+
 echo "== restarting $UNIT.service ($MODE) =="
+# The kernel log goes in here too, not only in systemd/flipctl.service: a machine that came
+# with its own unit keeps it, so the deploy carries what flipctl needs rather than assuming
+# the shipped unit grants it. DeviceAllow is a list that adds to whatever the unit already
+# says, so this is safe on a unit that has it. flipctl writes the node through sudo, but the
+# cgroup's device filter applies to that child too, root or not, so without this line the
+# panel's own timing never reaches the boot log.
 run "sudo mkdir -p $(dirname "$DROPIN") && sudo tee $DROPIN >/dev/null" <<EOF
 [Service]
 ExecStart=
 ExecStart=$BIN $ARGS
+DeviceAllow=/dev/kmsg rw
 EOF
 # Not fatal here: a unit that fails to come up is reported below, with its log,
 # which is more use than the shell aborting on the restart's exit status.
