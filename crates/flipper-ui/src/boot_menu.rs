@@ -18,6 +18,9 @@ use crate::boot::{self, Profile, Space};
 use crate::key::{FlipperKey, KeyEvent};
 use crate::theme::{metric::BOOT_SPIN_FRAMES, timing::SPIN_FRAME_MS};
 
+/// How often the partition table is compared against the one the list was read from.
+const PARTS_POLL: Duration = Duration::from_millis(500);
+
 /// How long a boot waits for an arm that is still loading before going ahead without it.
 /// The load measures 2.4s on this board; the rest is room for a machine under load.
 const ARM_WAIT: Duration = Duration::from_secs(6);
@@ -136,6 +139,12 @@ pub struct View {
     pub buttons: [&'static str; 5],
 }
 
+/// The kernel's view of what block devices exist, as the cheapest thing that changes when
+/// one arrives: a few hundred bytes, read straight from procfs.
+fn partitions() -> String {
+    std::fs::read_to_string("/proc/partitions").unwrap_or_default()
+}
+
 /// The boot menu's state.
 pub struct BootMenu {
     profiles: Vec<Profile>,
@@ -152,6 +161,18 @@ pub struct BootMenu {
     arming: Option<Receiver<Result<(), String>>>,
     /// Whether the marked profile's image has been asked for, so it is asked for once.
     armed: bool,
+    /// What the kernel's partition table looked like when the list was last read, and
+    /// when it was last compared, so a drive that arrives late is noticed.
+    parts: String,
+    parts_polled: Instant,
+    /// The table changed at the last look, so the next one decides whether it has settled.
+    /// Devices arrive in pieces -- the disk, then its partitions, and a USB drive later
+    /// still -- and a list read costs a mount and a subvolume walk per filesystem, so it
+    /// is worth waiting one more look rather than paying that three times per insertion.
+    parts_settling: bool,
+    /// The profile the cursor was on across a re-read nobody asked for, so it lands back
+    /// on it rather than wherever the new list happens to put that row.
+    keep: Option<(String, String)>,
     popup: Option<Popup>,
     popup_index: usize,
     space: Option<Space>,
@@ -194,6 +215,10 @@ impl BootMenu {
             booting: None,
             arming: None,
             armed: false,
+            parts: partitions(),
+            parts_polled: Instant::now(),
+            parts_settling: false,
+            keep: None,
             popup: None,
             popup_index: 0,
             space: None,
@@ -252,6 +277,32 @@ impl BootMenu {
             self.arming = Some(rx);
             self.armed = true;
         }
+    }
+
+    /// Read the drives again because one appeared, without moving anything the user is
+    /// looking at.
+    ///
+    /// The card that arrives 2.7s into a boot is the case: enumerating an UHS-I card takes
+    /// longer than this menu takes to draw, so a list read once can be a list read too
+    /// early, and after a warm reboot it loses that race more often, since the card has to
+    /// be brought back down from 1.8V signalling first. Someone pushing a card in while the
+    /// menu sits there is the same thing, later.
+    ///
+    /// Nothing about the screen is reset: the cursor comes back to the profile it was on,
+    /// the countdown keeps whatever time it had left, and a popup or a boot already under
+    /// way defers this rather than being interrupted. The list itself changes, which is the
+    /// whole point, and a row appearing above the cursor is what the restore is for.
+    fn drives_changed(&mut self) {
+        if self.popup.is_some() || self.booting.is_some() || self.pending.is_some() {
+            return;
+        }
+        crate::logline!("boot menu      the drives changed, reading them again");
+        self.keep = self
+            .selected_profile()
+            .map(|p| (p.name.clone(), p.dev.clone()));
+        let again = Self::open(self.visible, self.auto_start);
+        self.pending = again.pending;
+        self.armed = false;
     }
 
     /// Read the drives again, from nothing: the list, the marker and the cursor.
@@ -579,13 +630,45 @@ impl BootMenu {
     pub fn tick(&mut self) -> bool {
         let mut moved = false;
 
+        // Every block device the kernel knows, so an SD card, a USB drive, a reader that
+        // took its time and a drive pulled out are all the same event. Cheap enough to keep
+        // doing for as long as the menu is up: a few hundred bytes of procfs every 500ms.
+        if self.parts_polled.elapsed() >= PARTS_POLL {
+            self.parts_polled = Instant::now();
+            let now = partitions();
+            if now != self.parts {
+                self.parts = now;
+                self.parts_settling = true;
+            } else if self.parts_settling {
+                self.parts_settling = false;
+                self.drives_changed();
+            }
+        }
+
         if let Some(rx) = self.pending.as_ref() {
             match rx.try_recv() {
                 Ok(list) => {
                     crate::logline!("boot menu      {} profiles", list.len());
                     self.profiles = list;
                     self.pending = None;
-                    self.select_marked();
+                    match self.keep.take() {
+                        // A re-read nobody asked for: back onto the same profile, or as
+                        // close as the shorter list allows if it is gone.
+                        Some((name, dev)) => {
+                            match self
+                                .profiles
+                                .iter()
+                                .position(|p| p.name == name && p.dev == dev)
+                            {
+                                Some(at) => self.selected = at as i32,
+                                None => {
+                                    let last = self.profiles.len().saturating_sub(1) as i32;
+                                    self.selected = self.selected.clamp(0, last.max(0));
+                                }
+                            }
+                        }
+                        None => self.select_marked(),
+                    }
                     moved = true;
                     // The countdown only runs when there is something for it to
                     // boot: it enters the profile wearing the heart, so with nothing
@@ -594,6 +677,7 @@ impl BootMenu {
                     // because counting down against an empty list is a race.
                     if self.auto_start == AutoStart::Countdown
                         && !self.cancelled
+                        && self.started.is_none()
                         && self.profiles.iter().any(|p| p.auto_boot)
                     {
                         self.started = Some(Instant::now());
