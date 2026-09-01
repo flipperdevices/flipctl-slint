@@ -224,13 +224,15 @@ impl BootMenu {
         }
     }
 
-    /// Load the marked profile's image now, so the countdown's boot does not have to.
+    /// Load the marked profile's image now, so the boot that follows does not have to.
     ///
-    /// Only the marked profile, and only when the countdown is what will boot it: the
-    /// kernel holds one image at a time, so arming anything else would throw this one
-    /// away, and a boot somebody chooses by hand is one they are already waiting for.
+    /// The marked profile and no other: the kernel holds one image at a time, so arming
+    /// anything else would throw this one away, and the marked one is both what a
+    /// countdown boots by itself and what somebody opening this list most often picks.
+    /// Where it can be pivoted into, which is usually the case for the running profile,
+    /// the tool loads nothing and this costs a decision.
     fn arm_marked(&mut self) {
-        if self.armed || self.auto_start != AutoStart::Countdown {
+        if self.armed {
             return;
         }
         let Some(p) = self.profiles.iter().find(|p| p.auto_boot).cloned() else {
@@ -580,11 +582,13 @@ impl BootMenu {
                                 p.name
                             );
                         }
-                        // Loading starts with the countdown rather than near its end:
-                        // the whole point is to spend the wait on it, and a boot asked
-                        // for while it runs waits out the kexec lock either way.
-                        self.arm_marked();
                     }
+                    // Not part of the countdown: flipctl opens this list without one and
+                    // still boots the marked profile more often than any other. Loading
+                    // starts as the list lands rather than near a deadline, since the
+                    // whole point is to spend the wait on it, and a boot asked for while
+                    // it runs waits out the kexec lock either way.
+                    self.arm_marked();
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     // The load spinner picks its frame from the clock, so it needs a
