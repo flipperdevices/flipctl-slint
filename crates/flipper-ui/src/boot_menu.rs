@@ -232,7 +232,10 @@ impl BootMenu {
     /// Where it can be pivoted into, which is usually the case for the running profile,
     /// the tool loads nothing and this costs a decision.
     fn arm_marked(&mut self) {
-        if self.armed {
+        // One at a time: a re-read allows this again, and a load still running would
+        // otherwise be joined by a second one, which waits out the kexec lock and then
+        // loads the same image over again.
+        if self.armed || self.arming.is_some() {
             return;
         }
         let Some(p) = self.profiles.iter().find(|p| p.auto_boot).cloned() else {
@@ -249,6 +252,25 @@ impl BootMenu {
             self.arming = Some(rx);
             self.armed = true;
         }
+    }
+
+    /// Read the drives again, from nothing: the list, the marker and the cursor.
+    ///
+    /// What it is for is a drive that was not there a moment ago. A card can be pushed in
+    /// while this screen is up, and nothing else in the program goes looking for it, so a
+    /// list read once at startup would show a machine that no longer exists.
+    ///
+    /// Prefetching is allowed again, because the marker may now name a different profile
+    /// (a card carries its own), and prefetching the one already loaded costs a decision
+    /// and no load.
+    pub fn reread(&mut self) {
+        crate::logline!("boot menu      reading the drives again");
+        let again = Self::open(self.visible, self.auto_start);
+        self.profiles = Vec::new();
+        self.pending = again.pending;
+        self.selected = 0;
+        self.popup_index = 0;
+        self.armed = false;
     }
 
     /// The profiles as listed, for a caller judging a new name against them.
@@ -670,11 +692,7 @@ impl BootMenu {
             }
         }
         if restart_read {
-            let again = Self::open(self.visible, self.auto_start);
-            self.profiles = Vec::new();
-            self.pending = again.pending;
-            self.selected = 0;
-            self.popup_index = 0;
+            self.reread();
         }
 
         // Time up: boot the marked profile. The countdown is cleared first, so a boot

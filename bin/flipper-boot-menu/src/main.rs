@@ -135,8 +135,9 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
                 None => match menu.key(event) {
                     Outcome::Stay => {}
                     // Nothing behind this screen: the menu is the program, so Back
-                    // has nowhere to go and the list stays.
-                    Outcome::Leave => {}
+                    // has nowhere to go. It reads the drives again instead, which is
+                    // what somebody who just pushed a card in is asking for.
+                    Outcome::Leave => menu.reread(),
                     Outcome::Rename { name, label } => {
                         kb = Some(keyboard::TextInput::new("Profile name", &label));
                         kb_for = name;
