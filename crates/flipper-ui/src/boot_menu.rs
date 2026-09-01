@@ -18,6 +18,10 @@ use crate::boot::{self, Profile, Space};
 use crate::key::{FlipperKey, KeyEvent};
 use crate::theme::{metric::BOOT_SPIN_FRAMES, timing::SPIN_FRAME_MS};
 
+/// How long a boot waits for an arm that is still loading before going ahead without it.
+/// The load measures 2.4s on this board; the rest is room for a machine under load.
+const ARM_WAIT: Duration = Duration::from_secs(6);
+
 /// How long the marked profile has before it is booted.
 ///
 /// The prototype's own five seconds. Not a token: nothing else in the design uses
@@ -142,6 +146,12 @@ pub struct BootMenu {
     cancelled: bool,
     auto_start: AutoStart,
     booting: Option<(String, Receiver<Result<bool, String>>)>,
+    /// An arm in flight: the image for the marked profile being loaded ahead of the
+    /// boot that would ask for it. Carries nothing but its finish, since what was
+    /// loaded is recorded by the tool and checked there.
+    arming: Option<Receiver<Result<(), String>>>,
+    /// Whether the marked profile's image has been asked for, so it is asked for once.
+    armed: bool,
     popup: Option<Popup>,
     popup_index: usize,
     space: Option<Space>,
@@ -182,6 +192,8 @@ impl BootMenu {
             cancelled: false,
             auto_start,
             booting: None,
+            arming: None,
+            armed: false,
             popup: None,
             popup_index: 0,
             space: None,
@@ -209,6 +221,31 @@ impl BootMenu {
         }
         if let Some(at) = self.profiles.iter().position(|p| p.auto_boot) {
             self.selected = at as i32;
+        }
+    }
+
+    /// Load the marked profile's image now, so the countdown's boot does not have to.
+    ///
+    /// Only the marked profile, and only when the countdown is what will boot it: the
+    /// kernel holds one image at a time, so arming anything else would throw this one
+    /// away, and a boot somebody chooses by hand is one they are already waiting for.
+    fn arm_marked(&mut self) {
+        if self.armed || self.auto_start != AutoStart::Countdown {
+            return;
+        }
+        let Some(p) = self.profiles.iter().find(|p| p.auto_boot).cloned() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        if std::thread::Builder::new()
+            .name("boot-arm".into())
+            .spawn(move || {
+                let _ = tx.send(boot::arm(&p));
+            })
+            .is_ok()
+        {
+            self.arming = Some(rx);
+            self.armed = true;
         }
     }
 
@@ -485,9 +522,20 @@ impl BootMenu {
         crate::logline!("boot menu      boot {} on {}", p.name, if p.dev.is_empty() { "the booted filesystem" } else { p.dev.as_str() });
         let (tx, rx) = std::sync::mpsc::channel();
         let label = boot::display_name(&p.name);
+        // An arm still loading is this boot's own image being made ready, and the kernel
+        // takes one caller at a time: starting the boot now means loading it again behind
+        // the first load. Wait for it instead, on the boot's thread so the panel keeps
+        // painting, and then hand over with nothing left to load. Bounded because a wait
+        // that never ends would be a menu that never boots.
+        let arming = self.arming.take();
         if std::thread::Builder::new()
             .name("boot-now".into())
             .spawn(move || {
+                if let Some(rx) = arming {
+                    if rx.recv_timeout(ARM_WAIT).is_err() {
+                        crate::logline!("boot menu      gave up waiting for the arm, booting anyway");
+                    }
+                }
                 let _ = tx.send(boot::boot_now(&p));
             })
             .is_ok()
@@ -532,6 +580,10 @@ impl BootMenu {
                                 p.name
                             );
                         }
+                        // Loading starts with the countdown rather than near its end:
+                        // the whole point is to spend the wait on it, and a boot asked
+                        // for while it runs waits out the kexec lock either way.
+                        self.arm_marked();
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -566,6 +618,22 @@ impl BootMenu {
                 self.dtbo = Some(dtbo);
                 self.dtbo_rx = None;
                 moved = true;
+            }
+        }
+
+        // Nothing on screen turns on this: an arm is a boot made faster, not an answer.
+        // It is collected only so a failure is said out loud, and so the thread's end is
+        // noticed rather than left in flight for the life of the menu.
+        if let Some(rx) = self.arming.as_ref() {
+            match rx.try_recv() {
+                Ok(res) => {
+                    self.arming = None;
+                    if let Err(e) = res {
+                        crate::logline!("boot menu      arming failed: {e}");
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.arming = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
 
