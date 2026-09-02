@@ -77,8 +77,8 @@ component BootLine inherits Rectangle {
         color: root.ink;
     }
 
-    // The auto-start heart, right after the label rather than at the edge, so it
-    // reads as belonging to the name.
+    // The auto-start heart, right after the name rather than at the edge, so it
+    // reads as belonging to it.
     if root.entry.auto: Image {
         x: label.x + (label.width - 1px) + 3px;
         y: 5px;
@@ -114,10 +114,20 @@ component BootLine inherits Rectangle {
 
 // One line of a popup.
 export struct BootPopupRow {
-    // 0 a body line, drawn whole and left-aligned; 1 a centred action.
+    // 0 a body line, drawn whole and left-aligned; 1 a centred action; 2 a setting:
+    // its name on the left, its value on the right.
     kind: int,
+    // Where this row sits in the popup's body, measured from its top. Given rather than
+    // multiplied out here, because one popup mixes pitches: the View screen carries the
+    // profile's facts at the Info pitch and a Config action at the taller action pitch,
+    // and only the caller knows which rows are which.
+    y: length,
     text: string,
-    // An action row that is the current one.
+    // What a kind-2 row shows on the right, in the status grey and between chevrons
+    // while the row is the current one, as the menu's own settings rows read. A setting
+    // with nothing to show yet has none, and its name stands alone.
+    value: string,
+    // An action or a setting row that is the current one.
     selected: bool,
     // The auto-start heart, to the left of an action. Marks the enabled state, so
     // it shows only when this profile is already the marked one.
@@ -151,6 +161,9 @@ component BootPopup inherits Rectangle {
     // Measured by the caller: Slint cannot take a maximum across a model, and the
     // font tables that decide it live on that side anyway.
     in property <length> frame_w_in;
+    // How tall the rows come to, for the same reason: rows of two pitches cannot be
+    // counted, only added up.
+    in property <length> body_h_in;
 
     width: 100%;
     height: 100%;
@@ -159,13 +172,13 @@ component BootPopup inherits Rectangle {
     property <bool> has_message: root.message.length > 0;
     property <length> line_h: root.has_message
         ? FlipperTheme.popup_line_h
-        : (root.rows.length > 0 && root.rows[0].kind == 1
+        : (root.rows.length > 0 && root.rows[0].kind != 0
             ? FlipperTheme.popup_row_h
             : FlipperTheme.popup_line_h);
-    property <int> body_lines: root.has_message
-        ? root.message.length + (root.button == "" ? 0 : 1)
-        : root.rows.length;
-    property <length> body_h: root.body_lines * root.line_h;
+    property <int> body_lines: root.message.length + (root.button == "" ? 0 : 1);
+    property <length> body_h: root.has_message
+        ? root.body_lines * root.line_h
+        : root.body_h_in;
     property <length> frame_h: FlipperTheme.popup_hdr_h + root.body_h + 8px;
     property <length> frame_w: Math.min(
         FlipperTheme.popup_max_w / 1px,
@@ -314,18 +327,21 @@ component BootPopup inherits Rectangle {
         color: FlipperTheme.status_dim;
     }
 
-    for row[i] in root.rows: Rectangle {
+    for row[i] in root.rows: line_box := Rectangle {
         x: root.frame_x;
-        y: root.frame_y + FlipperTheme.popup_hdr_h + 4px + i * root.line_h;
+        y: root.frame_y + FlipperTheme.popup_hdr_h + 4px + row.y;
         width: root.frame_w;
-        height: root.line_h;
+        height: row.kind == 0 ? FlipperTheme.popup_line_h : FlipperTheme.popup_row_h;
         background: transparent;
         visible: !root.has_message;
 
-        if row.kind == 1 && row.selected: SelectorFrame {
-            x: 10px;
+        // The cursor. An action is centred in the frame with room either side; a
+        // setting is left-aligned at the popup's own padding, so its frame has to sit
+        // further out than the text does or the label lands on the border.
+        if row.kind != 0 && row.selected: SelectorFrame {
+            x: row.kind == 2 ? FlipperTheme.popup_pad_h - 4px : 10px;
             y: 0;
-            frame_w: parent.width - 20px;
+            frame_w: parent.width - 2 * (row.kind == 2 ? FlipperTheme.popup_pad_h - 4px : 10px);
             frame_h: FlipperTheme.popup_row_h;
             filled: false;
             stroke: true;
@@ -355,6 +371,48 @@ component BootPopup inherits Rectangle {
             x: FlipperTheme.popup_pad_h;
             y: 0;
             text: row.text;
+            font-size: 16px;
+            color: FlipperTheme.black;
+        }
+
+        // A setting: its name on the left, its value on the right, and while the row is
+        // the current one a chevron either side of the value to say Left and Right do
+        // something. Same reading as the menu's own settings rows, which is where a
+        // person will have met it.
+        if row.kind == 2: Text {
+            x: FlipperTheme.popup_pad_h;
+            // The action baseline, not the row's top edge: a settings row is as tall as
+            // an action and shares its cursor, so its text has to sit where an action's
+            // does or the frame closes on the letters.
+            y: 3px;
+            text: row.text;
+            font-size: 16px;
+            color: FlipperTheme.black;
+        }
+        // Chevrons only where there is a value to walk through: a row that has
+        // nothing to show yet would otherwise promise Left and Right do something.
+        if row.kind == 2 && row.selected && row.value != "": Text {
+            x: value.x - FlipperTheme.size_gap - (self.width - 1px);
+            y: 3px;
+            text: "<";
+            font-size: 16px;
+            color: FlipperTheme.black;
+        }
+        property <bool> spinnable: row.kind == 2 && row.selected && row.value != "";
+        value := Text {
+            visible: row.kind == 2;
+            x: parent.width - FlipperTheme.popup_pad_h - (self.width - 1px)
+                - (line_box.spinnable ? FlipperTheme.size_gap + chevron_r.width - 1px : 0px);
+            y: 3px;
+            text: row.value;
+            font-size: 16px;
+            color: FlipperTheme.status_dim;
+        }
+        chevron_r := Text {
+            visible: line_box.spinnable;
+            x: parent.width - FlipperTheme.popup_pad_h - (self.width - 1px);
+            y: 3px;
+            text: ">";
             font-size: 16px;
             color: FlipperTheme.black;
         }
@@ -600,6 +658,7 @@ export component BootBody inherits Rectangle {
     in property <[string]> popup_message;
     in property <string> popup_hint;
     in property <length> popup_w;
+    in property <length> popup_body_h;
     in property <bool> popup_open;
 
     if root.popup_open: BootPopup {
@@ -614,5 +673,6 @@ export component BootBody inherits Rectangle {
         message: root.popup_message;
         button: root.popup_hint;
         frame_w_in: root.popup_w;
+        body_h_in: root.popup_body_h;
     }
 }

@@ -42,6 +42,12 @@ fn main() -> ExitCode {
             has("--headless"),
             value("--peer"),
             has("--wayland"),
+            // Old kernels are hidden unless asked for: see the boot menu.
+            if has("--all-kernels") {
+                flipper_ui::boot::Kernels::All
+            } else {
+                flipper_ui::boot::Kernels::Modern
+            },
         )
     } else if let Some(path) = value("--png") {
         png(
@@ -87,6 +93,8 @@ usage: flipctl [--panel [--kms-device PATH]] [--png PATH]
                  the panel, so the prototype and this can be compared live
   --peer H:P     a host:port running the fake-flipctl2 prototype; / then serves
                  the side-by-side comparison and /device the photo view
+  --all-kernels  list every boot entry, including kernels older than the menu
+                 shows by default
   --assets DIR   where device.png lives (default: crates/flipper-ui/assets/remote)
   --png PATH     render one frame headlessly and write an 8-bit greyscale PNG
   --screen NAME  with --png, render a menu level: main, network or settings
@@ -1514,14 +1522,17 @@ fn apply_boot(screen: &flipper_ui::ui::Root, menu: &flipper_ui::boot_menu::BootM
     screen.set_boot_popup_size_unit(view.size_unit.as_str().into());
     screen.set_boot_popup_size_slot_w(view.size_slot_w);
     screen.set_boot_popup_w(view.popup_w);
+    screen.set_boot_popup_body_h(view.popup_body_h);
     let lines: Vec<flipper_ui::ui::BootPopupRow> = view
         .popup_lines
         .iter()
         .map(|l| flipper_ui::ui::BootPopupRow {
             kind: l.kind,
+            y: l.y,
             text: l.text.as_str().into(),
             selected: l.selected,
             heart: l.heart,
+            value: l.value.as_str().into(),
         })
         .collect();
     screen.set_boot_popup_rows(slint::ModelRc::new(slint::VecModel::from(lines)));
@@ -1905,6 +1916,7 @@ fn panel(
     headless: bool,
     peer: Option<String>,
     wayland: bool,
+    kernels: flipper_ui::boot::Kernels,
 ) -> std::io::Result<()> {
     use std::time::{Duration, Instant};
 
@@ -3722,6 +3734,7 @@ fn panel(
                             let menu = flipper_ui::boot_menu::BootMenu::open(
                                 flipper_ui::theme::count::BOOT_VISIBLE_ROWS as i32,
                                 flipper_ui::boot_menu::AutoStart::Off,
+                                kernels,
                             );
                             apply_boot(&screen, &menu);
                             boot = Some(menu);
@@ -4412,6 +4425,7 @@ fn panel(
     _headless: bool,
     _peer: Option<String>,
     _wayland: bool,
+    _kernels: flipper_ui::boot::Kernels,
 ) -> std::io::Result<()> {
     Err(std::io::Error::other(
         "rebuild with --features device,slint",

@@ -1,10 +1,19 @@
-//! Bootable profiles, for the boot menu.
+//! Bootable profiles and the entries that boot them.
 //!
-//! A profile is a btrfs subvolume the device can boot into. The list comes from
-//! `list-profiles`, and which one is marked to boot next from the metadata
-//! partition via `flipmeta`. Both are the tools the prototype's server shells out
-//! to, and there is no kernel interface to read instead: the subvolume layout and
-//! the boot marker are conventions of this image, not facts the kernel exposes.
+//! A row is a profile: a btrfs subvolume the device can boot into, as `list-profiles`
+//! reports it. Each carries its boot entries, the files under /boot/loader/entries
+//! that name a kernel, an initrd, a command line and the device tree overlays -- one
+//! per kernel installed in it, in boot order, so a profile's first entry is the kernel
+//! it boots.
+//!
+//! **What boots is the first entry.** Nothing records a choice anywhere else: no
+//! marker, no pin. Entries are sorted, and the first one wins, so marking a profile or
+//! choosing a kernel means writing digits into an entry's `sort-key` -- which is
+//! `set-boot-order`'s job, never this module's. See `order` for the rule, which
+//! `libs/flipper-blsname.sh` implements in shell against the same fields.
+//!
+//! None of this has a kernel interface to read instead: the subvolume layout and the
+//! boot order are conventions of this image, not facts the kernel exposes.
 //!
 //! Nothing here writes. Renaming, cloning, deleting and factory-resetting a
 //! profile are the destructive half of the boot menu and are deliberately absent
@@ -28,7 +37,11 @@ pub struct Profile {
     pub parent: String,
     /// `origin_stock_name`, from which the base name and the icon are derived.
     pub origin: String,
-    /// Marked to boot next, per the metadata partition.
+    /// Its boot entries, in boot order: `entries[0]` is the kernel this profile boots.
+    /// Empty for a profile with no kernel the menu will show, which has no row.
+    pub entries: Vec<Entry>,
+    /// Whether this profile is the one that boots when nobody presses anything: its
+    /// entries carry the autoboot digit, and one of them is first on the machine.
     pub auto_boot: bool,
     /// What its filesystem is sitting on. Anything but `Internal` can be listed and
     /// booted, but never marked: see `stores`.
@@ -39,6 +52,165 @@ pub struct Profile {
     /// The drive that partition is on, e.g. `/dev/sda`, and what to call it.
     pub disk: String,
     pub kind: &'static str,
+}
+
+/// One boot entry: one kernel of one profile, as its file states it.
+///
+/// `id` is the file name without its boot counter or `.conf`, which is what
+/// `boot-profile` and `set-boot-order` take and what stays the same across attempts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Entry {
+    pub id: String,
+    /// The kernel release it names, e.g. `7.2.0-00249-g26619ffca0bd`.
+    pub version: String,
+    /// That release as the entry's own `title` carries it, which kernel-install has
+    /// already trimmed to something a menu can show.
+    pub short: String,
+    /// The `sort-key`, which is where the order lives. Read, never written here.
+    pub key: String,
+    /// Tries left from the file name's boot counter; `None` for an entry that a good
+    /// boot has blessed, `Some(0)` for one that has spent every attempt.
+    pub tries: Option<u32>,
+    /// Overlays the entry applies: shipped with the image, and added by hand.
+    pub system: Vec<String>,
+    pub user: Vec<String>,
+    /// When its file was written, in seconds since the epoch. Which kernel is newest,
+    /// since git-describe releases do not compare; see `order`.
+    pub at: u64,
+}
+
+impl Entry {
+    /// Whether every attempt is spent. The spec calls it 'bad': it sorts after
+    /// everything else and boots only if somebody asks for it by name.
+    pub fn bad(&self) -> bool {
+        self.tries == Some(0)
+    }
+
+    /// What a screen says about this kernel beside its version, or nothing.
+    ///
+    /// Nothing where the entry carries no counter, because the file says nothing: the
+    /// spec makes an entry good by REMOVING its counter, so one that a boot blessed and
+    /// one that was never counted are identical on disk. Naming that state would be
+    /// claiming to know which, and `set-boot-order --list` prints the same dash for the
+    /// same reason.
+    pub fn state(&self) -> Option<&'static str> {
+        match self.tries {
+            None => None,
+            Some(0) => Some("failed"),
+            Some(_) => Some("untried"),
+        }
+    }
+}
+
+/// Which kernels the menu offers.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Kernels {
+    /// `MIN_KERNEL` and newer, which is every kernel this board is run on.
+    #[default]
+    Modern,
+    /// Every entry there is, whatever kernel it names: `--all-kernels`.
+    All,
+}
+
+/// The oldest kernel the menu offers, as major and minor.
+///
+/// This device runs mainline; the 6.1 BSP entries an older image left on disk boot
+/// nothing anybody wants, and a menu is a list of things worth choosing. They are
+/// hidden rather than removed, because the files are not ours to delete, and
+/// `--all-kernels` brings them back for a bisect.
+const MIN_KERNEL: (u32, u32) = (7, 0);
+
+/// A boot entry as its own file states it, before the profile it names is looked up.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Conf {
+    /// The file's name without its boot counter or `.conf`.
+    pub id: String,
+    /// The subvolume its command line mounts, from `rootflags=subvol=`.
+    pub subvol: String,
+    pub version: String,
+    pub short: String,
+    /// The `sort-key` line, verbatim.
+    pub key: String,
+    /// Tries left, from the counter in the file name; None when it carries none.
+    pub tries: Option<u32>,
+    pub system: Vec<String>,
+    pub user: Vec<String>,
+    /// When the file was written, in seconds since the epoch, or 0 when unknown, and
+    /// the file's own name. Both are tiebreaks in the order; see `order`.
+    pub at: u64,
+    pub file: String,
+}
+
+impl Conf {
+    /// This conf as an entry.
+    fn entry(&self) -> Entry {
+        Entry {
+            id: self.id.clone(),
+            version: self.version.clone(),
+            short: self.short.clone(),
+            key: self.key.clone(),
+            tries: self.tries,
+            system: self.system.clone(),
+            user: self.user.clone(),
+            at: self.at,
+        }
+    }
+}
+
+/// Sort entries into boot order: the first one is what boots.
+///
+/// Takes references so a caller can order a selection out of one drive's confs without
+/// copying them, which is what `listing` does per profile.
+///
+/// The rule, which `libs/flipper-blsname.sh` implements in shell against the same
+/// fields, and which the BLS spec is the source of except where noted:
+///
+/// 1. an entry with no tries left sorts after everything else
+/// 2. then by `sort-key`, ascending
+/// 3. then by kernel version, descending, as far as a version compares: the numbers
+///    before the first dash. What follows them is a git-describe suffix that does not
+///    compare, `7.2.0-00249-g26619ffca0bd` against `7.2.0-ga0d2d145deeb` having no
+///    answer in either direction
+/// 4. then newest file first, which is what separates two builds of one version, and
+///    the fact that answers "the one just put on"
+/// 5. then by file name, descending, which is the spec's own last resort
+pub fn sort_confs(confs: &mut [&Conf]) {
+    confs.sort_by_key(|c| order(c));
+}
+
+/// One entry's place in the boot order, comparable against another's.
+type Order = (
+    bool,
+    String,
+    std::cmp::Reverse<(u32, u32, u32)>,
+    std::cmp::Reverse<u64>,
+    std::cmp::Reverse<String>,
+);
+
+/// One entry's place in that order, as a sort key.
+fn order(c: &Conf) -> Order {
+    (
+        c.tries == Some(0),
+        c.key.clone(),
+        std::cmp::Reverse(version_rank(&c.version)),
+        std::cmp::Reverse(c.at),
+        std::cmp::Reverse(c.file.clone()),
+    )
+}
+
+/// A kernel release as major, minor and patch, for comparing two of them.
+///
+/// Only the numbers before the first dash: what follows is a git-describe suffix, and
+/// `libs/flipper-blsname.sh` reads the same three numbers out of it in shell. A release
+/// with no numbers ranks below every real one and is still bootable by name.
+pub fn version_rank(version: &str) -> (u32, u32, u32) {
+    let numbers = version.split('-').next().unwrap_or_default();
+    let mut parts = numbers.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
 }
 
 /// The PATH to run a tool with: root's, as this system declares it.
@@ -308,32 +480,156 @@ pub fn stores() -> Vec<Store> {
     out
 }
 
-/// The bootable profiles, in the order `list-profiles` reports them.
+/// Everything the boot menu reads: the profiles, and which of their entries boots.
+pub struct Listing {
+    /// Profiles in the order `list-profiles` reports them, each carrying its own
+    /// entries in boot order. A profile whose every kernel is hidden keeps its place
+    /// with no entries: it has no row, and a name check still has to see it.
+    pub profiles: Vec<Profile>,
+    /// Which profile boots when nobody presses anything: the one holding the first
+    /// entry on the machine's own storage. None when nothing is bootable there.
+    pub first: Option<usize>,
+}
+
+/// The profiles on every filesystem of ours, the booted drive's first.
 ///
-/// Columns are positional and separated by runs of two or more spaces:
-///
-/// ```text
-/// NAME [<- booted] KIND ID CREATED LAST_USED RO PARENT ORIGIN
-/// ```
-///
-/// The booted marker sits in its own column and shifts everything after it,
-/// which is why the offset is computed rather than fixed. Anything that is not a
-/// `profile` is skipped: `_old` backups are leftovers, not somewhere to boot.
+/// For what reasons about profiles rather than about what boots: a name check, a
+/// delete, a factory reset. The kernels a profile has are on it either way.
 pub fn profiles() -> Vec<Profile> {
-    // No check that the tools are there: they ship in the boot menu image, and an
-    // image without them has nothing to do. flipctl still checks, to hide its Boot
-    // row on a machine with no profile tools at all.
-    //
-    // Every filesystem of ours, not just the booted one, so a card's profiles are
-    // offered alongside the machine's own.
-    //
-    // The marker is only applied to the machine's own storage. Ids are per
-    // filesystem and they collide: the card in this device holds ids 263 to 271 and
-    // the internal storage 264 to 272, so a bare id says nothing about which
-    // filesystem it means. A profile anywhere else therefore never wears the heart,
-    // and never can, which is also why Auto Start is not offered for one.
-    let stores = stores();
-    for s in &stores {
+    listing(Kernels::All).profiles
+}
+
+/// Every profile and every entry, in one read, ordered as the menu shows them.
+///
+/// One read because it is one walk: each drive is mounted once, its `list-profiles`
+/// and its `loader/entries` read on the same thread, and asking twice would mount
+/// every filesystem again for an answer already in hand.
+///
+/// **Which profile boots** is the profile holding the first entry in `order`, counting
+/// only the machine's own storage. A card carries entries of its own, with keys and
+/// names that repeat, so a card's order says what that card would boot on its own
+/// hardware and nothing about this machine: including it would let inserting a card
+/// change what the device does when left alone.
+///
+/// An entry that mounts a subvolume which is no profile here is dropped, with a log
+/// line: nothing can be booted from an entry whose root does not exist, and one left
+/// behind by a deleted profile looks from the outside like a missing row.
+pub fn listing(kernels: Kernels) -> Listing {
+    let drives = read_drives();
+    let mut profiles: Vec<Profile> = Vec::new();
+    // The best (profile index, order key) seen on internal storage, which is what boots.
+    let mut best: Option<(usize, Order)> = None;
+
+    for drive in &drives {
+        for conf in &drive.confs {
+            if !drive.profiles.iter().any(|p| p.name == conf.subvol) {
+                crate::logline!(
+                    "boot           entry {} mounts {}, which is no profile here",
+                    conf.id,
+                    conf.subvol
+                );
+            }
+        }
+        for profile in &drive.profiles {
+            let mut mine: Vec<&Conf> = drive
+                .confs
+                .iter()
+                .filter(|c| c.subvol == profile.name)
+                .collect();
+            let all = mine.len();
+            if kernels == Kernels::Modern {
+                mine.retain(|c| version_at_least(&c.version, MIN_KERNEL));
+            }
+            if mine.len() != all {
+                crate::logline!(
+                    "boot           {} of {} entries for {} name a kernel older than {}.{}",
+                    all - mine.len(),
+                    all,
+                    profile.name,
+                    MIN_KERNEL.0,
+                    MIN_KERNEL.1
+                );
+            }
+            sort_confs(&mut mine);
+
+            let at = profiles.len();
+            if drive.store.medium == Medium::Internal {
+                if let Some(front) = mine.first() {
+                    let key = order(front);
+                    if best.as_ref().is_none_or(|(_, b)| key < *b) {
+                        best = Some((at, key));
+                    }
+                }
+            }
+            let mut profile = profile.clone();
+            profile.entries = mine.iter().map(|c| c.entry()).collect();
+            profiles.push(profile);
+        }
+    }
+
+    let first = best.map(|(at, _)| at);
+    if let Some(at) = first {
+        profiles[at].auto_boot = true;
+        crate::logline!(
+            "boot           {} boots by itself, kernel {}",
+            profiles[at].name,
+            profiles[at].entries.first().map_or("none", |e| e.version.as_str())
+        );
+    } else {
+        crate::logline!("boot           nothing on the machine's own storage is bootable");
+    }
+    Listing { profiles, first }
+}
+
+/// Whether a kernel release is `min` or newer, on major and minor alone.
+///
+/// Ours are git-describe strings -- `7.2.0-00249-g26619ffca0bd` -- so only the numbers
+/// before the first dash compare at all. That is enough for the question being asked,
+/// which is whether an entry names a 6.1 BSP kernel or a mainline one.
+///
+/// A release that will not parse counts as new enough: a hidden row cannot be booted,
+/// so the safer of the two mistakes is to show one kernel too many.
+pub fn version_at_least(version: &str, min: (u32, u32)) -> bool {
+    // A release that will not parse ranks 0 and would fail every comparison, so it is
+    // answered before the numbers are looked at.
+    if version
+        .split('-')
+        .next()
+        .and_then(|n| n.split('.').next())
+        .is_none_or(|major| major.parse::<u32>().is_err())
+    {
+        return true;
+    }
+    let (major, minor, _) = version_rank(version);
+    (major, minor) >= min
+}
+
+/// One drive's answer: what it is, the profiles on it, and the entries that boot them.
+struct Drive {
+    store: Store,
+    profiles: Vec<Profile>,
+    confs: Vec<Conf>,
+}
+
+/// Every filesystem of ours, read at once: its profiles and the entries that boot them.
+///
+/// A listing mounts that filesystem's top level and walks every subvolume on it, which
+/// is seconds of I/O per drive, and the drives are independent: nothing is shared and
+/// the read-only tools take no lock, only the mutating ones do. Done in turn, the menu
+/// waits for the sum; done at once, for the slowest. The order of the results is the
+/// order of `stores`, so the list on screen does not depend on which drive answered
+/// first.
+///
+/// Each drive's entries are read on that drive's own thread, because reading them is
+/// reading through a mount of it: read afterwards instead, every drive would be mounted
+/// twice for a few hundred bytes a file.
+///
+/// No check that the tools are there: they ship in the boot menu image, and an image
+/// without them has nothing to do. flipctl still checks, to hide its Boot row on a
+/// machine with no profile tools at all.
+fn read_drives() -> Vec<Drive> {
+    let found = stores();
+    for s in &found {
         crate::logline!(
             "boot           drive {} on {} ({}{})",
             s.dev,
@@ -342,36 +638,23 @@ pub fn profiles() -> Vec<Profile> {
             if s.booted { ", booted" } else { "" }
         );
     }
-    if stores.is_empty() {
-        let marked = marker("");
-        // No lsblk, or nothing recognisable: ask about the booted filesystem alone,
-        // which is what this did before there was anything else to ask about.
-        let Some(listing) = sudo(&["list-profiles"]) else {
-            crate::logline!("boot           list-profiles answered nothing; no profiles to show");
-            return Vec::new();
-        };
-        return parse_listing(&listing, &marked, Medium::Internal, "", "", "disk");
-    }
+    // No lsblk, or nothing recognisable: ask about the booted filesystem alone, which
+    // is what every tool takes as its default and where our own /boot is. Named as a
+    // store rather than handled apart, so there is one read path and not two.
+    let stores = if found.is_empty() {
+        vec![Store {
+            dev: String::new(),
+            disk: String::new(),
+            medium: Medium::Internal,
+            kind: "disk",
+            booted: true,
+        }]
+    } else {
+        found
+    };
 
-    // One thread per drive, and the marker read alongside them.
-    //
-    // A listing mounts that filesystem's top level and walks every subvolume on it,
-    // which is seconds of I/O per drive, and the drives are independent: nothing is
-    // shared and the read-only tools take no lock, only the mutating ones do. Done in
-    // turn, the menu waits for the sum; done at once, for the slowest. The order of
-    // the results is the order of `stores`, so the list on screen does not depend on
-    // which drive answered first.
-    let (marked, listings) = std::thread::scope(|scope| {
-        let mark = scope.spawn(|| {
-            let at = std::time::Instant::now();
-            let marked = marker(&internal_dev(&stores));
-            crate::logline!(
-                "boot           marker {} in {:.3}s",
-                if marked.is_empty() { "none" } else { marked.as_str() },
-                at.elapsed().as_secs_f64()
-            );
-            marked
-        });
+    // One thread per drive.
+    let read = std::thread::scope(|scope| {
         let reads: Vec<_> = stores
             .iter()
             .map(|store| {
@@ -382,46 +665,244 @@ pub fn profiles() -> Vec<Profile> {
                     } else {
                         sudo(&["list-profiles", "-d", &store.dev])
                     };
+                    let confs = drive_confs(store);
                     crate::logline!(
-                        "boot           listed {} in {:.3}s, {} rows",
-                        store.dev,
+                        "boot           read {} in {:.3}s, {} rows and {} entries",
+                        dev_label(store),
                         at.elapsed().as_secs_f64(),
-                        listing.as_deref().map_or(0, |l| l.lines().count())
+                        listing.as_deref().map_or(0, |l| l.lines().count()),
+                        confs.len()
                     );
-                    listing
+                    (listing, confs)
                 })
             })
             .collect();
-        let listings: Vec<Option<String>> =
-            reads.into_iter().map(|r| r.join().unwrap_or(None)).collect();
-        (mark.join().unwrap_or_default(), listings)
+        reads
+            .into_iter()
+            .map(|r| r.join().unwrap_or((None, Vec::new())))
+            .collect::<Vec<(Option<String>, Vec<Conf>)>>()
     });
 
     let mut out = Vec::new();
-    for (store, listing) in stores.iter().zip(listings) {
+    for (store, (listing, confs)) in stores.into_iter().zip(read) {
         let Some(listing) = listing else {
-            // A drive that answers nothing is not the same as a drive with no
-            // profiles, and only the log can tell the two apart afterwards.
+            // A drive that answers nothing is not the same as a drive with no profiles,
+            // and only the log can tell the two apart afterwards.
             crate::logline!(
                 "boot           list-profiles answered nothing for {}",
-                if store.booted { "the booted filesystem" } else { store.dev.as_str() }
+                dev_label(&store)
             );
             continue;
         };
-        let internal = store.medium == Medium::Internal;
-        let marker = if internal { marked.as_str() } else { "" };
         // The booted filesystem is every tool's default, so it needs no device: this
         // way a profile carries one only when saying which is the point.
         let dev = if store.booted { "" } else { store.dev.as_str() };
-        out.extend(parse_listing(&listing, marker, store.medium, dev, &store.disk, store.kind));
+        let profiles = parse_listing(&listing, store.medium, dev, &store.disk, store.kind);
+        out.push(Drive { store, profiles, confs });
     }
     out
 }
 
+/// What to call a drive in the log. The booted filesystem has no device of its own
+/// here, being every tool's default.
+fn dev_label(store: &Store) -> &str {
+    if store.dev.is_empty() {
+        "the booted filesystem"
+    } else {
+        store.dev.as_str()
+    }
+}
+
+/// The boot entries one drive carries.
+///
+/// A profile's entries live on the profile's own drive: a card's entry names kernels
+/// only that card has, and profile names repeat across drives, so the booted /boot
+/// would answer with the wrong entry rather than with none. For the booted filesystem
+/// that is /boot itself; any other drive is read through a read-only top-level mount,
+/// as the tools do.
+fn drive_confs(store: &Store) -> Vec<Conf> {
+    if store.booted {
+        return read_confs(std::path::Path::new(BOOTED_ENTRIES));
+    }
+    match TopLevel::ro(&store.dev) {
+        Some(top) => read_confs(&top.path.join("boot/loader/entries")),
+        None => Vec::new(),
+    }
+}
+
+/// Every entry in one directory, parsed.
+///
+/// A file that cannot be read or does not name a subvolume is skipped: the loader
+/// directory holds whatever anyone has put there, and only an entry that mounts
+/// something is a row.
+fn read_confs(dir: &std::path::Path) -> Vec<Conf> {
+    let Ok(listing) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for file in listing.flatten() {
+        let path = file.path();
+        if path.extension().is_none_or(|x| x != "conf") {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(mut conf) = parse_conf(name, &text) else {
+            continue;
+        };
+        conf.at = file
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs());
+        out.push(conf);
+    }
+    out
+}
+
+/// One entry file, parsed from its name and its text. None when it mounts no
+/// subvolume.
+///
+/// `name` is the file name, counter and suffix included: the counter is boot-counting
+/// state and the id is the name without it, so both come out of the same string. See
+/// `libs/flipper-blsname.sh`, which spells the same two names out in shell.
+///
+/// Fields are `key value` and a key has to end at whitespace, or `devicetree` would
+/// answer with `devicetreedir`'s value. The first line that says something wins, as a
+/// loader would take it.
+///
+/// Overlays are gathered from every `devicetree-overlay` line rather than the first,
+/// since a profile's own drop-ins may be listed apart from the image's, and split by
+/// path: something under /etc/kernel/dtbo is what someone added, anything else ships
+/// with the image.
+pub fn parse_conf(name: &str, text: &str) -> Option<Conf> {
+    let field = |key: &str| -> &str {
+        text.lines()
+            .filter_map(|l| l.strip_prefix(key))
+            .filter(|rest| rest.starts_with(char::is_whitespace))
+            .map(str::trim)
+            .find(|rest| !rest.is_empty())
+            .unwrap_or_default()
+    };
+
+    // rootflags carries the subvolume, and may carry more after it.
+    let subvol = field("options")
+        .split_whitespace()
+        .find_map(|opt| opt.strip_prefix("rootflags=subvol="))?
+        .split(',')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    if subvol.is_empty() {
+        return None;
+    }
+
+    // Older entries carry no version line; the kernel path holds it either way.
+    let version = match field("version") {
+        "" => version_in_path(field("linux")),
+        stated => stated.to_string(),
+    };
+
+    let mut system = Vec::new();
+    let mut user = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("devicetree-overlay") else {
+            continue;
+        };
+        for path in rest.split_whitespace() {
+            let base = path.rsplit('/').next().unwrap_or(path).to_string();
+            if path.contains("/etc/kernel/dtbo/") {
+                user.push(base);
+            } else {
+                system.push(base);
+            }
+        }
+    }
+
+    let (id, tries) = split_counter(name);
+    Some(Conf {
+        id,
+        tries,
+        subvol,
+        key: field("sort-key").to_string(),
+        short: short_version(field("title"), &version),
+        version,
+        system,
+        user,
+        at: 0,
+        file: name.to_string(),
+    })
+}
+
+/// An entry file name split into its id and the tries left in its boot counter.
+///
+/// `900-flipperos-Desktop-7.2.0-x+2-1.conf` is that entry on its second attempt of
+/// three; without a `+` it has been blessed by a good boot and is not counted at all.
+/// A counter that will not parse is treated as no counter: a name nobody here wrote is
+/// not a reason to call an entry bad and refuse to boot it.
+pub fn split_counter(name: &str) -> (String, Option<u32>) {
+    let stem = name.strip_suffix(".conf").unwrap_or(name);
+    match stem.split_once('+') {
+        Some((id, counter)) => (
+            id.to_string(),
+            counter
+                .split('-')
+                .next()
+                .and_then(|left| left.parse::<u32>().ok()),
+        ),
+        None => (stem.to_string(), None),
+    }
+}
+
+/// The kernel release a `linux` path holds, for an entry that states no version.
+///
+/// Ours put the kernel in its modules directory, which is where the release is named;
+/// an image that keeps kernels in /boot names it in the file instead.
+fn version_in_path(path: &str) -> String {
+    let mut parts = path.split('/');
+    while let Some(part) = parts.next() {
+        if part == "modules" {
+            return parts.next().unwrap_or_default().to_string();
+        }
+    }
+    path.rsplit('/')
+        .next()
+        .and_then(|file| file.strip_prefix("vmlinuz-"))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The version as a title carries it: `title Desktop 7.2.0-00249-g26619` gives
+/// `7.2.0-00249-g26619`.
+///
+/// Taken from the title because kernel-install has already trimmed it there to fit a
+/// menu, and this menu is 256 pixels wide. A title that ends in anything but a version
+/// -- a profile whose name is the whole title -- falls back to the release itself.
+fn short_version(title: &str, version: &str) -> String {
+    match title.rsplit_once(char::is_whitespace) {
+        Some((_, last)) if last.starts_with(|c: char| c.is_ascii_digit()) => last.to_string(),
+        _ => version.to_string(),
+    }
+}
+
 /// The listing, parsed. Split out so it can be tested against real output.
+///
+/// Columns are positional and separated by runs of two or more spaces:
+///
+/// ```text
+/// NAME [<- booted] KIND ID CREATED LAST_USED RO PARENT ORIGIN
+/// ```
+///
+/// The booted marker sits in its own column and shifts everything after it, which is
+/// why the offset is computed rather than fixed. Anything that is not a `profile` is
+/// skipped: `_old` backups are leftovers, not somewhere to boot.
 pub fn parse_listing(
     listing: &str,
-    marked: &str,
     medium: Medium,
     dev: &str,
     disk: &str,
@@ -438,7 +919,11 @@ pub fn parse_listing(
         if line.is_empty() {
             continue;
         }
-        let cols: Vec<&str> = line.split("  ").filter(|c| !c.trim().is_empty()).map(str::trim).collect();
+        let cols: Vec<&str> = line
+            .split("  ")
+            .filter(|c| !c.trim().is_empty())
+            .map(str::trim)
+            .collect();
         if cols.len() < 4 {
             continue;
         }
@@ -447,23 +932,24 @@ pub fn parse_listing(
         if cols.get(base).is_none_or(|k| *k != "profile") {
             continue;
         }
-        let id = cols.get(base + 1).unwrap_or(&"").to_string();
         // PARENT and ORIGIN carry the stock's id as "name (id)".
         let strip_id = |s: &str| s.split(" (").next().unwrap_or(s).trim().to_string();
         let dash_to_empty = |s: String| if s == "-" { String::new() } else { s };
         out.push(Profile {
-            auto_boot: !marked.is_empty() && id == marked,
+            // Filled in by `listing`, which is what reads the entries.
+            entries: Vec::new(),
+            auto_boot: false,
             medium,
             dev: dev.to_string(),
             disk: disk.to_string(),
             kind,
             name: cols[0].to_string(),
             booted,
+            id: cols.get(base + 1).unwrap_or(&"").to_string(),
             created: cols.get(base + 2).unwrap_or(&"").to_string(),
             last_used: cols.get(base + 3).unwrap_or(&"").to_string(),
             parent: dash_to_empty(strip_id(cols.get(base + 5).unwrap_or(&""))),
             origin: dash_to_empty(strip_id(cols.get(base + 6).unwrap_or(&""))),
-            id,
         });
     }
     out
@@ -572,6 +1058,23 @@ pub fn used_ago(last_used: &str, now: std::time::SystemTime) -> String {
     plural(days / 365, "year")
 }
 
+/// The kernel this system is running, which is half of what "running" means.
+///
+/// From procfs rather than from `uname`: it is the same string the tools compare against
+/// (boot-profile reads `uname -r`, which reads this file) and it costs no process.
+///
+/// Read once and remembered: a system does not change kernels without rebooting, and the
+/// row status asks per frame.
+pub fn running_kernel() -> &'static str {
+    static RELEASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    RELEASE.get_or_init(|| {
+        std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    })
+}
+
 /// Exposed for tests, which need a fixed instant to measure against.
 pub fn parse_stamp_for_test(s: &str) -> Option<i64> {
     parse_stamp(s)
@@ -666,29 +1169,6 @@ pub fn parse_space(out: &str) -> Option<Space> {
     })
 }
 
-/// Device tree overlays a profile applies at boot.
-///
-/// Read from the profile's BLS entry, not from a directory. The overlays a profile
-/// actually gets are whatever its boot entry's `devicetree-overlay` line names, and
-/// that is the only place the answer exists: the files live inside the profile's own
-/// subvolume, which is not mounted unless it is the one running.
-///
-/// The entry is found by its `options` line carrying `rootflags=subvol=<name>`.
-/// Entries are sorted and the last match wins, which is the newest kernel, matching
-/// the order the bootloader itself would pick.
-///
-/// System and user overlays are split by path: a drop-in under /etc/kernel/dtbo is
-/// something someone added, anything else ships with the image.
-pub fn dtbo(dev: &str, subvol: &str) -> (Vec<String>, Vec<String>) {
-    if dev.is_empty() {
-        return dtbo_in(std::path::Path::new(BOOTED_ENTRIES), subvol);
-    }
-    match TopLevel::ro(dev) {
-        Some(top) => dtbo_in(&top.path.join("boot/loader/entries"), subvol),
-        None => (Vec::new(), Vec::new()),
-    }
-}
-
 /// The entries of the filesystem this system booted from, shared by every profile on
 /// it. `Profile::dev` is empty for exactly those, which is what selects this path.
 const BOOTED_ENTRIES: &str = "/boot/loader/entries";
@@ -763,55 +1243,6 @@ impl Drop for TopLevel {
     }
 }
 
-/// `dtbo`, against a given entries directory. Split out so it can be tested.
-pub fn dtbo_in(dir: &std::path::Path, subvol: &str) -> (Vec<String>, Vec<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return (Vec::new(), Vec::new());
-    };
-    let mut confs: Vec<std::path::PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "conf"))
-        .collect();
-    confs.sort();
-
-    let want = format!("rootflags=subvol={subvol}");
-    let mut chosen = None;
-    for path in confs {
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let matches = text.lines().filter(|l| l.starts_with("options")).any(|l| {
-            // The option must end at a word boundary, or @Minimal would match
-            // @Minimal__clone__.
-            l.split_whitespace().any(|opt| opt == want)
-        });
-        if matches {
-            chosen = Some(text);
-        }
-    }
-    let Some(text) = chosen else {
-        return (Vec::new(), Vec::new());
-    };
-
-    let mut system = Vec::new();
-    let mut user = Vec::new();
-    for line in text.lines() {
-        let Some(rest) = line.strip_prefix("devicetree-overlay") else {
-            continue;
-        };
-        for path in rest.split_whitespace() {
-            let base = path.rsplit('/').next().unwrap_or(path).to_string();
-            if path.contains("/etc/kernel/dtbo/") {
-                user.push(base);
-            } else {
-                system.push(base);
-            }
-        }
-    }
-    (system, user)
-}
-
 // ── Actions ────────────────────────────────────────────────────────────────
 
 /// A subvolume name safe to hand to the tools.
@@ -826,6 +1257,21 @@ fn valid_name(name: &str) -> bool {
         && name[1..]
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// An entry id safe to hand to the tools: an entry file's name without `.conf`.
+///
+/// Not a quoting question -- these go straight to execve with no shell -- but a "this
+/// cannot be an entry" one. kernel-install's names carry a band, a profile and a
+/// version and nothing else, and nothing here builds a path out of one, so anything
+/// with a separator in it is refused.
+pub fn valid_entry_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 255
+        && !id.starts_with('.')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
 }
 
 fn run(args: &[&str]) -> Result<(), String> {
@@ -876,33 +1322,33 @@ fn run(args: &[&str]) -> Result<(), String> {
 /// rather than a second kernel boot. From the boot menu's initramfs that is
 /// switch_root; from a booted profile it is systemd's soft-reboot, which replaces
 /// userspace without touching the kernel. Everything else is kexec'd, which is the
-/// only way a profile
-/// boots with a kernel or a tree of its own: the tool reads that profile's BLS entry
-/// for the kernel, the initrd and the command line, assembles its device tree (the
-/// running profile's is the live one; any other profile's is the board base plus the
-/// entry's overlays through fdtoverlay), loads all of it and hands over.
+/// only way a profile boots with a kernel or a tree of its own: the tool reads that
+/// entry for the kernel, the initrd and the command line, assembles its device tree
+/// (the running profile's is the live one; any other profile's is the board base plus
+/// the entry's overlays through fdtoverlay), loads all of it and hands over.
 ///
-/// U-Boot does not read the auto-boot marker and has no timeout of its own, so this
-/// is the only thing that acts on a choice: the marker says which profile the menu
-/// boots when nobody presses anything, and this is what boots it.
+/// The entry is named, not the profile: the row on screen showed one kernel, and that
+/// is the one that has to boot. Handing over a profile name would let the tool choose
+/// again, and a second opinion about which kernel a profile boots is exactly what this
+/// design removes.
 ///
 /// Returns `Ok(false)` only when it failed to leave, which on a real boot cannot
 /// happen: the machine is already on its way out. `Ok(true)` is the dry run, which
 /// loaded the image, unloaded it and stayed.
 ///
 /// `FLIPCTL_BOOT_DRY_RUN=1` is that dry run: it proves the entry resolves, the kernel
-/// and initrd are there and the device tree assembles, without losing the session
-/// that asked. The caller has to say so on screen, because nothing else will.
+/// and initrd are there and the device tree assembles, without losing the session that
+/// asked. The caller has to say so on screen, because nothing else will.
 ///
 /// A profile on another filesystem is booted with `-d`, which is what makes it that
-/// card's profile rather than the one of the same name on the internal storage. Names
-/// and subvolume ids both repeat across filesystems, so the device is the only thing
-/// that distinguishes them, and boot-profile reads that device's own BLS entries for
-/// the kernel, initrd and device tree it names.
+/// card's entry rather than the one of the same name on the internal storage: entry
+/// ids repeat across filesystems written from the same image.
 pub fn boot_now(p: &Profile) -> Result<bool, String> {
-    let name = p.name.as_str();
-    if !valid_name(name) {
-        return Err("invalid name".into());
+    let Some(entry) = p.entries.first() else {
+        return Err(format!("{} has no kernel to boot", display_name(&p.name)));
+    };
+    if !valid_entry_id(&entry.id) {
+        return Err("invalid entry".into());
     }
     let dry = std::env::var_os("FLIPCTL_BOOT_DRY_RUN").is_some();
     let mut args: Vec<&str> = vec!["boot-profile"];
@@ -913,12 +1359,13 @@ pub fn boot_now(p: &Profile) -> Result<bool, String> {
         args.push("-d");
         args.push(&p.dev);
     }
-    args.push(name);
+    args.push(&entry.id);
     run(&args)?;
     Ok(dry)
 }
 
-/// Load the image the marked profile would kexec into, while nobody is pressing anything.
+/// Load the image the profile that boots by itself would kexec into, while nobody is
+/// pressing anything.
 ///
 /// The loading is the slow half of a kexec boot and none of it is I/O: measured on this
 /// board, 2.4s of a 13.8s boot, spent inside the syscall placing a 29MB kernel at its
@@ -926,60 +1373,57 @@ pub fn boot_now(p: &Profile) -> Result<bool, String> {
 /// The menu is idle while it counts down, so that 2.4s can be spent before the boot is
 /// asked for rather than after, and an unattended boot saves all of it.
 ///
-/// Nothing is loaded for a profile that would be pivoted into: a pivot keeps this kernel,
-/// so there is no image. The kernel holds one image at a time, which is why this is only
-/// ever called for the marked profile, the one the countdown boots by itself.
+/// Nothing is loaded for a profile that would be pivoted into: a pivot keeps this
+/// kernel, so there is no image. The kernel holds one image at a time, which is why
+/// this is only ever called for the profile that boots by itself.
+///
+/// Arming does not count as an attempt -- the tool leaves the counter alone until it
+/// actually hands over -- so a menu that arms and then sits there costs a profile
+/// nothing.
 pub fn arm(p: &Profile) -> Result<(), String> {
-    let name = p.name.as_str();
-    if !valid_name(name) {
-        return Err("invalid name".into());
+    let Some(entry) = p.entries.first() else {
+        return Err("nothing to arm".into());
+    };
+    if !valid_entry_id(&entry.id) {
+        return Err("invalid entry".into());
     }
     let mut args: Vec<&str> = vec!["boot-profile", "--arm"];
     if !p.dev.is_empty() {
         args.push("-d");
         args.push(&p.dev);
     }
-    args.push(name);
+    args.push(&entry.id);
     run(&args).map(|_| ())
 }
 
-/// The drive whose metadata partition holds the marker: the machine's own storage.
+/// Make this profile the one that boots when nobody presses anything.
 ///
-/// Empty when that is the filesystem this booted from, which every tool takes as its
-/// default, or when there is no internal store to name.
-fn internal_dev(stores: &[Store]) -> String {
-    stores
-        .iter()
-        .find(|s| s.medium == Medium::Internal && !s.booted)
-        .map(|s| s.dev.clone())
-        .unwrap_or_default()
+/// Nothing is recorded anywhere: `set-boot-order` moves the autoboot digit in the
+/// entries' sort-keys, and the first entry is what boots. So the answer to "what boots"
+/// is always the entries themselves, and there is no marker left to dangle when a
+/// profile or a kernel goes away.
+pub fn set_auto_start(dev: &str, name: &str) -> Result<(), String> {
+    if !valid_name(name) {
+        return Err("invalid name".into());
+    }
+    run(&on_dev("set-boot-order", dev, &["--autoboot", name]))
 }
 
-/// The auto-boot marker: a subvolume id, or empty when nothing is marked.
+/// Boot this kernel for its profile from now on.
 ///
-/// `flipmeta` finds the metadata partition by its GPT type, and a card written with
-/// our own image carries one too, so with a card in there are two and it refuses to
-/// choose. The marker only ever means the machine's own storage, so that is the drive
-/// named. Absent or unparseable reads as nothing marked.
-fn marker(dev: &str) -> String {
-    let mut args: Vec<&str> = vec!["flipmeta"];
-    if !dev.is_empty() {
-        args.push("-d");
-        args.push(dev);
+/// The same mechanism one level in: the rank digit moves within that profile's entries.
+/// The tool also puts the entry back on trial, because a kernel nobody has booted with
+/// this profile's device tree is not a kernel this profile is known to boot -- and if
+/// it does not, the counter runs out and the profile's other kernel becomes first again.
+///
+/// Installing a kernel does the same thing for itself: a new entry is written at rank 0
+/// with a full counter, so the kernel you just installed is the one that boots. This is
+/// for going back, or for picking something other than the newest.
+pub fn set_kernel(dev: &str, id: &str) -> Result<(), String> {
+    if !valid_entry_id(id) {
+        return Err("invalid entry".into());
     }
-    args.extend(["get", "boot"]);
-    sudo(&args)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
-        .unwrap_or_default()
-}
-
-/// Point the auto-boot marker at a profile.
-pub fn set_auto_start(dev: &str, id: &str) -> Result<(), String> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
-        return Err("no subvolume id".into());
-    }
-    run(&on_dev("flipmeta", dev, &["set", "boot", id]))
+    run(&on_dev("set-boot-order", dev, &["--kernel", id]))
 }
 
 /// A tool command against one filesystem, with the drive named unless it is the booted one.
@@ -1007,23 +1451,17 @@ pub fn clone(dev: &str, source: &str, dest: &str) -> Result<(), String> {
     run(&on_dev("create-profile", dev, &["-y", source, dest]))
 }
 
-/// Delete a profile, clearing the auto-boot marker if it pointed at it.
+/// Delete a profile.
 ///
-/// Order matters: the id has to be read before the subvolume goes, or there is
-/// nothing left to compare the marker against and autoboot would be left pointing
-/// at something deleted.
+/// Nothing to repair afterwards: `delete-profile` removes the entries that boot this
+/// profile along with it, and what boots is whatever entry is first once they are gone
+/// -- the next band's chosen kernel. That is the whole benefit of keeping the order in
+/// the entries rather than in a marker pointing at one.
 pub fn delete(dev: &str, name: &str) -> Result<(), String> {
     if !valid_name(name) {
         return Err("invalid name".into());
     }
-    let marked = profiles()
-        .into_iter()
-        .find(|p| p.name == name && p.auto_boot && p.dev == dev);
-    run(&on_dev("delete-profile", dev, &["-y", name]))?;
-    if let Some(p) = marked {
-        run(&on_dev("flipmeta", &p.dev, &["del", "boot"]))?;
-    }
-    Ok(())
+    run(&on_dev("delete-profile", dev, &["-y", name]))
 }
 
 /// Remove the `_old_<stamp>` copy a factory reset of the booted profile left behind.
@@ -1117,9 +1555,10 @@ pub fn is_old_backup(name: &str, booted: &str) -> bool {
 
 /// Replace a profile with a fresh copy of the stock it came from.
 ///
-/// `create-profile --no-keep` moves the old copy aside and gives the new one a
-/// fresh subvolume id, so a marker that pointed at the old id has to be moved or
-/// autoboot would land on the stale `_old` copy.
+/// The order survives: an entry's name and key are built from the profile's name and
+/// the kernel version, and a reset changes neither, so the entries come back as they
+/// were and the profile keeps its place. It was the subvolume id the old marker used
+/// that a reset invalidated.
 ///
 /// Returns true when the profile reset was the running one, which means the
 /// caller has to reboot: the root now mounted is the copy that was moved aside.
@@ -1127,29 +1566,21 @@ pub fn factory_reset(dev: &str, name: &str, origin: &str) -> Result<bool, String
     if !valid_name(name) || !valid_name(origin) {
         return Err("invalid name".into());
     }
-    let before = profiles();
-    let was_marked = before
-        .iter()
-        .find(|p| p.name == name)
-        .is_some_and(|p| p.auto_boot);
-    let booted = before
+    let booted = profiles()
         .iter()
         .find(|p| p.name == name)
         .is_some_and(|p| p.booted);
 
     run(&on_dev("create-profile", dev, &["-y", "--no-keep", origin, name]))?;
-
-    if was_marked {
-        if let Some(fresh) = profiles().into_iter().find(|p| p.name == name) {
-            if !fresh.id.is_empty() {
-                set_auto_start(&fresh.dev, &fresh.id)?;
-            }
-        }
-    }
     Ok(booted)
 }
 
 /// Rename a profile's label, on the drive the profile is on.
+///
+/// `rename-profile` removes the profile's entries and reissues them under the new name,
+/// and it carries the autoboot digit across itself: a profile that booted by itself
+/// still does afterwards. Nothing to do here, which is the point of the order living
+/// in the entries the tool is already rewriting.
 pub fn rename(dev: &str, name: &str, dest: &str) -> Result<(), String> {
     if !valid_name(name) || !valid_name(dest) {
         return Err("invalid name".into());
@@ -1286,8 +1717,9 @@ pub fn edit_actions(p: &Profile) -> Vec<&'static str> {
     if p.booted {
         out.retain(|a| *a != "Delete");
     }
-    // Only the machine's own storage can be marked: the marker is a subvolume id, and
-    // ids are only meaningful inside the filesystem that issued them.
+    // Only the machine's own storage can be marked: what boots by itself is the first
+    // entry there, and a card's own order says what that card would boot on its own
+    // hardware. See `listing`.
     if p.medium != Medium::Internal {
         out.retain(|a| *a != "Auto Start");
     }

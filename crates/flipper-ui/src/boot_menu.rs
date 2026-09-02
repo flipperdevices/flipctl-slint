@@ -2,8 +2,9 @@
 //!
 //! Two programs show this screen: flipctl, where it is one screen among many, and
 //! the boot menu image, where it is the only one. Everything they would otherwise
-//! each implement lives here: which profiles there are, where the cursor is, the
-//! countdown, the popups and their actions, and the words each line says. What is
+//! each implement lives here: which profiles there are and which kernel each one
+//! boots, where the cursor is, the countdown, the popups and their actions, and the
+//! words each line says. What is
 //! left to the caller is drawing it, and the two things it owns that this cannot:
 //! the on-screen keyboard a rename needs, and where Back goes.
 //!
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-use crate::boot::{self, Profile, Space};
+use crate::boot::{self, Kernels, Listing, Profile, Space};
 use crate::key::{FlipperKey, KeyEvent};
 use crate::theme::{metric::BOOT_SPIN_FRAMES, timing::SPIN_FRAME_MS};
 
@@ -41,7 +42,11 @@ type Work = Box<dyn FnOnce() -> Result<bool, String> + Send>;
 /// the destructive ones, and reports what happened: the tools take tens of seconds,
 /// so "working" and "failed" are states the screen has to have.
 enum Popup {
-    Info,
+    /// What the View key opens: the profile's facts, and the way into Config.
+    View,
+    /// What this profile boots with: the four hardware lines that are not built yet,
+    /// and the kernel it boots.
+    Config,
     Edit,
     /// Waiting for a yes on the action at this index.
     Confirm(usize),
@@ -97,12 +102,74 @@ pub struct Row {
 
 /// One line of an open popup.
 pub struct PopupLine {
-    /// 0 a plain line, 1 an action.
+    /// 0 a plain line, 1 an action, 2 a line carrying a value on the right.
     pub kind: i32,
+    /// Where it sits in the popup's body, measured from the top. Computed here because
+    /// one popup mixes pitches -- the View screen carries facts at the Info pitch and a
+    /// Config action at the taller action pitch -- and Slint cannot add up a model.
+    pub y: f32,
     pub text: String,
+    /// What a kind-2 line shows on the right. Spun with Left and Right while the line
+    /// is the selected one, as the menu's own settings rows are.
+    pub value: String,
     pub selected: bool,
     pub heart: bool,
 }
+
+/// The widest value a settings row of this profile can hold.
+///
+/// Not the value showing: the kernel line spins through every kernel the profile has,
+/// and a popup measured from whichever one is up would grow and shrink as somebody
+/// walked through them, moving the frame under their eyes. Measured across all of them
+/// once, so the frame is the size it needs and then stays put.
+fn widest_value(p: &Profile) -> u16 {
+    use crate::font::TITLE;
+    p.entries
+        .iter()
+        .map(|e| TITLE.text_width(if e.short.is_empty() { &e.version } else { &e.short }))
+        .max()
+        .unwrap_or(0)
+}
+
+/// How tall a popup line of each kind is, matching what boot.slint draws.
+fn line_h(kind: i32) -> f32 {
+    use crate::theme::metric::{POPUP_LINE_H, POPUP_ROW_H};
+    if kind == 0 { POPUP_LINE_H as f32 } else { POPUP_ROW_H as f32 }
+}
+
+/// Which of `profile`'s entries names the kernel `running`.
+///
+/// Only for the profile that is actually running: another profile's rows say nothing
+/// about this machine's kernel, and its own first entry is what it would boot. Falls
+/// back to the first entry when the running kernel has no entry here at all, which is
+/// a profile booted from an entry that has since been removed.
+fn kernel_base_of(profile: &Profile, running: &str) -> usize {
+    if !profile.booted || running.is_empty() {
+        return 0;
+    }
+    profile
+        .entries
+        .iter()
+        .position(|e| e.version == running)
+        .unwrap_or(0)
+}
+
+/// The Config screen, top to bottom.
+///
+/// Only Kernel works. The four above it are the hardware groups this screen is going to
+/// hold, listed so the shape is visible and dimmed because neither of the two things
+/// they need exists yet: a catalog shipped with the kernel that maps a `.dtbo` to a
+/// category and a readable label, and a way to enable a unit inside a profile that is
+/// not running. The profile's facts are not here: they are the View screen this opens
+/// from.
+const CONFIG_LINES: [&str; 5] = [
+    "GPIO",
+    "Hardware config",
+    "Video Out",
+    "Services",
+    "Kernel",
+];
+const CONFIG_KERNEL: usize = 4;
 
 /// Everything on screen, as data.
 pub struct View {
@@ -132,12 +199,59 @@ pub struct View {
     pub size_loading: bool,
     /// The popup frame's width, measured from its own content.
     pub popup_w: f32,
+    /// How tall its rows come to, measured the same way: they are not all one pitch.
+    pub popup_body_h: f32,
     /// The width the size value's slot holds while it is still a spinner, so the
     /// line does not change width as the value lands.
     pub size_slot_w: f32,
     /// The five soft keys, as the prototype labels them on this screen.
     pub buttons: [&'static str; 5],
 }
+
+/// Whether a row can show its status text beside its name.
+///
+/// A derived profile's name is its label in brackets and can be long, while the status is
+/// right-aligned against the other edge, so on the widest rows the two would meet. When
+/// they would, the status goes: it is the half that says least about which profile this
+/// is, and the View screen has it in full either way.
+///
+/// Measured in HaxrCorp 4090, which is what a boot row is drawn in: this screen keeps one
+/// font in every state, unlike the menu's rows, which swap to Born2bSportyV2 when active.
+///
+/// The heart or the medium badge sits right after the name, so it is part of what has to
+/// fit; only one of the two is ever drawn.
+pub fn status_fits(label: &str, status: &str, auto: bool, medium: boot::Medium) -> bool {
+    use crate::font::TITLE;
+    use crate::theme::metric::{
+        BOOT_ICON_BOX_W, BOOT_SD_W, BOOT_TEXT_GAP, ICON_PAD, STATUS_PAD_R,
+    };
+
+    if status.is_empty() {
+        return true;
+    }
+    let badge = if auto {
+        BADGE_GAP + HEART_W
+    } else if medium != boot::Medium::Internal {
+        BADGE_GAP + BOOT_SD_W
+    } else {
+        0
+    };
+    let label_x = ICON_PAD + BOOT_ICON_BOX_W + BOOT_TEXT_GAP;
+    let used = label_x
+        + i32::from(TITLE.text_width(label))
+        + badge
+        + GAP
+        + i32::from(TITLE.text_width(status))
+        + STATUS_PAD_R;
+    used <= crate::PANEL_W as i32
+}
+
+/// The gap boot.slint leaves between a label and the badge after it, and the least this
+/// leaves between either of them and the status.
+const BADGE_GAP: i32 = 3;
+const GAP: i32 = 4;
+/// The auto-start heart, as boot.slint draws it.
+const HEART_W: i32 = 7;
 
 /// The kernel's view of what block devices exist, as the cheapest thing that changes when
 /// one arrives: a few hundred bytes, read straight from procfs.
@@ -147,8 +261,15 @@ fn partitions() -> String {
 
 /// The boot menu's state.
 pub struct BootMenu {
+    /// The rows: one per profile, each carrying its entries in boot order, so
+    /// `entries[0]` is the kernel that row boots. A profile whose every kernel is
+    /// hidden has no entries and no row, and is still here for a name check.
     profiles: Vec<Profile>,
-    pending: Option<Receiver<Vec<Profile>>>,
+    /// Which profile boots when nobody presses anything, as `boot::listing` decides.
+    first: Option<usize>,
+    pending: Option<Receiver<Listing>>,
+    /// Which kernels have rows, as the caller was told on its command line.
+    kernels: Kernels,
     selected: i32,
     /// When the countdown started, and whether a key has stopped it.
     started: Option<Instant>,
@@ -170,11 +291,19 @@ pub struct BootMenu {
     /// still -- and a list read costs a mount and a subvolume walk per filesystem, so it
     /// is worth waiting one more look rather than paying that three times per insertion.
     parts_settling: bool,
-    /// The profile the cursor was on across a re-read nobody asked for, so it lands back
-    /// on it rather than wherever the new list happens to put that row.
+    /// The profile the cursor was on across a re-read nobody asked for, so it lands
+    /// back on it rather than wherever the new list happens to put that row.
     keep: Option<(String, String)>,
     popup: Option<Popup>,
     popup_index: usize,
+    /// Where the kernel spinner stands, as an index into the selected profile's
+    /// entries, while it is somewhere other than the kernel that profile boots.
+    ///
+    /// A spin is not a write: walking past three kernels would otherwise rewrite the
+    /// profile's entries and put each one on trial in turn. The value is committed when
+    /// the line is left -- by OK, by Back, or by moving off it -- so one choice is one
+    /// write.
+    kernel_pick: Option<usize>,
     space: Option<Space>,
     space_rx: Option<Receiver<Option<Space>>>,
     space_done: bool,
@@ -186,8 +315,6 @@ pub struct BootMenu {
     measured: HashMap<(String, String), Space>,
     /// What the running measurement will be filed under.
     space_key: Option<(String, String)>,
-    dtbo: Option<(Vec<String>, Vec<String>)>,
-    dtbo_rx: Option<Receiver<(Vec<String>, Vec<String>)>>,
     /// Where the spinners count their frames from.
     spin_at: Instant,
     /// How many rows the list can show at once, from the caller's own metrics.
@@ -195,19 +322,21 @@ pub struct BootMenu {
 }
 
 impl BootMenu {
-    /// Open the menu: the profile read starts now, on a thread, because listing them
+    /// Open the menu: the read starts now, on a thread, because listing the profiles
     /// walks every subvolume on every filesystem and the screen has to appear first.
-    pub fn open(visible: i32, auto_start: AutoStart) -> Self {
+    pub fn open(visible: i32, auto_start: AutoStart, kernels: Kernels) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let started = std::thread::Builder::new()
-            .name("boot-profiles".into())
+            .name("boot-listing".into())
             .spawn(move || {
-                let _ = tx.send(boot::profiles());
+                let _ = tx.send(boot::listing(kernels));
             })
             .is_ok();
         Self {
             profiles: Vec::new(),
+            first: None,
             pending: started.then_some(rx),
+            kernels,
             selected: 0,
             started: None,
             cancelled: false,
@@ -221,13 +350,12 @@ impl BootMenu {
             keep: None,
             popup: None,
             popup_index: 0,
+            kernel_pick: None,
             space: None,
             space_rx: None,
             space_done: false,
             measured: HashMap::new(),
             space_key: None,
-            dtbo: None,
-            dtbo_rx: None,
             spin_at: Instant::now(),
             visible: visible.max(1),
         }
@@ -237,23 +365,24 @@ impl BootMenu {
     ///
     /// The highlighted row is what a person reads as "this is what happens next", so it has
     /// to be the marked one rather than whatever sorts first: otherwise the menu shows one
-    /// profile and boots another when the countdown ends, and pressing OK on what looks
+    /// row and boots another when the countdown ends, and pressing OK on what looks
     /// selected boots something else again. Nothing marked leaves the cursor alone, and so
     /// does a list that arrived after somebody already started moving around in it.
     fn select_marked(&mut self) {
         if self.cancelled {
             return;
         }
-        if let Some(at) = self.profiles.iter().position(|p| p.auto_boot) {
+        if let Some(at) = self.first {
             self.selected = at as i32;
         }
     }
 
-    /// Load the marked profile's image now, so the boot that follows does not have to.
+    /// Load the image of the profile that boots by itself, so the boot that follows
+    /// does not have to.
     ///
-    /// The marked profile and no other: the kernel holds one image at a time, so arming
-    /// anything else would throw this one away, and the marked one is both what a
-    /// countdown boots by itself and what somebody opening this list most often picks.
+    /// That profile and no other: the kernel holds one image at a time, so arming
+    /// anything else would throw this one away, and it is both what a countdown boots
+    /// by itself and what somebody opening this list most often picks.
     /// Where it can be pivoted into, which is usually the case for the running profile,
     /// the tool loads nothing and this costs a decision.
     fn arm_marked(&mut self) {
@@ -263,7 +392,7 @@ impl BootMenu {
         if self.armed || self.arming.is_some() {
             return;
         }
-        let Some(p) = self.profiles.iter().find(|p| p.auto_boot).cloned() else {
+        let Some(p) = self.first.and_then(|at| self.profiles.get(at)).cloned() else {
             return;
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -300,7 +429,7 @@ impl BootMenu {
         self.keep = self
             .selected_profile()
             .map(|p| (p.name.clone(), p.dev.clone()));
-        let again = Self::open(self.visible, self.auto_start);
+        let again = Self::open(self.visible, self.auto_start, self.kernels);
         self.pending = again.pending;
         self.armed = false;
     }
@@ -316,8 +445,9 @@ impl BootMenu {
     /// and no load.
     pub fn reread(&mut self) {
         crate::logline!("boot menu      reading the drives again");
-        let again = Self::open(self.visible, self.auto_start);
+        let again = Self::open(self.visible, self.auto_start, self.kernels);
         self.profiles = Vec::new();
+        self.first = None;
         self.pending = again.pending;
         self.selected = 0;
         self.popup_index = 0;
@@ -364,12 +494,12 @@ impl BootMenu {
         match event.key {
             FlipperKey::Down if count > 0 => self.selected = (self.selected + 1).rem_euclid(count),
             FlipperKey::Up if count > 0 => self.selected = (self.selected - 1).rem_euclid(count),
-            // Boot the one under the cursor. Nothing else acts on a choice: U-Boot
-            // has no menu and ignores the marker, so this and the countdown are the
-            // only ways a profile is entered.
+            // Boot the one under the cursor, with the kernel its row shows. Nothing
+            // else acts on a choice: U-Boot boots the boot menu itself and never lists
+            // these entries, so this and the countdown are the only ways over.
             FlipperKey::Ok | FlipperKey::Run if count > 0 => self.boot_selected(),
-            // Info is slot 1 and Edit slot 3, the two labelled keys.
-            FlipperKey::View if count > 0 => self.open_popup(Popup::Info),
+            // View is slot 1 and Edit slot 3, the two labelled keys.
+            FlipperKey::View if count > 0 => self.open_view(),
             FlipperKey::Edit if count > 0 => self.open_popup(Popup::Edit),
             FlipperKey::Escape | FlipperKey::Back => return Outcome::Leave,
             _ => {}
@@ -383,14 +513,19 @@ impl BootMenu {
         let profile = self.selected_profile().cloned();
         let actions = profile.as_ref().map(boot::edit_actions).unwrap_or_default();
         match open {
-            // Read-only: any way out closes it.
-            Popup::Info => match key {
-                FlipperKey::Escape
-                | FlipperKey::Back
-                | FlipperKey::Ok
-                | FlipperKey::Run
-                | FlipperKey::Edit => {}
-                _ => self.popup = Some(Popup::Info),
+            Popup::Config => return self.config_key(key, &profile),
+            // The facts, and one line that leads on: OK follows it, Back and Escape
+            // leave, and anything else leaves too, as this screen always has.
+            Popup::View => match key {
+                // Right as well as OK: the row ends in a chevron, and a chevron is a
+                // promise that Right does something.
+                FlipperKey::Ok | FlipperKey::Run | FlipperKey::Right => {
+                    self.popup = Some(Popup::Config);
+                    self.popup_index = 0;
+                    self.kernel_pick = None;
+                }
+                FlipperKey::Escape | FlipperKey::Back | FlipperKey::Edit => {}
+                _ => self.popup = Some(Popup::View),
             },
             Popup::Edit => match key {
                 FlipperKey::Down => {
@@ -443,6 +578,121 @@ impl BootMenu {
         Outcome::Stay
     }
 
+    /// Which entry the spinner is on: what has been picked, or where it starts.
+    fn kernel_at(&self, profile: &Option<Profile>) -> usize {
+        self.kernel_pick.unwrap_or_else(|| {
+            profile.as_ref().map_or(0, |p| self.kernel_base(p))
+        })
+    }
+
+    /// A key on the Config screen.
+    ///
+    /// Up and Down move; OK opens what a line opens; Left and Right spin the value of a
+    /// line that has one, which is the kernel. Leaving the kernel line at all commits
+    /// what the spinner shows, so a choice is one write however it was arrived at.
+    fn config_key(&mut self, key: FlipperKey, profile: &Option<Profile>) -> Outcome {
+        let lines = CONFIG_LINES.len();
+        let kernels = profile.as_ref().map_or(0, |p| p.entries.len());
+        self.popup = Some(Popup::Config);
+        match key {
+            FlipperKey::Down => {
+                let commit = self.popup_index == CONFIG_KERNEL;
+                self.popup_index = (self.popup_index + 1) % lines;
+                if commit {
+                    return self.commit_kernel(profile);
+                }
+            }
+            FlipperKey::Up => {
+                let commit = self.popup_index == CONFIG_KERNEL;
+                self.popup_index = (self.popup_index + lines - 1) % lines;
+                if commit {
+                    return self.commit_kernel(profile);
+                }
+            }
+            // One kernel installed is a value to read, not a choice to make.
+            FlipperKey::Right if self.popup_index == CONFIG_KERNEL && kernels > 1 => {
+                let at = self.kernel_at(profile);
+                self.kernel_pick = Some((at + 1) % kernels);
+            }
+            FlipperKey::Left if self.popup_index == CONFIG_KERNEL && kernels > 1 => {
+                let at = self.kernel_at(profile);
+                self.kernel_pick = Some((at + kernels - 1) % kernels);
+            }
+            FlipperKey::Ok | FlipperKey::Run => match self.popup_index {
+                CONFIG_KERNEL => return self.commit_kernel(profile),
+                // The four hardware lines: listed, and honest about it.
+                at => {
+                    self.popup = Some(Popup::Said(format!(
+                        "{} is not configurable yet",
+                        CONFIG_LINES.get(at).copied().unwrap_or("that")
+                    )));
+                }
+            },
+            FlipperKey::Escape | FlipperKey::Back => {
+                let leaving = self.commit_kernel(profile);
+                if self.popup.as_ref().is_some_and(|p| matches!(p, Popup::Config)) {
+                    // Nothing to commit, so Back goes up to View, which opened this.
+                    self.popup = Some(Popup::View);
+                    self.popup_index = 0;
+                }
+                return leaving;
+            }
+            _ => {}
+        }
+        Outcome::Stay
+    }
+
+    /// Where the kernel spinner starts, and what its line shows before it is touched.
+    ///
+    /// The kernel this profile is *running*, for the profile that is running, and
+    /// otherwise the one it boots. Not always the first entry: installing a kernel
+    /// writes its entry at rank 0, so a machine that has taken an update is running
+    /// one kernel and set to boot another. Opening on the one it would boot said the
+    /// running kernel had already been changed away from, and offered no way to see
+    /// what it is running.
+    fn kernel_base(&self, profile: &Profile) -> usize {
+        kernel_base_of(profile, boot::running_kernel())
+    }
+
+    /// Write the kernel the spinner shows, if it is not the one already booting.
+    ///
+    /// Clearing the pick first: the write is what makes it true, and a pick left behind
+    /// a failed write would show a choice the entries do not have.
+    fn commit_kernel(&mut self, profile: &Option<Profile>) -> Outcome {
+        let Some(at) = self.kernel_pick.take() else {
+            return Outcome::Stay;
+        };
+        if at == 0 {
+            return Outcome::Stay;
+        }
+        let Some(p) = profile.clone() else { return Outcome::Stay };
+        let Some(entry) = p.entries.get(at).cloned() else { return Outcome::Stay };
+        crate::logline!("boot menu      {} is to boot {}", p.name, entry.id);
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.popup = match std::thread::Builder::new()
+            .name("boot-kernel".into())
+            .spawn(move || {
+                let _ = tx.send(boot::set_kernel(&p.dev, &entry.id).map(|()| false));
+            }) {
+            Ok(_) => Some(Popup::Busy("Saving".into(), Some(rx))),
+            Err(_) => Some(Popup::Said("could not start the change".into())),
+        };
+        Outcome::Stay
+    }
+
+    /// What the kernel line shows: the spinner's kernel while one is picked, else the
+    /// kernel this profile boots. Empty for a profile with none.
+    ///
+    /// See `widest_value` for why the popup is not measured from this.
+    fn kernel_value(&self, profile: &Profile) -> String {
+        let at = self.kernel_pick.unwrap_or_else(|| self.kernel_base(profile));
+        match profile.entries.get(at) {
+            Some(e) if e.short.is_empty() => e.version.clone(),
+            Some(e) => e.short.clone(),
+            None => String::new(),
+        }
+    }
+
     /// The name the caller's keyboard came back with, or nothing if it was cancelled.
     ///
     /// An unchanged name is not a rename: it would move a subvolume onto itself.
@@ -478,17 +728,17 @@ impl BootMenu {
         };
     }
 
-    /// Open a popup and start the two reads it fills its lines from.
+    /// Open View, and start the read its size line needs.
     ///
-    /// Separate threads on purpose. Each shells out to a tool that mounts the top
-    /// level, and the space measurement walks the subvolume on top of that, so
-    /// sharing a thread would hold the faster line behind the slower one.
-    fn open_popup(&mut self, which: Popup) {
-        self.popup = Some(which);
+    /// On a thread because it shells out to a tool that mounts the top level and then
+    /// walks the subvolume, which is seconds. The overlays it also shows need no read:
+    /// they were parsed from the entry when the list was.
+    fn open_view(&mut self) {
+        self.popup = Some(Popup::View);
         self.popup_index = 0;
+        self.kernel_pick = None;
         self.space = None;
         self.space_done = false;
-        self.dtbo = None;
         let Some(p) = self.selected_profile().cloned() else { return };
 
         let key = (p.dev.clone(), p.name.clone());
@@ -516,26 +766,13 @@ impl BootMenu {
                 .ok()
                 .map(|_| rx);
         }
+    }
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        let name = p.name.clone();
-        let dev = p.dev.clone();
-        self.dtbo_rx = std::thread::Builder::new()
-            .name("boot-dtbo".into())
-            .spawn(move || {
-                let at = Instant::now();
-                let (system, user) = boot::dtbo(&dev, &name);
-                crate::logline!(
-                    "boot           overlays {} in {:.3}s: {} system, {} user",
-                    name,
-                    at.elapsed().as_secs_f64(),
-                    system.len(),
-                    user.len()
-                );
-                let _ = tx.send((system, user));
-            })
-            .ok()
-            .map(|_| rx);
+    /// Open one of the screens the soft keys reach: Config, or Edit.
+    fn open_popup(&mut self, which: Popup) {
+        self.popup = Some(which);
+        self.popup_index = 0;
+        self.kernel_pick = None;
     }
 
     /// Start one of the Edit actions on a thread.
@@ -547,10 +784,15 @@ impl BootMenu {
         let p = profile.clone()?;
         let existing = self.profiles.clone();
         let (busy, work): (&str, Work) = match action {
-            "Auto Start" => (
-                "Saving",
-                Box::new(move || boot::set_auto_start(&p.dev, &p.id).map(|_| false)),
-            ),
+            // Which moves a digit in this profile's entries: what boots by itself is
+            // the first entry there is, not a marker naming one.
+            "Auto Start" => {
+                let name = p.name.clone();
+                (
+                    "Saving",
+                    Box::new(move || boot::set_auto_start(&p.dev, &name).map(|_| false)),
+                )
+            }
             "Clone" => {
                 let dest = boot::clone_dest(&p, &existing);
                 (
@@ -593,8 +835,12 @@ impl BootMenu {
         self.popup = None;
         self.space_rx = None;
         self.space_key = None;
-        self.dtbo_rx = None;
-        crate::logline!("boot menu      boot {} on {}", p.name, if p.dev.is_empty() { "the booted filesystem" } else { p.dev.as_str() });
+        crate::logline!(
+            "boot menu      boot {} ({}) on {}",
+            p.name,
+            p.entries.first().map_or("no kernel", |e| e.id.as_str()),
+            if p.dev.is_empty() { "the booted filesystem" } else { p.dev.as_str() }
+        );
         let (tx, rx) = std::sync::mpsc::channel();
         let label = boot::display_name(&p.name);
         // An arm still loading is this boot's own image being made ready, and the kernel
@@ -647,9 +893,14 @@ impl BootMenu {
 
         if let Some(rx) = self.pending.as_ref() {
             match rx.try_recv() {
-                Ok(list) => {
-                    crate::logline!("boot menu      {} profiles", list.len());
-                    self.profiles = list;
+                Ok(listing) => {
+                    crate::logline!(
+                        "boot menu      {} profiles, {} entries",
+                        listing.profiles.len(),
+                        listing.profiles.iter().map(|p| p.entries.len()).sum::<usize>()
+                    );
+                    self.profiles = listing.profiles;
+                    self.first = listing.first;
                     self.pending = None;
                     match self.keep.take() {
                         // A re-read nobody asked for: back onto the same profile, or as
@@ -671,21 +922,23 @@ impl BootMenu {
                     }
                     moved = true;
                     // The countdown only runs when there is something for it to
-                    // boot: it enters the profile wearing the heart, so with nothing
-                    // marked there is nothing to count down to and the menu waits.
-                    // Started when the list lands rather than when the screen opens,
-                    // because counting down against an empty list is a race.
+                    // boot: it boots the row wearing the heart, so with nothing marked
+                    // -- including a mark on an entry that is gone -- there is nothing
+                    // to count down to and the menu waits. Started when the list lands
+                    // rather than when the screen opens, because counting down against
+                    // an empty list is a race.
                     if self.auto_start == AutoStart::Countdown
                         && !self.cancelled
                         && self.started.is_none()
-                        && self.profiles.iter().any(|p| p.auto_boot)
+                        && self.first.is_some()
                     {
                         self.started = Some(Instant::now());
-                        if let Some(p) = self.profiles.iter().find(|p| p.auto_boot) {
+                        if let Some(p) = self.first.and_then(|at| self.profiles.get(at)) {
                             crate::logline!(
-                                "boot menu      countdown {}s to {}",
+                                "boot menu      countdown {}s to {} ({})",
                                 TIMEOUT.as_secs(),
-                                p.name
+                                p.name,
+                                p.entries.first().map_or("no kernel", |e| e.id.as_str())
                             );
                         }
                     }
@@ -723,14 +976,6 @@ impl BootMenu {
                 }
             }
         }
-        if let Some(rx) = self.dtbo_rx.as_ref() {
-            if let Ok(dtbo) = rx.try_recv() {
-                self.dtbo = Some(dtbo);
-                self.dtbo_rx = None;
-                moved = true;
-            }
-        }
-
         // Nothing on screen turns on this: an arm is a boot made faster, not an answer.
         // It is collected only so a failure is said out loud, and so the thread's end is
         // noticed rather than left in flight for the life of the menu.
@@ -779,14 +1024,14 @@ impl BootMenu {
             self.reread();
         }
 
-        // Time up: boot the marked profile. The countdown is cleared first, so a boot
+        // Time up: boot the first entry there is. The countdown is cleared first, so a boot
         // that fails leaves the menu sitting there rather than trying again every
         // turn.
         if let Some(at) = self.started {
             if !self.cancelled && self.booting.is_none() && at.elapsed() >= TIMEOUT {
                 self.started = None;
                 self.cancelled = true;
-                if let Some(at) = self.profiles.iter().position(|p| p.auto_boot) {
+                if let Some(at) = self.first {
                     crate::logline!("boot menu      countdown done");
                     self.selected = at as i32;
                     self.boot_selected();
@@ -857,9 +1102,15 @@ impl BootMenu {
                     "graphics" => (5, (10.0, 8.0)),
                     _ => (6, (14.0, 14.0)),
                 };
+                let label = boot::display_name(&p.name);
+                let status = boot::used_ago(&p.last_used, now);
                 Row {
-                    label: boot::display_name(&p.name),
-                    status: boot::used_ago(&p.last_used, now),
+                    status: if status_fits(&label, &status, p.auto_boot, p.medium) {
+                        status
+                    } else {
+                        String::new()
+                    },
+                    label,
                     icon,
                     icon_w,
                     icon_h,
@@ -893,6 +1144,8 @@ impl BootMenu {
         };
 
         let profile = self.selected_profile().cloned().unwrap_or_default();
+        // The kernel this profile boots, which every screen below describes.
+        let entry = profile.entries.first().cloned().unwrap_or_default();
         let popup_icon = match boot::icon_key(&profile.name, &profile.origin) {
             "minimal" => 1,
             "desktop" => 2,
@@ -905,16 +1158,63 @@ impl BootMenu {
         let mut lines: Vec<PopupLine> = Vec::new();
         let mut message: Vec<String> = Vec::new();
         let mut button = String::new();
-        let plain = |text: String| PopupLine { kind: 0, text, selected: false, heart: false };
+        let plain = |text: String| PopupLine {
+            kind: 0,
+            y: 0.0,
+            text,
+            value: String::new(),
+            selected: false,
+            heart: false,
+        };
         let joined = |v: &Vec<String>| if v.is_empty() { "none".to_string() } else { v.join(" ") };
 
         match self.popup.as_ref() {
-            Some(Popup::Info) => {
+            Some(Popup::View) => {
                 // Where it is. First, because on a machine with a card in it two
                 // profiles can carry the same name, and this is what says which one.
                 if !profile.disk.is_empty() {
                     lines.push(plain(format!("Drive: {} ({})", profile.disk, profile.kind)));
                 }
+                // The kernel this line is about: the one the profile is running where
+                // it is the running profile, else the one it would boot. The state in
+                // brackets has to describe the version beside it, and for a profile
+                // that is up those are two different kernels the moment a newer one is
+                // installed: the installed one has never booted, while the one carrying
+                // the session plainly has. The kernel it will boot next is the Kernel
+                // line in Config, which is where choosing it happens.
+                let shown = if profile.booted {
+                    profile
+                        .entries
+                        .iter()
+                        .find(|e| e.version == boot::running_kernel())
+                        .unwrap_or(&entry)
+                } else {
+                    &entry
+                };
+                // The kernel that is running is good, whatever its counter says: it
+                // booted, and the machine is the proof. Its entry can still carry a
+                // counter -- a kernel reinstalled or handed new overlays goes back on
+                // trial, and the boot that would have cleared it has already happened
+                // -- but "untried" about the kernel underneath the screen is wrong.
+                //
+                // "good" is said here and nowhere else, because here it is known.
+                // An entry with no counter at all says nothing: the spec makes an entry
+                // good by REMOVING its counter, so one a boot blessed and one that was
+                // never counted are the same file, and set-boot-order --list prints a
+                // dash for both.
+                let state = if profile.booted && shown.version == boot::running_kernel() {
+                    Some("good")
+                } else {
+                    shown.state()
+                };
+                lines.push(plain(format!(
+                    "Kernel: {}",
+                    match (shown.version.as_str(), state) {
+                        ("", _) => "-".to_string(),
+                        (version, None) => version.to_string(),
+                        (version, Some(state)) => format!("{version} ({state})"),
+                    }
+                )));
                 lines.push(plain(format!(
                     "Cloned from: {}",
                     if profile.parent.is_empty() {
@@ -935,21 +1235,46 @@ impl BootMenu {
                     "Last used: {}",
                     boot::info_last_used(&profile.last_used, now)
                 )));
-                let dt = self.dtbo.as_ref();
-                lines.push(plain(format!(
-                    "DTBO system: {}",
-                    dt.map_or(spin.to_string(), |(sys, _)| joined(sys))
-                )));
-                lines.push(plain(format!(
-                    "DTBO user: {}",
-                    dt.map_or(spin.to_string(), |(_, usr)| joined(usr))
-                )));
+                // Read from the entry itself, so they are the overlays of the kernel
+                // this profile boots rather than of whichever entry a second look picked.
+                lines.push(plain(format!("DTBO system: {}", joined(&entry.system))));
+                lines.push(plain(format!("DTBO user: {}", joined(&entry.user))));
+                // The way on, drawn as the current action because it is the only
+                // one: the facts above it cannot be selected, so there is nothing for
+                // Up and Down to move between.
+                lines.push(PopupLine {
+                    kind: 1,
+                    y: 0.0,
+                    text: "Config".into(),
+                    value: String::new(),
+                    selected: true,
+                    heart: false,
+                });
+            }
+            Some(Popup::Config) => {
+                for (i, line) in CONFIG_LINES.iter().enumerate() {
+                    let kernel = i == CONFIG_KERNEL;
+                    lines.push(PopupLine {
+                        // All one kind: a setting, its name on the left and its value on
+                        // the right. The four that are not built yet have no value to
+                        // show; when they do, it goes in the same grey the kernel's
+                        // version is in.
+                        kind: 2,
+                        y: 0.0,
+                        text: (*line).to_string(),
+                        value: if kernel { self.kernel_value(&profile) } else { String::new() },
+                        selected: i == self.popup_index,
+                        heart: false,
+                    });
+                }
             }
             Some(Popup::Edit) => {
                 for (i, action) in boot::edit_actions(&profile).iter().enumerate() {
                     lines.push(PopupLine {
                         kind: 1,
+                        y: 0.0,
                         text: (*action).to_string(),
+                        value: String::new(),
                         selected: i == self.popup_index,
                         heart: *action == "Auto Start" && profile.auto_boot,
                     });
@@ -986,6 +1311,13 @@ impl BootMenu {
         // Measured here rather than in Slint, which cannot take a maximum across a
         // model, and because the advance tables are on this side. The name is in
         // Born2bSportyV2 and everything else in HaxrCorp, so two tables are involved.
+        // Each row's offset, and what they come to: two pitches in one popup.
+        let mut popup_body_h = 0.0f32;
+        for line in &mut lines {
+            line.y = popup_body_h;
+            popup_body_h += line_h(line.kind);
+        }
+
         let popup_w = {
             use crate::font::{ROW_ACTIVE, TITLE};
             use crate::theme::metric::{POPUP_MAX_W, POPUP_PAD_H, SIZE_GAP};
@@ -1003,10 +1335,20 @@ impl BootMenu {
                 + 4
                 + ROW_ACTIVE.text_width(&boot::display_name(&profile.name))
                 + POPUP_PAD_H as u16;
-            // The body is whichever of the two lists is showing.
+            // The body is whichever of the two lists is showing. A settings row is its
+            // name, a gap, the widest value it can hold and the chevrons either side --
+            // the WIDEST, not the one showing, so spinning through a profile's kernels
+            // does not resize the popup under the person doing the spinning. Same
+            // reason the size line keeps a fixed slot while it is still a spinner.
             let mut body = 0u16;
             for line in &lines {
-                body = body.max(TITLE.text_width(&line.text));
+                let mut w = TITLE.text_width(&line.text);
+                if line.kind == 2 && !line.value.is_empty() {
+                    w += SIZE_GAP as u16
+                        + widest_value(&profile)
+                        + 2 * (SIZE_GAP as u16 + TITLE.text_width(">"));
+                }
+                body = body.max(w);
             }
             for line in &message {
                 body = body.max(TITLE.text_width(line));
@@ -1037,6 +1379,7 @@ impl BootMenu {
             size_unit,
             size_loading: !(self.space.is_some() || self.space_done),
             popup_w,
+            popup_body_h,
             // While loading, the slot is the widest spinner frame; once the value
             // lands it is the value's own width.
             size_slot_w: if self.space.is_some() || self.space_done {
@@ -1051,15 +1394,62 @@ impl BootMenu {
                     .unwrap_or(0);
                 f32::from(w)
             },
-            // Info on slot 2 and Edit on slot 4, which is where boot_menu.js puts
-            // them: the outer slots stay empty on this screen. Once a boot is under
-            // way `key` answers nothing, so the labels go with it rather than offer
-            // two presses that do not happen.
+            // Config on slot 2 and Edit on slot 4, which is where boot_menu.js puts
+            // its two labels: the outer slots stay empty on this screen. Once a boot is
+            // under way `key` answers nothing, so the labels go with it rather than
+            // offer two presses that do not happen.
             buttons: if self.booting.is_some() {
                 ["", "", "", "", ""]
             } else {
-                ["", "Info", "", "Edit", ""]
+                ["", "View", "", "Edit", ""]
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(version: &str) -> boot::Entry {
+        boot::Entry {
+            version: version.into(),
+            ..Default::default()
+        }
+    }
+
+    /// The Config screen opens on the kernel the machine is running, not on the one
+    /// its profile would boot next. Installing a kernel writes its entry at rank 0,
+    /// so the two differ on any machine that has taken an update.
+    #[test]
+    fn the_spinner_starts_on_the_running_kernel() {
+        let updated = boot::Profile {
+            booted: true,
+            entries: vec![entry("7.3.0-new"), entry("7.2.0-running")],
+            ..Default::default()
+        };
+        assert_eq!(kernel_base_of(&updated, "7.2.0-running"), 1);
+
+        // Nothing installed since the boot: the running kernel is also the first.
+        let settled = boot::Profile {
+            booted: true,
+            entries: vec![entry("7.2.0-running"), entry("7.1.0-old")],
+            ..Default::default()
+        };
+        assert_eq!(kernel_base_of(&settled, "7.2.0-running"), 0);
+
+        // Another profile's rows say nothing about this machine's kernel, even when
+        // one of them happens to name it. Its own first entry is what it would boot.
+        let other = boot::Profile {
+            booted: false,
+            entries: vec![entry("7.3.0-new"), entry("7.2.0-running")],
+            ..Default::default()
+        };
+        assert_eq!(kernel_base_of(&other, "7.2.0-running"), 0);
+
+        // Booted from an entry that has since been removed, and a kernel that could
+        // not be read at all: the first entry either way rather than a panic.
+        assert_eq!(kernel_base_of(&updated, "7.0.0-gone"), 0);
+        assert_eq!(kernel_base_of(&updated, ""), 0);
     }
 }

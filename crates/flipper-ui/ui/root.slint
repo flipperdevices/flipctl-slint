@@ -129,6 +129,7 @@ export component Root inherits Window {
     in property <[string]> boot_popup_message;
     in property <string> boot_popup_hint;
     in property <length> boot_popup_w;
+    in property <length> boot_popup_body_h;
 
     // The text-input screen: a field and the on-screen keyboard.
     in property <string> kb_title;
@@ -326,6 +327,7 @@ export component Root inherits Window {
         popup_message: root.boot_popup_message;
         popup_hint: root.boot_popup_hint;
         popup_w: root.boot_popup_w;
+        popup_body_h: root.boot_popup_body_h;
     }
 
     if root.screen == Screen.menu: MenuBody {

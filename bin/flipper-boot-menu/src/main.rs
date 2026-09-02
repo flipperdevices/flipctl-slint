@@ -10,10 +10,11 @@
 //! btrfs tools. What is here is the loop, the panel, the keys, and the keyboard a
 //! rename needs.
 //!
-//! Usage: flipper-boot-menu [--kms-device /dev/dri/cardN]
+//! Usage: flipper-boot-menu [--kms-device /dev/dri/cardN] [--all-kernels]
 
 use std::time::{Duration, Instant};
 
+use flipper_ui::boot::Kernels;
 use flipper_ui::boot_menu::{AutoStart, BootMenu, Outcome};
 use flipper_ui::evdev::EvdevSource;
 use flipper_ui::kms::KmsSink;
@@ -27,15 +28,24 @@ slint::include_modules!();
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        flipper_ui::logline!("Usage: flipper-boot-menu [--kms-device /dev/dri/cardN]");
+        flipper_ui::logline!(
+            "Usage: flipper-boot-menu [--kms-device /dev/dri/cardN] [--all-kernels]"
+        );
         return std::process::ExitCode::SUCCESS;
     }
     let card = args
         .windows(2)
         .find(|w| w[0] == "--kms-device")
         .map(|w| w[1].clone());
+    // Old kernels are hidden unless asked for: a 6.1 BSP entry left on disk boots
+    // nothing anybody wants, and the menu is a list of things worth choosing.
+    let kernels = if args.iter().any(|a| a == "--all-kernels") {
+        Kernels::All
+    } else {
+        Kernels::Modern
+    };
 
-    match run(card.as_deref()) {
+    match run(card.as_deref(), kernels) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             flipper_ui::logline!("boot menu      {e}");
@@ -44,7 +54,7 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run(card: Option<&str>) -> std::io::Result<()> {
+fn run(card: Option<&str>, kernels: Kernels) -> std::io::Result<()> {
     let mut sink = KmsSink::open(card.map(std::path::Path::new))?;
     let (w, h) = sink.size();
     if (w, h) != (PANEL_W, PANEL_H) {
@@ -70,7 +80,7 @@ fn run(card: Option<&str>) -> std::io::Result<()> {
     let ui = Menu::new().map_err(|e| std::io::Error::other(e.to_string()))?;
     ui.show().map_err(|e| std::io::Error::other(e.to_string()))?;
 
-    let mut menu = BootMenu::open(BOOT_VISIBLE_ROWS as i32, AutoStart::Countdown);
+    let mut menu = BootMenu::open(BOOT_VISIBLE_ROWS as i32, AutoStart::Countdown, kernels);
     // The keyboard a rename asks for, and the profile it is renaming.
     let mut kb: Option<keyboard::TextInput> = None;
     let mut kb_for = String::new();
@@ -236,14 +246,17 @@ fn apply(ui: &Menu, menu: &BootMenu, kb: Option<&keyboard::TextInput>, warning: 
     ui.set_popup_size_slot_w(view.size_slot_w);
     // The frame's own measured width, so it fits what is in it.
     ui.set_popup_w(view.popup_w);
+    ui.set_popup_body_h(view.popup_body_h);
     let lines: Vec<BootPopupRow> = view
         .popup_lines
         .iter()
         .map(|l| BootPopupRow {
             kind: l.kind,
+            y: l.y,
             text: l.text.as_str().into(),
             selected: l.selected,
             heart: l.heart,
+            value: l.value.as_str().into(),
         })
         .collect();
     ui.set_popup_rows(slint::ModelRc::new(slint::VecModel::from(lines)));
