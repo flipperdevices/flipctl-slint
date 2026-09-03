@@ -100,7 +100,6 @@ struct StoredFrame {
     pixels: Vec<Gray8>,
     w: u16,
     h: u16,
-    queued: std::time::Instant,
 }
 
 pub struct RemoteView {
@@ -186,7 +185,6 @@ impl FrameSink for RemoteView {
             pixels: frame.pixels.to_vec(),
             w: frame.w,
             h: frame.h,
-            queued: std::time::Instant::now(),
         };
         {
             let viewers = self
@@ -591,10 +589,6 @@ fn pump(stream: &mut TcpStream, viewer: &Arc<ViewerQueue>) -> std::io::Result<()
             body.len(),
             HEADER + usize::from(stored.w) * usize::from(stored.h)
         );
-        let waited = stored.queued.elapsed().as_secs_f32() * 1000.0;
-        if waited > 20.0 {
-            eprintln!("remote         frame waited {waited:.0}ms in the queue");
-        }
         write!(stream, "{:x}\r\n", body.len())?;
         stream.write_all(&body)?;
         stream.write_all(b"\r\n")?;
