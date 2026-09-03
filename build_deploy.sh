@@ -192,6 +192,29 @@ run "cd ~/$DEST && \
        | sudo tar xf - -C $SHARE && \
      for a in apps/*/; do sudo chown -R $USER_:$USER_ '$SHARE'/\$a; done"
 
+# The framework, so an app that draws with it can be built on the device.
+#
+# An app's manifest asks for `../../crates/flipctl-app`, which resolves relative to
+# where the app sits: in a checkout that is the repository, and installed it is
+# $SHARE. Without these the build fails before it starts, with cargo unable to read
+# $SHARE/crates/flipctl-app/Cargo.toml -- which is what every framework app did,
+# both of the two docs/apps.md names as the examples to copy.
+#
+# The three crates the chain pulls in, and the fonts, which are the part that is
+# easy to miss: ui/fonts.slint imports the three TTFs as ../../../third_party, from
+# outside crates/ entirely. The layout under $SHARE therefore mirrors the
+# repository for exactly these paths.
+#
+# Root-owned and read-only, unlike the apps: a build writes only into the app's own
+# target/, since a build script writes to OUT_DIR there. tests/ and examples/ are
+# left behind because nothing an app builds reads them.
+echo "== installing $SHARE/crates and $SHARE/third_party, so apps can be built =="
+run "cd ~/$DEST && \
+     sudo tar cf - --exclude=target --exclude=tests --exclude=examples \
+         crates/flipctl-app crates/flipper-ui crates/flipper-tokens \
+         third_party/flipctl-fonts \
+       | sudo tar xf - -C $SHARE"
+
 # The unit itself, where the machine has none. Stock profiles do not ship it -- it has
 # always been installed by hand -- so a deploy onto a freshly installed profile otherwise
 # builds, installs the binary, and then has nothing to restart. Never overwritten: a

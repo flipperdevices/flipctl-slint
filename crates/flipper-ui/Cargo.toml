@@ -1,8 +1,13 @@
 [package]
 name = "flipper-ui"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+# Literal rather than inherited from the workspace, as its two sibling crates
+# already are. A deploy installs this crate under /usr/share/flipctl/crates for a
+# hosted app to build against, and there is no workspace root above it there:
+# `edition.workspace = true` then fails with "failed to find a workspace root"
+# before cargo reads a line of source.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
 description = "Shared UI component library for the Flipper One 256x144 panel"
 
 [features]
