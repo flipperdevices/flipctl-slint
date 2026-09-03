@@ -1,0 +1,277 @@
+// The settings row with a value chip, and the picker that opens over it.
+//
+// Transcribed from component-library/MenuDropdownLine.js and the dropdown
+// internet_radio.js draws over one. A hosted app stacks `DropLine` to make a
+// settings page and puts `DropPicker` on top of it while a row is being changed.
+//
+// Every number here was worked out in `flipper_ui::dropdown`, which is also where
+// the strings were cut to fit: a centred value is a measurement, and Slint cannot
+// measure a string it is about to draw.
+import { FlipperTheme } from "@theme";
+import { SelectorFrame } from "frame.slint";
+
+export struct DropRow {
+    // Top of the row. The app decides it, because the gaps between rows are the
+    // app's own: the radio puts a divider in the middle of its stack.
+    y: length,
+    title: string,
+    value: string,
+    // From the chip's left edge.
+    value_x: length,
+    // 0 a value chip, 1 a slider.
+    kind: int,
+    // A slider's fill, from the chip's left edge.
+    fill_w: length,
+    // Draws the chevrons inside the chip. The selector frame around the row is
+    // the app's own business.
+    selected: bool,
+}
+
+// The picker's frame, as `flipper_ui::dropdown::picker` worked it out. Its items
+// are a model and so cannot ride in a struct, which is why they arrive beside it.
+export struct DropView {
+    x: length,
+    y: length,
+    h: length,
+    // The row's title, drawn again over the wash so the row being changed stays
+    // legible while the rest of the page fades.
+    title: string,
+    sel_y: length,
+    sel_w: length,
+    sel_h: length,
+}
+
+export struct DropItem {
+    // In panel coordinates, like everything else the picker carries: it is drawn
+    // over the page rather than inside a container of its own.
+    y: length,
+    text: string,
+    // From the picker's left edge.
+    text_x: length,
+    rule: bool,
+}
+
+// A string in the chip, black where the slider's fill has not reached it and
+// white where it has.
+//
+// Two passes of the same string at the same place, each clipped to one side of
+// the fill's edge, so the eye reads one label that changes colour part way
+// through a glyph. A plain chip has no fill and takes only the black pass.
+component SplitText {
+    in property <string> text;
+    // From the chip's left edge, which is this component's own left edge.
+    in property <length> text_x;
+    in property <length> fill_w;
+
+    width: FlipperTheme.drop_chip_w;
+    height: FlipperTheme.drop_chip_h;
+
+    if root.fill_w > 0px: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.fill_w;
+        height: 100%;
+        background: transparent;
+        clip: true;
+
+        Text {
+            x: root.text_x;
+            y: 0;
+            text: root.text;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.white;
+        }
+    }
+
+    if root.fill_w < FlipperTheme.drop_chip_w: Rectangle {
+        x: root.fill_w;
+        y: 0;
+        width: FlipperTheme.drop_chip_w - root.fill_w;
+        height: 100%;
+        background: transparent;
+        clip: true;
+
+        Text {
+            x: root.text_x - root.fill_w;
+            y: 0;
+            text: root.text;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.black;
+        }
+    }
+}
+
+// One settings row: a title on the left, a chip on the right.
+export component DropLine {
+    in property <DropRow> line;
+
+    x: 0;
+    y: root.line.y;
+    width: 100%;
+    height: FlipperTheme.drop_row_h;
+
+    property <length> chip_x: root.width
+        - FlipperTheme.drop_chip_pad_r - FlipperTheme.drop_chip_w;
+    // Only the chevrons are measured here. They are one glyph of a fixed string,
+    // so the hidden-Text measurement is exact; the value was measured in Rust
+    // because it is the app's string and may end in a space.
+    gt_ref := Text { visible: false; text: ">"; font-size: 16px; font-family: "HaxrCorp 4090"; }
+    property <length> gt_w: gt_ref.width - 1px;
+
+    Text {
+        x: FlipperTheme.drop_title_x;
+        y: FlipperTheme.drop_top_pad;
+        text: root.line.title;
+        font-size: 16px;
+        font-family: "HaxrCorp 4090";
+        color: FlipperTheme.black;
+    }
+
+    // The chip's ground, in both kinds of row.
+    SelectorFrame {
+        x: root.chip_x;
+        y: FlipperTheme.drop_top_pad;
+        frame_w: FlipperTheme.drop_chip_w;
+        frame_h: FlipperTheme.drop_chip_h;
+        filled: true;
+        stroke: false;
+        shadow: false;
+        fill_color: FlipperTheme.chip_fill;
+    }
+
+    // A slider's fill. Its right corners stay square until it reaches the end of
+    // the chip, so a part-filled bar reads as a level and not as a smaller chip.
+    if root.line.kind == 1: SelectorFrame {
+        x: root.chip_x;
+        y: FlipperTheme.drop_top_pad;
+        frame_w: root.line.fill_w;
+        frame_h: FlipperTheme.drop_chip_h;
+        filled: true;
+        stroke: false;
+        shadow: false;
+        fill_color: FlipperTheme.black;
+        round_tr: root.line.fill_w >= FlipperTheme.drop_chip_w;
+        round_br: root.line.fill_w >= FlipperTheme.drop_chip_w;
+    }
+
+    // The value, and the chevrons that say left and right will move it. All three
+    // invert across a slider's fill and are plain black on a value chip, which is
+    // the same component with nothing filled.
+    contents := Rectangle {
+        x: root.chip_x;
+        y: FlipperTheme.drop_top_pad;
+        width: FlipperTheme.drop_chip_w;
+        height: FlipperTheme.drop_chip_h;
+        background: transparent;
+
+        property <length> fill: root.line.kind == 1 ? root.line.fill_w : 0px;
+
+        if root.line.value != "": SplitText {
+            text: root.line.value;
+            text_x: root.line.value_x;
+            fill_w: contents.fill;
+        }
+
+        if root.line.selected: SplitText {
+            text: "<";
+            text_x: FlipperTheme.drop_arrow_pad;
+            fill_w: contents.fill;
+        }
+
+        if root.line.selected: SplitText {
+            text: ">";
+            text_x: FlipperTheme.drop_chip_w - root.gt_w - FlipperTheme.drop_arrow_pad;
+            fill_w: contents.fill;
+        }
+    }
+}
+
+// The rule between two groups of rows.
+export component DropRule inherits Rectangle {
+    width: 100%;
+    height: 1px;
+    background: transparent;
+
+    // Inside a child, because a component's own root cannot see the parent it will
+    // be placed in and the inset is measured from the panel's edges.
+    Rectangle {
+        x: FlipperTheme.drop_rule_pad_x;
+        width: parent.width - FlipperTheme.drop_rule_pad_x * 2;
+        height: 100%;
+        background: FlipperTheme.divider;
+    }
+}
+
+// The picker open over a chip, with the page washed out behind it.
+//
+// The frame is the chip's own width, fill and radius, anchored at its top-left
+// corner, so it reads as the chip having grown downwards rather than as a dialog
+// that happens to be near it. It has no stroke for the same reason: the chip has
+// none either.
+export component DropPicker inherits Rectangle {
+    in property <DropView> view;
+    in property <[DropItem]> items;
+
+    width: 100%;
+    height: 100%;
+    background: FlipperTheme.white.with-alpha(FlipperTheme.overlay_alpha);
+
+    Text {
+        x: FlipperTheme.drop_title_x;
+        y: root.view.y;
+        text: root.view.title;
+        font-size: 16px;
+        font-family: "HaxrCorp 4090";
+        color: FlipperTheme.black;
+    }
+
+    SelectorFrame {
+        x: root.view.x;
+        y: root.view.y;
+        frame_w: FlipperTheme.drop_chip_w;
+        frame_h: root.view.h;
+        filled: true;
+        stroke: false;
+        shadow: false;
+        fill_color: FlipperTheme.chip_fill;
+    }
+
+    for item in root.items: Rectangle {
+        x: root.view.x;
+        y: item.y;
+        width: FlipperTheme.drop_chip_w;
+        height: FlipperTheme.drop_pick_item_h;
+        background: transparent;
+
+        Text {
+            x: item.text_x;
+            y: FlipperTheme.drop_pick_text_dy;
+            text: item.text;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.black;
+        }
+
+        // The rule sits in the pixel between this option and the next, inset so
+        // it does not run into the frame's chamfered edge.
+        if item.rule: Rectangle {
+            x: FlipperTheme.drop_pick_pad;
+            y: FlipperTheme.drop_pick_item_h;
+            width: FlipperTheme.drop_chip_w - FlipperTheme.drop_pick_pad * 2;
+            height: FlipperTheme.drop_pick_gap;
+            background: FlipperTheme.pick_rule;
+        }
+    }
+
+    SelectorFrame {
+        x: root.view.x;
+        y: root.view.sel_y;
+        frame_w: root.view.sel_w;
+        frame_h: root.view.sel_h;
+        filled: false;
+        stroke: true;
+        shadow: true;
+    }
+}

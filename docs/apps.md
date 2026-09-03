@@ -66,6 +66,7 @@ What the crate gives the app:
 | `apply_status!` | Fills `PanelStatus` from a `StatusSource`, which reads sysfs. An app has the same access flipctl does. |
 | `picture` | A `paint::Surface` as an image, for an app that draws pixels. |
 | `paint`, `font`, `pixel`, `theme` | The primitives, the panel's bitmap fonts, and every token. |
+| `dropdown` | The settings row's own geometry: what to put in a `DropRow`, and where a picker's options go. |
 
 ## The widgets
 
@@ -79,6 +80,7 @@ Imported from `@flipctl`, the same components flipctl's own screens are built fr
 | `LogBody` (`log.slint`) | Lines of output with a scrollbar. |
 | `CanvasBody` (`canvas.slint`) | Your own picture, with text placed and measured on this side, and the soft bar over it. |
 | `TextInputBody` (`keyboard.slint`) | The on-screen keyboard. |
+| `DropLine`, `DropPicker` (`dropdown.slint`) | A settings row with a value chip or a slider, and the picker that opens over it. Build the rows with `dropdown`. |
 | `Modal` (`modal.slint`) | A dialog over whatever is behind it. |
 | `SoftBar`, `SoftButton` (`frame.slint`) | The five soft keys on their own. |
 | `StatusBar` (`statusbar.slint`) | The top row, if you are not using a body that draws it. |

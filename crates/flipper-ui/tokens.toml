@@ -39,6 +39,14 @@ rule_light   = "#e5e5e5"   # ethernet.js MODAL_DIVIDER_COLOR
 # these rows are siblings inside one frame and the line only has to keep them
 # apart, not group them.
 rule_faint   = "#eeeeee"   # wifi.js visible-networks row divider
+# The backdrop of a settings row's value chip. The same grey as rule_light and a
+# different thing: that separates sections, this is a control's own ground.
+chip_fill    = "#e5e5e5"   # MenuDropdownLine CHIP_FILL
+# Rule between the options of an open picker. Darker than any of the rules above
+# because it divides rows that sit on the chip's own grey, not on white.
+pick_rule    = "#999999"   # internet_radio.js dropdown item divider
+# A hosted app's title bar, under the status bar and the full width of the panel.
+app_bar      = "#d9d9d9"   # internet_radio.js title header fill
 chevron_flash = "#222222"   # MenuLine < > arrow tap flash
 popup_edge    = "#d0d0d0"   # drawPopupLeft shadow edge
 keycap_dim    = "#888888"   # keyboard language-switcher label
@@ -224,6 +232,51 @@ wifi_card_gutter    = 6     # BLOCK_CHEVRON_W
 wifi_toast_h        = 14
 wifi_toast_pad      = 7     # its text inset, both sides
 wifi_toast_pad_b    = 4     # its bottom edge, up from the frame's
+
+# The dropdown settings row, from component-library/MenuDropdownLine.js: a title on
+# the left and a value chip on the right, which an app stacks into a settings page.
+# The chip is anchored to the screen's right edge rather than sized to its content,
+# so a column of them lines up whatever the values say.
+drop_title_x        = 6     # TITLE_X, from the screen's left edge
+drop_top_pad        = 2     # TOP_PAD, the row's y to the text and chip top
+drop_chip_w         = 180   # CHIP_W
+drop_chip_h         = 11    # CHIP_H
+drop_chip_pad_r     = 5     # CHIP_RIGHT_PAD, from the screen's right edge
+drop_arrow_pad      = 4     # ARROW_PAD, the chevrons' inset inside the chip
+drop_chip_inset     = 4     # CHIP_W - 4, the width a value is fitted to
+drop_row_h          = 13    # HEIGHT, = TOP_PAD + CHIP_H
+drop_row_gap        = 2     # ROW_GAP, so rows stack on a 15px pitch
+# Its selector is wider and shorter than the menu's: the row it wraps is 13px, not 20.
+drop_selector_x     = 2     # internet_radio.js SELECTOR_X
+drop_selector_w     = 252   # SELECTOR_W
+drop_selector_h     = 15    # SELECTOR_H
+# The picker that opens over the chip, which is the chip grown downwards: same
+# width, same fill, same radius, one line per option with a rule between them, and
+# a pixel of the fill left clear at the top and bottom. N options come to
+# 13N + (N-1) + 2.
+drop_pick_item_h    = 13
+drop_pick_gap       = 1     # the rule between two options
+drop_pick_pad       = 1     # fill left clear above the first option and below the last
+drop_pick_text_dy   = 1     # centres the 11px ink in a 13px option
+# Its selector wraps one option and the pixel of fill above and below it, and is a
+# pixel narrower than the picker so the frame's own drop shadow stays inside.
+drop_pick_sel_h     = 15
+drop_pick_sel_inset = 1
+# The rule between two groups of rows, inset from both edges like the menu's own
+# dividers and drawn in the same grey.
+drop_rule_pad_x     = 5     # internet_radio.js DIVIDER_PAD_X
+# A hosted app's title bar, from internet_radio.js: the panel's width, under the
+# status bar, with the app's icon on the left and its name in the heavy face.
+app_bar_h           = 16    # TITLE_H
+app_bar_icon_x      = 2
+app_bar_icon_w      = 14
+app_bar_icon_dy     = 1     # a row below the text, which lands the glyph's cap closer
+app_bar_title_x     = 18    # TITLE_X, clear of the icon with a 2px gap
+app_bar_title_dy    = 1     # TITLE_TEXT_Y, from the status bar's bottom edge
+# The nub a slider chip keeps at zero, from MIN_VISIBLE_FRAC 0.05 of CHIP_W. An
+# empty chip reads as a missing control rather than as a value at the bottom of
+# its range.
+drop_slider_min_w   = 9
 
 list_container_x    = 5     # menu.js CONTAINER_X
 # menu.js's value, and the shipping device's. Five 20px rows plus four dividers is

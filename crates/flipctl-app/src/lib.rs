@@ -31,7 +31,7 @@
 //! ```
 
 pub use flipper_ui::status::{Status, StatusSource};
-pub use flipper_ui::{font, paint, pixel, theme};
+pub use flipper_ui::{dropdown, font, paint, pixel, theme};
 pub use flipper_ui::Ethernet;
 
 /// Put a status reading on the panel's bar.
