@@ -35,6 +35,10 @@ chevron_bar  = "#666666"   # ComponentSelectorFrame chevronColor
 # Rule between sections of the interface dump. Lighter than the menu divider
 # because it separates groups inside one card rather than sibling rows.
 rule_light   = "#e5e5e5"   # ethernet.js MODAL_DIVIDER_COLOR
+# Rule between adjacent rows of a modal's list. Lighter again than rule_light:
+# these rows are siblings inside one frame and the line only has to keep them
+# apart, not group them.
+rule_faint   = "#eeeeee"   # wifi.js visible-networks row divider
 chevron_flash = "#222222"   # MenuLine < > arrow tap flash
 popup_edge    = "#d0d0d0"   # drawPopupLeft shadow edge
 keycap_dim    = "#888888"   # keyboard language-switcher label
@@ -62,6 +66,9 @@ overlay       = "#ffffff"
 
 [alpha]
 overlay = 0.75
+# The heavier wash a modal puts over its own body while it waits on something, so
+# the spinner over it reads as "this is busy" rather than as part of the content.
+wash = 0.85
 
 # Every measurement is an integer pixel count. No fractional layout, no scale
 # factor.
@@ -160,6 +167,64 @@ eth_modal_metric_gap  = 12    # ethernet.js MODAL_METRIC_GAP
 eth_modal_icon_gap    = 2     # ethernet.js MODAL_ICON_GAP, arrow to its value
 eth_modal_arrow_dy    = 2     # ethernet.js ARROW_DY, the 7px sprite against the cap row
 
+# The Wi-Fi page, from wifi.js. A denser list than the menu's: 13px rows with no
+# icons, no font swap on selection, and explicit 3px divider rows marking the
+# groups rather than a rule between every pair.
+wifi_row_h          = 13    # wifi.js ROW_H
+wifi_selector_w     = 247   # wifi.js SELECTOR_W
+wifi_selector_h     = 15    # wifi.js SELECTOR_H, = ROW_H + 2
+wifi_container_y    = 29    # wifi.js containerY, = status_bar_h + 16
+wifi_text_pad_l     = 5     # wifi.js TEXT_LEFT_PAD
+wifi_text_dy        = 1     # wifi.js TEXT_DY, centres the 11px ink in a 13px row
+wifi_divider_h      = 3     # wifi.js DIVIDER_ROW_H, 1px above the rule and 1 below
+# The three Wi-Fi modals: visible networks, saved networks and one network's
+# settings. All three are a tab with a frame under it, sized to their content and
+# centred until the bottom would pass wifi_modal_max_bottom, and all three scroll
+# in pixels rather than rows because the settings page mixes row heights.
+wifi_modal_pad      = 4     # wifi.js SCREEN_PAD
+wifi_modal_w        = 248   # wifi.js FRAME_W, the full-width modals
+wifi_modal_pad_t    = 3     # FRAME_PAD_TOP
+wifi_modal_pad_b    = 4     # FRAME_PAD_BOTTOM
+# The saved-networks modal pulls its own bottom padding 5px tighter than that:
+# its rows carry a chevron bar, and the slack under the last one read as a gap.
+wifi_saved_pad_b    = -1    # its FRAME_PAD_BOTTOM
+wifi_modal_gutter   = 6     # SCROLLBAR_GUTTER, reserved only when the bar shows
+wifi_modal_max_bot  = 128   # MAX_BOTTOM_Y
+wifi_row_pitch      = 14    # ROW_PITCH, = ROW_H + 1px divider
+wifi_inner_pad      = 3     # INNER_X, in from the frame's left edge
+wifi_scrollbar_pad  = 5     # the dotted track, in from the frame's right edge
+# Where a left-aligned placeholder sits under the frame's top edge. The centred
+# one is centred instead, so this is the saved list's own.
+wifi_placeholder_dy = 4
+wifi_tab_h          = 16    # ui.js TabHeader h
+wifi_tab_pad        = 3     # its text inset, both sides
+# The visible-networks row: the SSID, then the security tag and the 7x7 signal
+# sprite right-aligned as a pair.
+wifi_row_pad_r      = 2     # the content's right edge, in from the row's
+wifi_signal_gap     = 4     # security tag to the signal icon
+# The settings page's rows.
+wifi_kv_h           = 12    # KV_H, an info line
+wifi_label_gap      = 4     # INNER_LABEL_GAP, "Label:" to its value
+wifi_value_indent   = 14    # a value under its own section label
+wifi_section_h      = 2     # a section rule, which has no padding below it
+wifi_pw_pad         = 3     # extra selector padding above and below the PSK row
+wifi_pw_gap         = 6     # the "Password" label to where its value may start
+# The saved-networks modal is only as wide as its longest name. Its width is the
+# name plus the row's own padding, plus the gutter when the bar is showing, and
+# never narrower than its tab with room to breathe either side.
+wifi_saved_min_gap  = 20    # past the tab's own width
+wifi_saved_min_h    = 24    # room for the placeholder while the list is empty
+# The IPv4 and IPv6 cards inside it. Each is one selectable target holding its own
+# lines, so it reserves the chevron gutter whether or not it is the selected one:
+# the text must not rewrap as the selection moves onto it.
+wifi_card_pad       = 2     # CARD_BLOCK_PAD_TOP and _BOTTOM
+wifi_card_inset     = 4     # BLOCK_INNER_X, in from the row's left edge
+wifi_card_gutter    = 6     # BLOCK_CHEVRON_W
+# The "Already connected" / "Connection failed" pill at the foot of a modal.
+wifi_toast_h        = 14
+wifi_toast_pad      = 7     # its text inset, both sides
+wifi_toast_pad_b    = 4     # its bottom edge, up from the frame's
+
 list_container_x    = 5     # menu.js CONTAINER_X
 # menu.js's value, and the shipping device's. Five 20px rows plus four dividers is
 # 104px, so the list occupies y25..y128 and leaves y129 blank: a one-pixel gap
@@ -213,12 +278,14 @@ boot_row_h          = 16    # boot_menu.js ROW_H
 # Gap between rows. boot_menu.js leaves 1px and draws no divider; 2px reads better
 # at this row height. Six rows still clear the soft strip: 20 + 6 * 18 = 128.
 boot_row_gap        = 2
-# The loading spinner shown while list-profiles runs, from the 22x20 8-frame strip
-# spinner_22x20px. boot_menu.js centres it horizontally and in what is left of the
-# body below the header, then lifts it 8px.
-boot_spin_w         = 22
-boot_spin_h         = 20
-boot_spin_frames    = 8
+# The loading spinner, from the 22x20 8-frame strip spinner_22x20px. The boot menu
+# waits on list-profiles with it and the Wi-Fi page waits on a scan and on a join,
+# so the strip's own geometry is not either screen's.
+spin_w              = 22
+spin_h              = 20
+spin_frames         = 8
+# boot_menu.js centres it horizontally and in what is left of the body below the
+# header, then lifts it 8px. That last part is the boot menu's own.
 boot_spin_lift      = 8
 # The on-screen keyboard and the text-input screen around it, from ui.js
 # (UI.Keyboard), canvas.js (drawKeyboard) and keyboard_test.js (TextInputScreen).
@@ -378,6 +445,10 @@ boot_visible_rows = 6
 # pitch, and the last row has to clear the soft strip at 130: 28 + 8 * 12 = 124.
 detail_visible_rows = 8
 msgbox_max_chars  = 25   # MessageBox.js maxLineLength
+# Rows the visible-networks modal keeps room for while it is still scanning, or
+# once it knows there is nothing in range: the spinner and the placeholder both
+# need somewhere to sit.
+wifi_min_rows     = 2    # wifi.js MIN_CONTENT_ROWS
 
 # drawRoundRect / drawRoundFrame accept these three only; anything else falls
 # back to a square rect.
@@ -389,6 +460,7 @@ box   = 4   # MessageBox, bottom-bar button top corners, keyboard container
 
 [timing]
 press_flash_ms   = 30    # bottom-bar button, next scene usually replaces the view
+toast_ms         = 1600  # wifi.js, how long a modal's pill stays up
 chevron_flash_ms = 120   # toggle chevron tap, must outlast the 200ms icon tick
 press_commit_ms  = 150   # popup item and keyboard key, the flash must be seen
 icon_frame_ms    = 200   # animated icon strip, 5 fps

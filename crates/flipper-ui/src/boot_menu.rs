@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::boot::{self, Kernels, Listing, Profile, Space};
 use crate::key::{FlipperKey, KeyEvent};
-use crate::theme::{metric::BOOT_SPIN_FRAMES, timing::SPIN_FRAME_MS};
+use crate::theme::{metric::SPIN_FRAMES, timing::SPIN_FRAME_MS};
 
 /// How often the partition table is compared against the one the list was read from.
 const PARTS_POLL: Duration = Duration::from_millis(500);
@@ -1367,7 +1367,7 @@ impl BootMenu {
             countdown,
             remaining,
             loading: self.pending.is_some(),
-            spin_frame: (frame % BOOT_SPIN_FRAMES as u128) as i32,
+            spin_frame: (frame % SPIN_FRAMES as u128) as i32,
             booting: self.booting.as_ref().map(|(l, _)| l.clone()).unwrap_or_default(),
             popup_open: self.popup.is_some(),
             popup_title: boot::display_name(&profile.name).trim_matches(['[', ']']).to_string(),

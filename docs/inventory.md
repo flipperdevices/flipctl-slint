@@ -20,6 +20,11 @@ The panel is a 256x144 8-bit greyscale device: `flipper-one-display.c` advertise
    screen and fails on any grey level absent from `tokens.toml`, naming the
    offending coordinates. The reference list screen resolves to exactly four
    values: `#000000`, `#ffffff`, `#cccccc` (divider), `#999999` (status text).
+   One exemption, and it is arithmetic rather than a free pass: a modal's scrim is
+   75% white over whatever was behind it, and the prototype dims the whole canvas
+   including the status bar, so the dimmed tones cannot be tokens. `tests/wifi.rs`
+   allows the exact composite of a token and nothing else, which still catches an
+   antialiased corner or a fallback face.
 2. **No antialiasing.** Consequence of (1). The three practical causes of a
    violation are a `border-radius` corner, a `Text` at a fractional offset, and a
    `font-family` that silently fell back to a substitute face.
@@ -135,6 +140,34 @@ the booting profile name, never menu rows.
 and `del`. `src/key.rs` is the single mapping; `tests/tokens.rs` asserts the order
 and that no `del` key exists.
 
+## The Wi-Fi page, ported 2026-09-02
+
+`apps/wifi.js` and its five server endpoints, transcribed into `ui/wifi.slint`,
+`src/wifi.rs` and the state machine in `bin/flipctl`. Four places where the port
+does not do what the prototype does, and why:
+
+**Truncation ends in `..`, not an ellipsis.** `ellipsizeTo` appends U+2026 and the
+panel's fonts are printable ASCII only, so the prototype's own glyph table
+substitutes `?` for it: a cut SSID reads "MyNetwo?" on the device. `..` is what
+this port already truncates with, in `detail::elide`.
+
+**A missing value reads `-`, not an em dash.** Same reason: the em-dash character
+wifi.js uses for an unknown Auto join state is not in the table either.
+
+**Auto join is written, not only shown.** wifi.js flips its own copy and leaves
+`nmcli connection modify` for later, so the row forgets on reopen. Here it is
+written, detached and optimistic like the radio toggles.
+
+**No touchpad scroll on the settings page, and no LED.** The prototype drags that
+modal with `/api/touchpad/xy` and pulses the Wi-Fi LED blue while a join runs.
+Neither source exists on this side: flipctl has no touchpad input path, and the
+LEDs are driven by the prototype's server. Keys scroll it instead.
+
+One prototype bug is not reproduced. The connect prompt keeps its keyboard on
+screen under a wash while nmcli works; here the page comes back with the spinner
+over its own list, which is the same state the saved-profile join already showed,
+and a refusal reopens the keyboard with nmcli's own reason under the field.
+
 ## Soft-button strip, approved 2026-08-19
 
 Measured pixel by pixel from the Figma export `soft_button_bar`, which is kept as
@@ -208,8 +241,12 @@ otherwise. These are the exact bytes the panel receives.
 | `compare-full-4x.png` | both full screens |
 | `compare-grey-vs-none-3x.png` | before and after the grey was removed |
 
-`tests/golden/list.png` and `list-pressed.png` are the committed goldens.
-Regenerate with `FLIPPER_UI_BLESS=1 cargo test --features slint`.
+`tests/golden/list.png` and `list-pressed.png` are the committed goldens, along
+with the Ethernet cards, the card row and ten Wi-Fi screens: the page with the
+radio on and off, the visible list plain, pressed and still scanning, the saved
+list, and one network's settings on each of its three kinds of row plus its own
+loading state. Regenerate with `FLIPPER_UI_BLESS=1 cargo test --features screens`,
+and look at what changed before committing it.
 
 ## Still to inventory
 
@@ -217,8 +254,12 @@ Status-bar badges (5G bars and tech label, wifi 7x7, ethernet 13x7, recording
 dot, battery 16x9 with charging overlay and percentage), scrollbar with dotted
 track, `PopupMenuLeft`, `DeleteConfirmDialog`, virtual keyboard (15x16 keys in a
 250x77 container), `TextInputBox` / `InputField`, `MessageBox` and its tail,
-`ResponsiveFrame`, `TabHeader`, roughly 35 static 6-bit greyscale icons and 10
-animated vertical strips at 200ms per frame.
+roughly 35 static 6-bit greyscale icons and 10 animated vertical strips at 200ms
+per frame.
+
+`ResponsiveFrame`, `TabHeader` and the dotted scrollbar came with the Wi-Fi page:
+the frame is `SelectorFrame` with per-corner radius flags, and the other two are
+components of their own in `ui/frame.slint`.
 
 ## Driver gaps found on the device
 

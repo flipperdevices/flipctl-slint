@@ -214,6 +214,32 @@ impl NetSource {
         self.dirty.swap(false, Ordering::Relaxed)
     }
 
+    /// Turn the Wi-Fi radio on or off.
+    ///
+    /// Not the same control as airplane mode, which is both radios at once: this is
+    /// `nmcli radio wifi`, which the Wi-Fi page's own toggle drives. Optimistic and
+    /// confirmed the same way, for the same reason: the row has to redraw on the
+    /// frame the key was pressed on.
+    ///
+    /// Turning the radio on cannot leave airplane mode set, since that is the state
+    /// of both radios being off. Turning it off says nothing about the other one, so
+    /// that is left for the confirming read to settle.
+    pub fn set_wifi_enabled(&self, on: bool) {
+        {
+            let mut cur = self.state.lock().unwrap();
+            cur.wifi_enabled = on;
+            if on {
+                cur.airplane = false;
+            } else {
+                cur.wifi_connected = false;
+                cur.ssid.clear();
+            }
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+        spawn_detached(&["nmcli", "radio", "wifi", if on { "on" } else { "off" }]);
+        let _ = self.poke.send(Wake::Ours);
+    }
+
     /// Turn airplane mode on or off.
     ///
     /// Airplane on means both radios off, so the nmcli argument is inverted. The

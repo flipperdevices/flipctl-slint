@@ -1,0 +1,811 @@
+// The Wi-Fi page, and the three modals that open over it.
+//
+// Transcribed from apps/wifi.js. The page itself is a short list, but almost
+// everything the screen does happens in a modal, and the three of them share one
+// chrome: a black tab with a frame hanging off it, sized to its content and
+// centred until its bottom would pass y128, at which point it is pinned there and
+// the rest is scrolled.
+//
+// Four things about it are easy to lose:
+//
+//   * The page's rows are 13px with no icons and no font swap on selection. Every
+//     other list in the system swaps face when a row is highlighted; this one
+//     does not, so the whole page is HaxrCorp throughout.
+//   * A row that drills in has no ">" glyph of its own. The affordance is the
+//     selector's chevron bar, which appears only while the row is selected, so an
+//     unselected drill-in row is indistinguishable from a plain one until it is
+//     reached.
+//   * Group boundaries are explicit divider rows, not a rule between every pair.
+//     Rows inside a group sit flush against each other.
+//   * Every modal scrolls in pixels rather than rows. The settings modal mixes
+//     row heights - a 2px section rule, a 13px action, a card as tall as its
+//     lines - so a row-indexed scroll cannot land on a whole row anyway.
+//
+// Layout arithmetic that depends on measuring a string is done on the Rust side,
+// as it is for the Ethernet dump: the modals size themselves around their content
+// and Slint cannot take a maximum across a model.
+import { FlipperTheme } from "@theme";
+import { SelectorFrame, TabHeader, Scrollbar } from "frame.slint";
+import { ChevronStatus } from "list.slint";
+import { CardChevron } from "card.slint";
+import { StatusBar, PanelStatus } from "statusbar.slint";
+
+// One row of the Wi-Fi page.
+export struct WifiRow {
+    // 0 a plain row, 1 a group divider, 2 the radio toggle, 3 the connected
+    // network, which is the only row with two colours of text in it.
+    kind: int,
+    // Where this row sits. Given rather than multiplied out here because the
+    // connected row is a pixel taller than the rest and a divider is 3px, so the
+    // pitch is not constant.
+    y: length,
+    text: string,
+    // The toggle's value, "ON" or "OFF", or the grey half of the connected row.
+    value: string,
+    // Where `text` starts, for a row whose two halves are different colours. The
+    // caller measures it: Slint drops a trailing space when it measures a string,
+    // and "Connected to: " ends in one, so a hidden Text of it lands the name two
+    // pixels left of where the prototype puts it.
+    text_x: length,
+    // Whether the row drills in, which is what puts the chevron bar on the
+    // selector when it lands here.
+    chevron: bool,
+}
+
+// One row of the visible-networks or saved-networks modal.
+export struct WifiNetRow {
+    // Already cut to the width the caller measured for it.
+    text: string,
+    // "WPA2", "WPA3-E", "WEP". Empty for an open network, and for every row of
+    // the saved list, which carries no security column.
+    security: string,
+    // 0-100, for the same five sprites the status bar picks from.
+    quality: int,
+    // Whether a rule is drawn under this row. Set on every row but the last
+    // visible one: the rule separates two rows, so one below the final row would
+    // be underlining the list.
+    divider: bool,
+}
+
+// One row of one network's settings.
+export struct WifiDetailRow {
+    // 0 a rule, 1 an action, 2 the passphrase, 3 a label and its value, 4 a
+    // section label, 5 a value under one, 6 a line saying there is nothing to
+    // show, 7 a card: a frame around the lines that follow it.
+    kind: int,
+    y: length,
+    // This row's own height, which the caller computes: a card is as tall as its
+    // lines and a rule is a band with a line in it.
+    h: length,
+    label: string,
+    value: string,
+    // Whether the selector can land here. A rule and a card's own lines cannot
+    // be reached; the card they belong to can.
+    selectable: bool,
+    // Set on the lines inside a card. They sit at the same x as any other row's
+    // text; what differs is the rule, which is inset to the card and drawn in the
+    // lighter tone.
+    in_card: bool,
+    // An action whose value is an ON/OFF toggle, which is Auto join.
+    toggle: bool,
+    // A value with nothing behind it yet: "Loading...", "open", "-".
+    dim: bool,
+    // Push the value down 2px. The asterisks of a masked passphrase sit high in
+    // HaxrCorp, near the ascender, so a mask drawn on the row's own baseline
+    // reads as floating above it.
+    nudge: bool,
+}
+
+// The selector for a 13px row: the chamfered outline with its drop shadow, and
+// the drill-in bar when the row it is on opens something.
+component RowSelector inherits Rectangle {
+    in property <length> frame_w;
+    in property <length> frame_h;
+    in property <bool> chevron;
+
+    width: root.frame_w;
+    height: root.frame_h;
+    background: transparent;
+
+    // The bar goes under the stroke, as it does on a card: drawn after it, it
+    // would paint over the frame's own right edge.
+    if root.chevron: CardChevron {
+        frame_w: root.frame_w;
+        frame_h: root.frame_h;
+    }
+
+    SelectorFrame {
+        x: 0;
+        y: 0;
+        frame_w: root.frame_w;
+        frame_h: root.frame_h;
+        filled: false;
+        stroke: true;
+    }
+}
+
+// The black fill of a row being pressed, under the row's own text.
+//
+// The one corner rule: the 45-degree diagonal at the small radius, not
+// drawRoundRect's tighter two-pixel step. See docs/inventory.md.
+component PressFill inherits Rectangle {
+    in property <length> frame_w;
+    in property <length> frame_h;
+
+    width: root.frame_w;
+    height: root.frame_h;
+    background: transparent;
+
+    SelectorFrame {
+        x: 0;
+        y: 0;
+        frame_w: root.frame_w;
+        frame_h: root.frame_h;
+        filled: true;
+        stroke: false;
+        shadow: false;
+        radius: FlipperTheme.small;
+    }
+}
+
+// The tab, the frame under it and the scrim behind both: what all three modals
+// have in common. The content goes in `body`, already clipped to the frame's
+// interior, and is positioned relative to it.
+component ModalChrome inherits Rectangle {
+    in property <string> tab;
+    in property <length> frame_x;
+    in property <length> frame_w;
+    in property <length> frame_y;
+    in property <length> frame_h;
+    // Whatever the modal is waiting on, over its own body.
+    in property <bool> busy;
+    in property <int> spin_frame;
+    // A short message at the foot of the frame, in a black pill.
+    in property <string> toast;
+
+    width: 100%;
+    height: 100%;
+    background: FlipperTheme.overlay.with-alpha(FlipperTheme.overlay_alpha);
+
+    // The frame's body. Its top-left corner is square so it tucks flush against
+    // the tab's bottom-left; the other three are rounded.
+    SelectorFrame {
+        x: root.frame_x;
+        y: root.frame_y;
+        frame_w: root.frame_w;
+        frame_h: root.frame_h;
+        filled: true;
+        stroke: true;
+        shadow: false;
+        radius: FlipperTheme.menu;
+        round_tl: false;
+        fill_color: FlipperTheme.white;
+        stroke_color: FlipperTheme.black;
+    }
+
+    TabHeader {
+        x: root.frame_x;
+        y: root.frame_y - FlipperTheme.wifi_tab_h;
+        label: root.tab;
+    }
+
+    // The content, clipped inside the border: a row scrolled half out of view is
+    // cut by the frame rather than drawn over it.
+    body := Rectangle {
+        x: root.frame_x + 1px;
+        y: root.frame_y + 1px;
+        width: root.frame_w - 2px;
+        height: root.frame_h - 2px;
+        background: transparent;
+        clip: true;
+        @children
+    }
+
+    // Waiting: a heavier wash over the body with the spinner on it, so what is
+    // underneath is still legible as context but plainly not current.
+    if root.busy: Rectangle {
+        x: root.frame_x + 1px;
+        y: root.frame_y + 1px;
+        width: root.frame_w - 2px;
+        height: root.frame_h - 2px;
+        background: FlipperTheme.overlay.with-alpha(FlipperTheme.wash_alpha);
+    }
+    if root.busy: Image {
+        x: root.frame_x + Math.floor((root.frame_w - FlipperTheme.spin_w) / 2 / 1px) * 1px;
+        y: root.frame_y + Math.floor((root.frame_h - FlipperTheme.spin_h) / 2 / 1px) * 1px;
+        width: FlipperTheme.spin_w;
+        height: FlipperTheme.spin_h;
+        source: @image-url("../assets/icons/spinner_22x20px.png");
+        source-clip-x: 0;
+        source-clip-y: root.spin_frame * (FlipperTheme.spin_h / 1px);
+        source-clip-width: FlipperTheme.spin_w / 1px;
+        source-clip-height: FlipperTheme.spin_h / 1px;
+    }
+
+    if root.toast != "": Rectangle {
+        toast_ref := Text {
+            visible: false;
+            text: root.toast;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+        }
+        property <length> pill_w: (toast_ref.width - 1px) + 2 * FlipperTheme.wifi_toast_pad;
+
+        x: root.frame_x + Math.floor((root.frame_w - self.pill_w) / 2 / 1px) * 1px;
+        y: root.frame_y + root.frame_h - FlipperTheme.wifi_toast_h
+            - FlipperTheme.wifi_toast_pad_b;
+        width: self.pill_w;
+        height: FlipperTheme.wifi_toast_h;
+        background: transparent;
+
+        SelectorFrame {
+            x: 0;
+            y: 0;
+            frame_w: parent.width;
+            frame_h: parent.height;
+            filled: true;
+            stroke: false;
+            shadow: false;
+            radius: FlipperTheme.menu;
+        }
+        Text {
+            x: FlipperTheme.wifi_toast_pad;
+            y: Math.floor((parent.height - FlipperTheme.kb_text_ink_h) / 2 / 1px) * 1px;
+            text: root.toast;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.white;
+        }
+    }
+}
+
+// The visible-networks and saved-networks modals, which are one list drawn with
+// or without its signal column.
+//
+// The two differ in what the caller measures for them - the visible list is the
+// full width and the saved list is as wide as its longest name - and in whether a
+// row drills in, which the saved list's do.
+component WifiListModal inherits Rectangle {
+    in property <[WifiNetRow]> rows;
+    in property <int> selected;
+    // Which row is showing its press, or -1.
+    in property <int> pressed: -1;
+    in property <string> tab;
+    in property <length> frame_x;
+    in property <length> frame_w;
+    in property <length> frame_y;
+    in property <length> frame_h;
+    // First row's top, and the height the rows have to fit in.
+    in property <length> inner_top;
+    in property <length> inner_h;
+    // Pixels scrolled off the top.
+    in property <length> offset;
+    in property <bool> show_signal;
+    in property <bool> chevron_sel;
+    // Shown instead of the rows. Centred for a list that has nothing in it,
+    // left-aligned for one that has not arrived yet.
+    in property <string> placeholder;
+    in property <bool> placeholder_centred;
+    // The scan has not come back yet, which is not the same as its having come
+    // back empty.
+    in property <bool> loading;
+    in property <bool> busy;
+    in property <int> spin_frame;
+    in property <string> toast;
+    // The bar's own units: rows here, pixels in the settings modal. Both are
+    // ratios, so the arithmetic does not care which.
+    in property <int> bar_total;
+    in property <int> bar_visible;
+    in property <int> bar_offset;
+
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    property <bool> needs_scroll: root.bar_total > root.bar_visible;
+    // Content bounds inside the clipping rectangle, which starts one pixel inside
+    // the frame. x = 0 there is the frame's own inner edge.
+    property <length> row_x: FlipperTheme.wifi_inner_pad - 1px;
+    property <length> row_w: root.frame_w - 2 * FlipperTheme.wifi_inner_pad
+        - (root.needs_scroll ? FlipperTheme.wifi_modal_gutter : 0);
+    property <length> clip_y: root.frame_y + 1px;
+
+    ModalChrome {
+        tab: root.tab;
+        frame_x: root.frame_x;
+        frame_w: root.frame_w;
+        frame_y: root.frame_y;
+        frame_h: root.frame_h;
+        busy: root.busy;
+        spin_frame: root.spin_frame;
+        toast: root.toast;
+
+        if root.loading: Image {
+            x: Math.floor((root.frame_w - FlipperTheme.spin_w) / 2 / 1px) * 1px - 1px;
+            y: root.inner_top + Math.floor((root.inner_h - FlipperTheme.spin_h) / 2 / 1px) * 1px
+                - root.clip_y;
+            width: FlipperTheme.spin_w;
+            height: FlipperTheme.spin_h;
+            source: @image-url("../assets/icons/spinner_22x20px.png");
+            source-clip-x: 0;
+            source-clip-y: root.spin_frame * (FlipperTheme.spin_h / 1px);
+            source-clip-width: FlipperTheme.spin_w / 1px;
+            source-clip-height: FlipperTheme.spin_h / 1px;
+        }
+
+        if !root.loading && root.placeholder != "": Text {
+            x: root.placeholder_centred
+                ? Math.floor((root.frame_w - (self.width - 1px)) / 2 / 1px) * 1px - 1px
+                : root.row_x + FlipperTheme.wifi_text_pad_l;
+            y: root.placeholder_centred
+                ? root.inner_top + Math.floor((root.inner_h - FlipperTheme.kb_text_ink_h)
+                    / 2 / 1px) * 1px - root.clip_y
+                : root.inner_top - root.clip_y + FlipperTheme.wifi_placeholder_dy;
+            text: root.placeholder;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.disabled_fg;
+        }
+
+        for row[i] in root.rows: Rectangle {
+            property <bool> down: i == root.pressed;
+            property <color> ink: self.down ? FlipperTheme.white : FlipperTheme.black;
+            property <color> dim_ink: self.down ? FlipperTheme.white : FlipperTheme.disabled_fg;
+            // The signal sprite, and the security tag ending one gap left of it.
+            property <length> icon_x: root.row_w - 7px - FlipperTheme.wifi_row_pad_r;
+            property <length> sec_end: root.show_signal
+                ? self.icon_x - FlipperTheme.wifi_signal_gap
+                : root.row_w - FlipperTheme.wifi_row_pad_r;
+
+            visible: !root.loading && root.placeholder == "";
+            x: root.row_x;
+            y: root.inner_top + i * FlipperTheme.wifi_row_pitch - root.offset - root.clip_y;
+            width: root.row_w;
+            height: FlipperTheme.wifi_row_h;
+            background: transparent;
+
+            if self.down: PressFill {
+                x: 0;
+                y: -1px;
+                frame_w: parent.width;
+                frame_h: FlipperTheme.wifi_selector_h;
+            }
+
+            if root.show_signal: Image {
+                x: parent.icon_x;
+                y: Math.floor((FlipperTheme.wifi_row_h - 7px) / 2 / 1px) * 1px;
+                width: 7px;
+                height: 7px;
+                // The same five buckets the status bar picks from, so a network
+                // listed here and the same network in the bar read alike.
+                source: row.quality >= 80 ? @image-url("../assets/icons/wifi_100.png")
+                    : row.quality >= 60 ? @image-url("../assets/icons/wifi_75.png")
+                    : row.quality >= 40 ? @image-url("../assets/icons/wifi_50.png")
+                    : row.quality >= 20 ? @image-url("../assets/icons/wifi_25.png")
+                    : @image-url("../assets/icons/wifi_0.png");
+                colorize: parent.ink;
+            }
+
+            if row.security != "": Text {
+                x: parent.sec_end - (self.width - 1px);
+                y: FlipperTheme.wifi_text_dy;
+                text: row.security;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+                color: parent.dim_ink;
+            }
+
+            Text {
+                x: FlipperTheme.wifi_text_pad_l;
+                y: FlipperTheme.wifi_text_dy;
+                text: row.text;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+                color: parent.ink;
+            }
+
+            if row.divider: Rectangle {
+                x: 2px;
+                y: FlipperTheme.wifi_row_h;
+                width: parent.width - 4px;
+                height: 1px;
+                background: FlipperTheme.rule_faint;
+            }
+        }
+
+        // The selector, over the rows. Suppressed while the row under it is
+        // showing its press: the filled black already says where the cursor is.
+        if root.rows.length > 0 && !root.loading && root.placeholder == ""
+                && root.pressed != root.selected: RowSelector {
+            x: root.row_x;
+            y: root.inner_top + root.selected * FlipperTheme.wifi_row_pitch
+                - root.offset - root.clip_y + FlipperTheme.selector_y_offset;
+            frame_w: root.row_w;
+            frame_h: FlipperTheme.wifi_selector_h;
+            chevron: root.chevron_sel;
+        }
+    }
+
+    if root.needs_scroll: Scrollbar {
+        x: root.frame_x + root.frame_w - FlipperTheme.wifi_scrollbar_pad - 1px;
+        y: root.inner_top;
+        height: root.inner_h;
+        total: root.bar_total;
+        visible_extent: root.bar_visible;
+        offset: root.bar_offset;
+    }
+}
+
+// One network's settings: actions at the top, then the passphrase, then a card
+// per address family.
+component WifiDetailModal inherits Rectangle {
+    in property <[WifiDetailRow]> rows;
+    in property <int> selected;
+    in property <int> pressed: -1;
+    in property <string> tab;
+    in property <length> frame_x;
+    in property <length> frame_w;
+    in property <length> frame_y;
+    in property <length> frame_h;
+    in property <length> inner_top;
+    in property <length> inner_h;
+    in property <length> offset;
+    in property <bool> busy;
+    in property <int> spin_frame;
+    in property <string> toast;
+    in property <int> bar_total;
+    in property <int> bar_visible;
+    in property <int> bar_offset;
+
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    property <bool> needs_scroll: root.bar_total > root.bar_visible;
+    property <length> row_x: FlipperTheme.wifi_inner_pad - 1px;
+    property <length> row_w: root.frame_w - 2 * FlipperTheme.wifi_inner_pad
+        - (root.needs_scroll ? FlipperTheme.wifi_modal_gutter : 0);
+    property <length> clip_y: root.frame_y + 1px;
+
+    // The selected row, for the selector. A card takes the chevron bar, since the
+    // whole card is what OK would open; the passphrase row is given 3px of air
+    // above and below instead of 1, so the ring does not crowd the mask.
+    property <length> sel_pad: root.rows[root.selected].kind == 2
+        ? FlipperTheme.wifi_pw_pad
+        : 1px;
+
+    ModalChrome {
+        tab: root.tab;
+        frame_x: root.frame_x;
+        frame_w: root.frame_w;
+        frame_y: root.frame_y;
+        frame_h: root.frame_h;
+        busy: root.busy;
+        spin_frame: root.spin_frame;
+        toast: root.toast;
+
+        for row[i] in root.rows: Rectangle {
+            property <bool> down: i == root.pressed;
+            property <color> ink: self.down ? FlipperTheme.white : FlipperTheme.black;
+            property <color> label_ink: self.down ? FlipperTheme.white : FlipperTheme.field_label;
+            property <color> value_ink: row.dim
+                ? (self.down ? FlipperTheme.white : FlipperTheme.disabled_fg)
+                : self.ink;
+
+            x: root.row_x;
+            y: root.inner_top + row.y - root.offset - root.clip_y;
+            width: root.row_w;
+            height: row.h;
+            background: transparent;
+
+            if self.down && row.selectable: PressFill {
+                x: 0;
+                y: -1px;
+                frame_w: parent.width;
+                frame_h: row.h + 2px;
+            }
+
+            // A rule, inset from the content on both sides so it reads as
+            // separating groups rather than as a border. A card's own rule is
+            // inset again, to the card, and drawn in the lighter tone.
+            if row.kind == 0: Rectangle {
+                x: row.in_card
+                    ? FlipperTheme.wifi_card_inset + FlipperTheme.menu
+                    : FlipperTheme.menu;
+                y: 1px;
+                width: row.in_card
+                    ? parent.width - 2 * FlipperTheme.wifi_card_gutter - 2 * FlipperTheme.menu
+                    : parent.width - 2 * FlipperTheme.menu;
+                height: 1px;
+                background: row.in_card ? FlipperTheme.rule_light : FlipperTheme.divider;
+            }
+
+            // An action, and the label half of the passphrase row, which are the
+            // same thing drawn at the same place.
+            if row.kind == 1 || row.kind == 2: Text {
+                x: FlipperTheme.wifi_text_pad_l;
+                y: FlipperTheme.wifi_text_dy;
+                text: row.label;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+                color: parent.ink;
+            }
+
+            if row.kind == 1 && row.toggle: ChevronStatus {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: row.h;
+                face: 1;
+                text_y: FlipperTheme.wifi_text_dy;
+                fixed_slot: true;
+                active: i == root.selected;
+                value: row.value;
+                ink: i == root.selected ? FlipperTheme.black : FlipperTheme.status_dim;
+            }
+
+            // The passphrase, right-aligned against the content edge. The caller
+            // has already cut it to fit, from the left: the tail of a key is the
+            // part someone checks first.
+            if row.kind == 2: Text {
+                x: parent.width - FlipperTheme.wifi_row_pad_r - (self.width - 1px);
+                y: FlipperTheme.wifi_text_dy + (row.nudge ? 2px : 0);
+                text: row.value;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+                color: parent.value_ink;
+            }
+
+            // A label and its value, one gap apart.
+            if row.kind == 3: Text {
+                x: FlipperTheme.wifi_text_pad_l;
+                y: FlipperTheme.wifi_text_dy;
+                text: row.label;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+                color: parent.label_ink;
+            }
+            if row.kind == 3: Text {
+                x: FlipperTheme.wifi_text_pad_l + (kv_ref.width - 1px) + FlipperTheme.wifi_label_gap;
+                y: FlipperTheme.wifi_text_dy;
+                text: row.value;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+                color: parent.ink;
+            }
+            kv_ref := Text {
+                visible: false;
+                text: row.label;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+            }
+
+            // A section label over a list of values, and one of those values.
+            if row.kind == 4: Text {
+                x: FlipperTheme.wifi_text_pad_l;
+                y: FlipperTheme.wifi_text_dy;
+                text: row.label;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+                color: parent.label_ink;
+            }
+            if row.kind == 5: Text {
+                x: FlipperTheme.wifi_value_indent;
+                y: FlipperTheme.wifi_text_dy;
+                text: row.value;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+                color: parent.ink;
+            }
+
+            if row.kind == 6: Text {
+                x: FlipperTheme.wifi_text_pad_l;
+                y: FlipperTheme.wifi_text_dy;
+                text: row.value;
+                font-size: 16px;
+                font-family: "HaxrCorp 4090";
+                color: FlipperTheme.disabled_fg;
+            }
+        }
+
+        if root.rows.length > 0 && root.pressed != root.selected: RowSelector {
+            x: root.row_x;
+            y: root.inner_top + root.rows[root.selected].y - root.offset - root.clip_y
+                - root.sel_pad;
+            frame_w: root.row_w;
+            frame_h: root.rows[root.selected].h + 2 * root.sel_pad;
+            chevron: root.rows[root.selected].kind == 7;
+        }
+    }
+
+    if root.needs_scroll: Scrollbar {
+        x: root.frame_x + root.frame_w - FlipperTheme.wifi_scrollbar_pad - 1px;
+        y: root.inner_top;
+        height: root.inner_h;
+        total: root.bar_total;
+        visible_extent: root.bar_visible;
+        offset: root.bar_offset;
+    }
+}
+
+export component WifiBody inherits Rectangle {
+    in property <[WifiRow]> rows;
+    in property <int> selected;
+    in property <string> breadcrumb;
+    // Which chevron of the toggle row is flashing: 0 none, 1 left, 2 right.
+    in property <int> arrow_pressed;
+
+    in property <int> battery: PanelStatus.battery;
+    in property <bool> charging: PanelStatus.charging;
+    in property <bool> wifi_connected: PanelStatus.wifi_connected;
+    in property <int> wifi_quality: PanelStatus.wifi_quality;
+    in property <int> ethernet: PanelStatus.ethernet;
+    in property <bool> recording: PanelStatus.recording;
+    in property <bool> modem_available: PanelStatus.modem_available;
+    in property <string> access_tech: PanelStatus.access_tech;
+    in property <int> modem_quality: PanelStatus.modem_quality;
+
+    // 0 none, 1 a list of networks, 2 one network's settings.
+    in property <int> overlay;
+    in property <[WifiNetRow]> net_rows;
+    in property <[WifiDetailRow]> detail_rows;
+    in property <int> modal_selected;
+    in property <int> modal_pressed: -1;
+    in property <string> modal_tab;
+    in property <length> modal_x;
+    in property <length> modal_w;
+    in property <length> modal_y;
+    in property <length> modal_h;
+    in property <length> modal_inner_top;
+    in property <length> modal_inner_h;
+    in property <length> modal_offset;
+    in property <bool> modal_signal;
+    in property <bool> modal_chevron;
+    in property <string> modal_placeholder;
+    in property <bool> modal_placeholder_centred;
+    in property <bool> modal_loading;
+    in property <bool> modal_busy;
+    in property <int> modal_spin_frame;
+    in property <string> modal_toast;
+    in property <int> modal_bar_total;
+    in property <int> modal_bar_visible;
+    in property <int> modal_bar_offset;
+
+    width: 100%;
+    height: 100%;
+    background: FlipperTheme.white;
+
+    StatusBar {
+        x: 0;
+        y: 0;
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+    }
+
+    if root.breadcrumb != "": Text {
+        x: FlipperTheme.breadcrumb_x;
+        y: FlipperTheme.breadcrumb_y;
+        text: root.breadcrumb;
+        font-size: 16px;
+        font-family: "HaxrCorp 4090";
+        color: FlipperTheme.divider;
+    }
+
+    for row[i] in root.rows: Rectangle {
+        x: FlipperTheme.selector_x;
+        y: row.y;
+        width: FlipperTheme.wifi_selector_w;
+        height: row.kind == 1 ? FlipperTheme.wifi_divider_h : FlipperTheme.wifi_row_h;
+        background: transparent;
+
+        if row.kind == 1: Rectangle {
+            x: FlipperTheme.menu;
+            y: 1px;
+            width: parent.width - 2 * FlipperTheme.menu;
+            height: 1px;
+            background: FlipperTheme.divider;
+        }
+
+        if row.kind != 1 && row.kind != 3: Text {
+            x: FlipperTheme.wifi_text_pad_l;
+            y: FlipperTheme.wifi_text_dy;
+            text: row.text;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.black;
+        }
+
+        // The connected network: a grey half narrating the state, then the name
+        // in black, which is the part that is actionable.
+        if row.kind == 3: Text {
+            x: FlipperTheme.wifi_text_pad_l;
+            y: FlipperTheme.wifi_text_dy;
+            text: row.value;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.disabled_fg;
+        }
+        if row.kind == 3: Text {
+            x: row.text_x;
+            y: FlipperTheme.wifi_text_dy;
+            text: row.text;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.black;
+        }
+
+        if row.kind == 2: ChevronStatus {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: FlipperTheme.wifi_row_h;
+            face: 1;
+            text_y: FlipperTheme.wifi_text_dy;
+            fixed_slot: true;
+            active: i == root.selected;
+            value: row.value;
+            ink: i == root.selected ? FlipperTheme.black : FlipperTheme.status_dim;
+            arrow_pressed: i == root.selected ? root.arrow_pressed : 0;
+        }
+    }
+
+    if root.rows.length > 0: RowSelector {
+        x: FlipperTheme.selector_x;
+        y: root.rows[root.selected].y + FlipperTheme.selector_y_offset;
+        frame_w: FlipperTheme.wifi_selector_w;
+        frame_h: FlipperTheme.wifi_selector_h;
+        chevron: root.rows[root.selected].chevron;
+    }
+
+    if root.overlay == 1: WifiListModal {
+        rows: root.net_rows;
+        selected: root.modal_selected;
+        pressed: root.modal_pressed;
+        tab: root.modal_tab;
+        frame_x: root.modal_x;
+        frame_w: root.modal_w;
+        frame_y: root.modal_y;
+        frame_h: root.modal_h;
+        inner_top: root.modal_inner_top;
+        inner_h: root.modal_inner_h;
+        offset: root.modal_offset;
+        show_signal: root.modal_signal;
+        chevron_sel: root.modal_chevron;
+        placeholder: root.modal_placeholder;
+        placeholder_centred: root.modal_placeholder_centred;
+        loading: root.modal_loading;
+        busy: root.modal_busy;
+        spin_frame: root.modal_spin_frame;
+        toast: root.modal_toast;
+        bar_total: root.modal_bar_total;
+        bar_visible: root.modal_bar_visible;
+        bar_offset: root.modal_bar_offset;
+    }
+
+    if root.overlay == 2: WifiDetailModal {
+        rows: root.detail_rows;
+        selected: root.modal_selected;
+        pressed: root.modal_pressed;
+        tab: root.modal_tab;
+        frame_x: root.modal_x;
+        frame_w: root.modal_w;
+        frame_y: root.modal_y;
+        frame_h: root.modal_h;
+        inner_top: root.modal_inner_top;
+        inner_h: root.modal_inner_h;
+        offset: root.modal_offset;
+        busy: root.modal_busy;
+        spin_frame: root.modal_spin_frame;
+        toast: root.modal_toast;
+        bar_total: root.modal_bar_total;
+        bar_visible: root.modal_bar_visible;
+        bar_offset: root.modal_bar_offset;
+    }
+}

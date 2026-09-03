@@ -41,8 +41,15 @@ export struct ListItem {
 // In both cases the chevrons appear only while the row is highlighted: they are an
 // affordance for left and right, which act on the focused row only, so an
 // unfocused row collapses to the bare value, right-aligned like any other status.
-component ChevronStatus inherits Rectangle {
+export component ChevronStatus inherits Rectangle {
     in property <string> value;
+    // 0 a list row's own face, 1 the title face. The menu's rows are Busy9px; the
+    // Wi-Fi page draws the same "< ON >" in HaxrCorp because none of its rows
+    // swap face on selection.
+    in property <int> face: 0;
+    // Where the glyphs sit inside the row. A 20px menu line puts them at
+    // text_draw_y; a 13px Wi-Fi row is tighter and passes its own.
+    in property <length> text_y: FlipperTheme.text_draw_y;
     // True for the ON/OFF toggle layout, false for a measured value.
     in property <bool> fixed_slot;
     in property <bool> active;
@@ -58,10 +65,10 @@ component ChevronStatus inherits Rectangle {
     // Widths the prototype takes from the font tables. Slint has no text-measuring
     // function, so the measurement is a hidden Text of the same string in the same
     // font, less the one pixel by which Slint's width exceeds textWidth().
-    lt_ref := Text { visible: false; text: "<"; font-size: 16px; font-family: "Busy9px"; }
-    gt_ref := Text { visible: false; text: ">"; font-size: 16px; font-family: "Busy9px"; }
-    off_ref := Text { visible: false; text: "OFF"; font-size: 16px; font-family: "Busy9px"; }
-    value_ref := Text { visible: false; text: root.value; font-size: 16px; font-family: "Busy9px"; }
+    lt_ref := Text { visible: false; text: "<"; font-size: 16px; font-family: root.face == 1 ? "HaxrCorp 4090" : "Busy9px"; }
+    gt_ref := Text { visible: false; text: ">"; font-size: 16px; font-family: root.face == 1 ? "HaxrCorp 4090" : "Busy9px"; }
+    off_ref := Text { visible: false; text: "OFF"; font-size: 16px; font-family: root.face == 1 ? "HaxrCorp 4090" : "Busy9px"; }
+    value_ref := Text { visible: false; text: root.value; font-size: 16px; font-family: root.face == 1 ? "HaxrCorp 4090" : "Busy9px"; }
 
     property <length> lt_w: lt_ref.width - 1px;
     property <length> gt_w: gt_ref.width - 1px;
@@ -83,37 +90,37 @@ component ChevronStatus inherits Rectangle {
 
     if root.active && !root.at_start: Text {
         x: root.lt_x;
-        y: FlipperTheme.text_draw_y;
+        y: root.text_y;
         text: "<";
         font-size: 16px;
-        font-family: "Busy9px";
+        font-family: root.face == 1 ? "HaxrCorp 4090" : "Busy9px";
         color: root.arrow_pressed == 1 ? FlipperTheme.chevron_flash : root.ink;
     }
 
     if root.active: Text {
         x: root.value_x;
-        y: FlipperTheme.text_draw_y;
+        y: root.text_y;
         text: root.value;
         font-size: 16px;
-        font-family: "Busy9px";
+        font-family: root.face == 1 ? "HaxrCorp 4090" : "Busy9px";
         color: root.ink;
     }
 
     if root.active && !root.at_end: Text {
         x: root.gt_x;
-        y: FlipperTheme.text_draw_y;
+        y: root.text_y;
         text: ">";
         font-size: 16px;
-        font-family: "Busy9px";
+        font-family: root.face == 1 ? "HaxrCorp 4090" : "Busy9px";
         color: root.arrow_pressed == 2 ? FlipperTheme.chevron_flash : root.ink;
     }
 
     if !root.active: Text {
         x: root.right_x - root.value_w;
-        y: FlipperTheme.text_draw_y;
+        y: root.text_y;
         text: root.value;
         font-size: 16px;
-        font-family: "Busy9px";
+        font-family: root.face == 1 ? "HaxrCorp 4090" : "Busy9px";
         color: root.ink;
     }
 }

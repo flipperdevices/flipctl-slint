@@ -546,20 +546,20 @@ export component BootBody inherits Rectangle {
     // Nothing to show yet: the spinner while the read runs, and only once it has
     // come back empty does the list say so.
     if root.rows.length == 0 && root.loading: Image {
-        x: Math.floor((root.width - FlipperTheme.boot_spin_w) / 2 / 1px) * 1px;
+        x: Math.floor((root.width - FlipperTheme.spin_w) / 2 / 1px) * 1px;
         y: FlipperTheme.boot_container_y
             + Math.floor(
-                (root.height - FlipperTheme.boot_container_y - FlipperTheme.boot_spin_h) / 2 / 1px
+                (root.height - FlipperTheme.boot_container_y - FlipperTheme.spin_h) / 2 / 1px
               ) * 1px
             - FlipperTheme.boot_spin_lift;
-        width: FlipperTheme.boot_spin_w;
-        height: FlipperTheme.boot_spin_h;
+        width: FlipperTheme.spin_w;
+        height: FlipperTheme.spin_h;
         // One frame out of the vertical strip, so the 8 frames need no 8 files.
         source: @image-url("../assets/icons/spinner_22x20px.png");
         source-clip-x: 0;
-        source-clip-y: root.spin_frame * (FlipperTheme.boot_spin_h / 1px);
-        source-clip-width: FlipperTheme.boot_spin_w / 1px;
-        source-clip-height: FlipperTheme.boot_spin_h / 1px;
+        source-clip-y: root.spin_frame * (FlipperTheme.spin_h / 1px);
+        source-clip-width: FlipperTheme.spin_w / 1px;
+        source-clip-height: FlipperTheme.spin_h / 1px;
     }
     if root.rows.length == 0 && !root.loading: Text {
         x: FlipperTheme.margin_h;

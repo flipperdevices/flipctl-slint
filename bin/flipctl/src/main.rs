@@ -259,6 +259,9 @@ mod demo {
         Detail(Detail),
         /// The boot menu, which lists the bootable profiles.
         Boot,
+        /// The Wi-Fi page: the radio, the network in use, and the lists a person
+        /// joins one from.
+        Wifi,
         /// Hand the panel to the flipctl2 prototype: stop this build, start the
         /// browser that draws that one. There is no way back from the panel,
         /// which is what makes it a testing row rather than a menu entry.
@@ -341,7 +344,7 @@ mod demo {
             Row { label: "Airplane mode", icon: 9, frames: 10, stat: Stat::Airplane, act: Act::Airplane },
             Row { label: "Routing info", icon: 10, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Routing) },
             Row { label: "5G Modem", icon: 11, frames: 1, stat: Stat::ModemBlocked, act: Act::Detail(Detail::Modem) },
-            Row { label: "Wi-Fi", icon: 12, frames: 1, stat: Stat::Wifi, act: Act::Unported },
+            Row { label: "Wi-Fi", icon: 12, frames: 1, stat: Stat::Wifi, act: Act::Wifi },
             Row { label: "Ethernet", icon: 13, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Ethernet) },
         ],
     };
@@ -991,6 +994,226 @@ mod detail {
             out.push(dim(&elide(c), ""));
         }
         out
+    }
+}
+
+/// The Wi-Fi screen's state machine, and the mapping onto Slint's own structs.
+///
+/// The rows and every measurement they need live in `flipper_ui::wifi`, where a
+/// test can build them without a window. What is here is what only this binary
+/// has: the pollers a page owns while it is open, which modal is over it, the
+/// nmcli write that is out, and the four `From` impls that hand the rows over.
+#[cfg(feature = "slint")]
+mod wifi {
+    pub use flipper_ui::wifi::{
+        detail_layout, detail_rows, ensure_visible, fit_password, keep_row_visible,
+        next_selectable, one_line, page_rows, saved_content_h, saved_layout, saved_match,
+        saved_names, saved_rows, selectable, visible_layout, visible_rows, Act, DetailAct,
+        DetailView, Layout, SAVED_TAB, VISIBLE_TAB,
+    };
+    use flipper_ui::wifi::{DetailRow, Details, NetRow, Row, Saved};
+
+    /// The page's pollers, running only while the page is open.
+    ///
+    /// Dropping this is the prototype's `exit()`: both threads stop, and with them
+    /// every `nmcli` this screen was costing.
+    pub struct Live {
+        pub scan: flipper_ui::wifi::ScanSource,
+        pub saved: flipper_ui::watch::Watch<Option<Vec<Saved>>>,
+    }
+
+    impl Live {
+        pub fn open() -> Self {
+            Self {
+                scan: flipper_ui::wifi::ScanSource::spawn(),
+                saved: flipper_ui::wifi::saved_watch(),
+            }
+        }
+
+        /// Whether either poller has something new. Both are asked, so neither
+        /// keeps a change back until the other moves.
+        pub fn take_dirty(&self) -> bool {
+            let scan = self.scan.take_dirty();
+            let saved = self.saved.take_dirty();
+            scan || saved
+        }
+    }
+
+    /// One of the two list modals: where the cursor is and what is scrolled away.
+    #[derive(Default)]
+    pub struct List {
+        pub selected: i32,
+        /// Rows for the visible list, pixels for the saved one. The visible list
+        /// sizes its frame to a whole number of rows and so can index by them; the
+        /// saved list cannot.
+        pub scroll: i32,
+    }
+
+    /// The settings modal for one profile.
+    pub struct Detail {
+        /// The connection's name, which is what every nmcli call takes.
+        pub name: String,
+        /// The tab's label, which is the SSID where the two differ.
+        pub title: String,
+        pub selected: i32,
+        /// Pixels scrolled off the top.
+        pub scroll: i32,
+        pub details: Option<Details>,
+        /// The read, while it is out.
+        pub rx: Option<std::sync::mpsc::Receiver<Details>>,
+        /// Whether this profile is the live connection, which is what puts
+        /// Disconnect at the top of it.
+        pub active: bool,
+        /// OK is being held on the passphrase row.
+        pub reveal: bool,
+    }
+
+    impl Detail {
+        /// Open it, and start the read.
+        pub fn open(name: &str, title: &str, active: bool) -> Self {
+            Self {
+                name: name.to_string(),
+                title: title.to_string(),
+                selected: 0,
+                scroll: 0,
+                details: None,
+                rx: Some(read_details(name)),
+                active,
+                reveal: false,
+            }
+        }
+
+        pub fn loading(&self) -> bool {
+            self.details.is_none()
+        }
+
+        /// Flip Auto join, and tell NetworkManager.
+        ///
+        /// Optimistic, like the radio toggles: the row flips on the frame the key
+        /// was pressed on and the command runs detached, because
+        /// `nmcli connection modify` takes long enough that waiting for it would
+        /// show as a stuck row. wifi.js only flips its own copy and leaves the
+        /// write for later, so this is the row doing what it says.
+        pub fn set_autoconnect(&mut self) {
+            let Some(details) = self.details.as_mut() else {
+                return;
+            };
+            details.autoconnect = !details.autoconnect;
+            flipper_ui::wifi::set_autoconnect(&self.name, details.autoconnect);
+        }
+
+        /// The rows as they stand, for both the key handler and the frame.
+        pub fn view(&self) -> DetailView {
+            detail_rows(
+                self.details.as_ref(),
+                self.loading(),
+                self.active,
+                self.reveal,
+            )
+        }
+    }
+
+    pub enum Modal {
+        None,
+        Visible(List),
+        Saved(List),
+        Details(Detail),
+    }
+
+    /// A write that is out, and what its failure means.
+    ///
+    /// nmcli takes long enough over all of these that the render loop cannot wait
+    /// on any of them: a join is ten to twenty-five seconds on a slow AP.
+    pub enum Op {
+        /// Joining a network whose profile already exists. A failure means the
+        /// saved passphrase is no longer the right one, so it asks for a new one.
+        JoinSaved(String),
+        /// Joining an open network. There is no passphrase to ask for, so a
+        /// failure is only worth saying.
+        JoinOpen,
+        /// Joining with a passphrase that was just typed. A failure goes back to
+        /// the keyboard with the reason on it.
+        JoinKeyed(String),
+        /// Leaving or deleting. Either way the modal closes when it lands.
+        Profile,
+    }
+
+    /// Read one profile's settings off the render loop.
+    pub fn read_details(name: &str) -> std::sync::mpsc::Receiver<Details> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let name = name.to_string();
+        std::thread::Builder::new()
+            .name("wifi-details".into())
+            .spawn(move || {
+                let _ = tx.send(flipper_ui::wifi::details(&name));
+            })
+            .ok();
+        rx
+    }
+
+    /// Run one nmcli write off the render loop.
+    pub fn spawn_op(
+        work: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> std::sync::mpsc::Receiver<Result<(), String>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("wifi-op".into())
+            .spawn(move || {
+                let _ = tx.send(work());
+            })
+            .ok();
+        rx
+    }
+
+
+    /// The page's rows, as Slint's own struct.
+    pub fn row_model(rows: &[Row]) -> slint::ModelRc<flipper_ui::ui::WifiRow> {
+        slint::ModelRc::new(slint::VecModel::from(
+            rows.iter()
+                .map(|r| flipper_ui::ui::WifiRow {
+                    kind: r.kind,
+                    y: r.y as f32,
+                    text: r.text.as_str().into(),
+                    value: r.value.as_str().into(),
+                    text_x: r.text_x as f32,
+                    chevron: r.chevron,
+                })
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    /// A list modal's rows.
+    pub fn net_model(rows: &[NetRow]) -> slint::ModelRc<flipper_ui::ui::WifiNetRow> {
+        slint::ModelRc::new(slint::VecModel::from(
+            rows.iter()
+                .map(|r| flipper_ui::ui::WifiNetRow {
+                    text: r.text.as_str().into(),
+                    security: r.security.as_str().into(),
+                    quality: r.quality,
+                    divider: r.divider,
+                })
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    /// The settings modal's rows.
+    pub fn detail_model(rows: &[DetailRow]) -> slint::ModelRc<flipper_ui::ui::WifiDetailRow> {
+        slint::ModelRc::new(slint::VecModel::from(
+            rows.iter()
+                .map(|r| flipper_ui::ui::WifiDetailRow {
+                    kind: r.kind,
+                    y: r.y as f32,
+                    h: r.h as f32,
+                    label: r.label.as_str().into(),
+                    value: r.value.as_str().into(),
+                    selectable: r.selectable,
+                    in_card: r.in_card,
+                    toggle: r.toggle,
+                    dim: r.dim,
+                    nudge: r.nudge,
+                })
+                .collect::<Vec<_>>(),
+        ))
     }
 }
 
@@ -1761,6 +1984,132 @@ fn apply_idle(screen: &flipper_ui::ui::Root, idle: &flipper_ui::status::Idle) {
 }
 
 /// Copy a status reading into the screen's properties.
+/// Hand the Wi-Fi page, and whichever modal is over it, to the window.
+///
+/// Every modal is sized around its own content, so this is where the measuring
+/// happens: how many rows fit, how wide the longest name is, how tall the settings
+/// came out. The Slint side is given coordinates.
+#[cfg(feature = "slint")]
+fn apply_wifi(
+    screen: &flipper_ui::ui::Root,
+    net: &flipper_ui::net::Net,
+    selected: i32,
+    modal: &wifi::Modal,
+    live: Option<&wifi::Live>,
+    spin: i32,
+    toast: &str,
+    busy: bool,
+    pressed: i32,
+) {
+    use flipper_ui::theme::metric as m;
+
+    let page = wifi::page_rows(net);
+    screen.set_wifi_rows(wifi::row_model(&page));
+    screen.set_wifi_selected(selected.clamp(0, (page.len() as i32 - 1).max(0)));
+    screen.set_wifi_modal_spin_frame(spin);
+    screen.set_wifi_modal_toast(toast.into());
+    screen.set_wifi_modal_busy(busy);
+    screen.set_wifi_modal_pressed(pressed);
+    // Only the visible list carries a signal column and only the saved list drills
+    // in, so both are off unless the modal that wants them is the one open.
+    screen.set_wifi_modal_signal(false);
+    screen.set_wifi_modal_chevron(false);
+    screen.set_wifi_modal_loading(false);
+    screen.set_wifi_modal_placeholder(Default::default());
+    screen.set_wifi_modal_placeholder_centred(false);
+
+    let place = |l: &wifi::Layout| {
+        screen.set_wifi_modal_x(l.frame_x as f32);
+        screen.set_wifi_modal_w(l.frame_w as f32);
+        screen.set_wifi_modal_y(l.frame_y as f32);
+        screen.set_wifi_modal_h(l.frame_h as f32);
+        screen.set_wifi_modal_inner_top(l.inner_top as f32);
+        screen.set_wifi_modal_inner_h(l.inner_h as f32);
+    };
+
+    match modal {
+        wifi::Modal::None => screen.set_wifi_overlay(0),
+
+        wifi::Modal::Visible(list) => {
+            let scan = live.map(|l| l.scan.get()).unwrap_or_default();
+            let count = scan.networks.len() as i32;
+            let layout = wifi::visible_layout(scan.ready, count);
+            let needs_scroll = count > layout.visible;
+            // The last row of the viewport, which is the one that gets no rule
+            // under it.
+            let last = list.scroll + layout.visible - 1;
+            screen.set_wifi_net_rows(wifi::net_model(&wifi::visible_rows(
+                &scan.networks,
+                layout.row_w(needs_scroll),
+                last,
+            )));
+            screen.set_wifi_modal_tab(wifi::VISIBLE_TAB.into());
+            screen.set_wifi_modal_signal(true);
+            // Waiting for the sweep, which is not the same as its having come back
+            // with nothing: the spinner says one and the placeholder the other.
+            screen.set_wifi_modal_loading(!scan.ready);
+            if scan.ready && count == 0 {
+                screen.set_wifi_modal_placeholder("No networks".into());
+                screen.set_wifi_modal_placeholder_centred(true);
+            }
+            screen.set_wifi_modal_selected(list.selected.clamp(0, (count - 1).max(0)));
+            screen.set_wifi_modal_offset((list.scroll * m::WIFI_ROW_PITCH) as f32);
+            // This list is the one that can index by rows, since its frame is sized
+            // to a whole number of them.
+            screen.set_wifi_modal_bar_total(count);
+            screen.set_wifi_modal_bar_visible(layout.visible);
+            screen.set_wifi_modal_bar_offset(list.scroll);
+            place(&layout);
+            screen.set_wifi_overlay(1);
+        }
+
+        wifi::Modal::Saved(list) => {
+            let saved = live.and_then(|l| l.saved.get());
+            let names = wifi::saved_names(saved.as_deref().unwrap_or_default());
+            let count = names.len() as i32;
+            let layout = wifi::saved_layout(&names);
+            let content = wifi::saved_content_h(count);
+            let needs_scroll = content > layout.inner_h;
+            screen.set_wifi_net_rows(wifi::net_model(&wifi::saved_rows(
+                &names,
+                layout.row_w(needs_scroll),
+            )));
+            screen.set_wifi_modal_tab(wifi::SAVED_TAB.into());
+            screen.set_wifi_modal_chevron(true);
+            screen.set_wifi_modal_placeholder(match &saved {
+                // Nobody has looked yet, which reads differently from having looked
+                // and found none.
+                None => "Loading..".into(),
+                Some(_) if count == 0 => "No saved networks".into(),
+                Some(_) => Default::default(),
+            });
+            screen.set_wifi_modal_selected(list.selected.clamp(0, (count - 1).max(0)));
+            screen.set_wifi_modal_offset(list.scroll as f32);
+            screen.set_wifi_modal_bar_total(content);
+            screen.set_wifi_modal_bar_visible(layout.inner_h);
+            screen.set_wifi_modal_bar_offset(list.scroll);
+            place(&layout);
+            screen.set_wifi_overlay(1);
+        }
+
+        wifi::Modal::Details(d) => {
+            let mut view = d.view();
+            let layout = wifi::detail_layout(view.content_h);
+            let needs_scroll = view.content_h > layout.inner_h;
+            wifi::fit_password(&mut view.rows, layout.row_w(needs_scroll));
+            screen.set_wifi_detail_rows(wifi::detail_model(&view.rows));
+            screen.set_wifi_modal_tab(d.title.as_str().into());
+            screen.set_wifi_modal_selected(d.selected);
+            screen.set_wifi_modal_offset(d.scroll as f32);
+            screen.set_wifi_modal_bar_total(view.content_h);
+            screen.set_wifi_modal_bar_visible(layout.inner_h);
+            screen.set_wifi_modal_bar_offset(d.scroll);
+            place(&layout);
+            screen.set_wifi_overlay(2);
+        }
+    }
+}
+
 #[cfg(feature = "slint")]
 fn apply_status(screen: &flipper_ui::ui::Root, s: flipper_ui::Status) {
     use flipper_ui::Ethernet;
@@ -2172,7 +2521,14 @@ fn panel(
     // The text-input screen, open only while something is being named. It carries
     // the name it will rename, because the list can be re-read while it is up.
     let mut kb: Option<flipper_ui::keyboard::TextInput> = None;
-    let mut kb_for = String::new();
+    // What the keyboard is collecting. A profile's new name is checked as it is
+    // typed, and the line under the field says why it is refused; a passphrase is
+    // never refused by us, so that line carries the AP's own last refusal instead.
+    enum KbFor {
+        Profile(String),
+        Passphrase { ssid: String, error: String },
+    }
+    let mut kb_for = KbFor::Profile(String::new());
     let mut kb_dirty = false;
     let mut kb_cursor_shown = false;
     // When the card in front was last photographed. Cards are refreshed as the
@@ -2191,6 +2547,57 @@ fn panel(
                     | Deps::Done(i, _),
                 ) => apps.get(*i as usize).map(|a| a.name.as_str()),
                 None => None,
+            }
+        };
+    }
+
+    // The Wi-Fi page: where the cursor is, what is polling for it, and whichever
+    // modal is over it. The pollers live in `wifi_live` so that leaving the page
+    // drops them, which is what the prototype's exit() does.
+    let mut wifi_selected = 0i32;
+    let mut wifi_live: Option<wifi::Live> = None;
+    let mut wifi_modal = wifi::Modal::None;
+    let mut wifi_dirty = true;
+    // The nmcli write that is out, and what its failure means.
+    let mut wifi_op: Option<(wifi::Op, std::sync::mpsc::Receiver<Result<(), String>>)> = None;
+    // A pill at the foot of the open modal, and when it goes.
+    let mut wifi_toast: Option<(String, Instant)> = None;
+    let mut wifi_spin = 0i32;
+
+    // Back to the menu a screen was opened from, with that level's own crumb.
+    //
+    // Every screen that is not the menu leaves it the same way, and the trail has
+    // to come back with it: the main menu draws none and a submenu draws its own.
+    macro_rules! menu_again {
+        () => {{
+            let menu = stack.last().unwrap().0;
+            demo::apply_menu(&screen, menu, &net_now);
+            screen.set_breadcrumb(
+                if menu.title.is_empty() {
+                    String::new()
+                } else {
+                    format!("> {}", menu.title)
+                }
+                .as_str()
+                .into(),
+            );
+            screen.set_screen(Screen::Menu);
+        }};
+    }
+
+    // The line under the text field, for whatever the keyboard is collecting.
+    macro_rules! kb_warning {
+        ($input:expr) => {
+            match &kb_for {
+                KbFor::Profile(name) => {
+                    let being = flipper_ui::boot::Profile {
+                        name: name.clone(),
+                        ..Default::default()
+                    };
+                    let existing = boot.as_ref().map(|m| m.profiles()).unwrap_or(&[]);
+                    flipper_ui::boot::rename_warning(&$input.text, &being, existing)
+                }
+                KbFor::Passphrase { error, .. } => error.clone(),
             }
         };
     }
@@ -3018,6 +3425,17 @@ fn panel(
                         }
                     }
                 }
+                // The passphrase is shown for as long as OK is down and no longer:
+                // it is on screen in plain text, and a key that had to be pressed
+                // twice to hide it again would be a way to leave it there.
+                if screen.get_screen() == Screen::Wifi && event.key == FlipperKey::Ok {
+                    if let wifi::Modal::Details(d) = &mut wifi_modal {
+                        if d.reveal {
+                            d.reveal = false;
+                            wifi_dirty = true;
+                        }
+                    }
+                }
                 continue;
             }
             // With the deck open, nothing underneath sees a press.
@@ -3279,6 +3697,208 @@ fn panel(
                 continue;
             }
 
+            // The Wi-Fi page owns its keys, and a modal over it owns them first:
+            // the prototype's handleInput hands everything to the modal and returns
+            // before the page sees any of it.
+            //
+            // Opening a modal is immediate rather than flashed. These rows have no
+            // pressed state to show -- the page draws no fill under them -- so there
+            // would be nothing for a deferral to make visible. A modal's own rows do
+            // invert, and those go through the flash.
+            if screen.get_screen() == Screen::Wifi {
+                let page = wifi::page_rows(&net_now);
+                let dir = match event.key {
+                    FlipperKey::Down => 1,
+                    FlipperKey::Up => -1,
+                    _ => 0,
+                };
+                let leaving = matches!(event.key, FlipperKey::Escape | FlipperKey::Back);
+                // Assigned after the match rather than inside it: the arms hold a
+                // borrow of the modal they would be replacing.
+                let mut next: Option<wifi::Modal> = None;
+                match &mut wifi_modal {
+                    wifi::Modal::None => {
+                        let act = page.get(wifi_selected as usize).map(|r| r.act);
+                        let radio = act == Some(wifi::Act::Radio);
+                        match event.key {
+                            FlipperKey::Down | FlipperKey::Up => {
+                                let reachable: Vec<bool> =
+                                    page.iter().map(|r| r.act != wifi::Act::Divider).collect();
+                                let at = wifi::next_selectable(&reachable, wifi_selected, dir);
+                                if at >= 0 {
+                                    wifi_selected = at;
+                                }
+                                wifi_dirty = true;
+                            }
+                            // Left, right and ok all flip the radio: wifi.js wires
+                            // onToggle to all three. Only the chevron flashes -
+                            // nothing is opening, so the selector must not fill.
+                            FlipperKey::Left | FlipperKey::Right if radio => {
+                                net.set_wifi_enabled(!net_now.wifi_enabled);
+                                arrow = Some((
+                                    if event.key == FlipperKey::Left { 1 } else { 2 },
+                                    Instant::now()
+                                        + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
+                                ));
+                                wifi_dirty = true;
+                            }
+                            FlipperKey::Ok | FlipperKey::Run if radio => {
+                                net.set_wifi_enabled(!net_now.wifi_enabled);
+                                wifi_dirty = true;
+                            }
+                            FlipperKey::Ok | FlipperKey::Run => {
+                                next = match act {
+                                    Some(wifi::Act::Connected) => {
+                                        Some(wifi::Modal::Details(wifi::Detail::open(
+                                            &net_now.ssid,
+                                            &net_now.ssid,
+                                            true,
+                                        )))
+                                    }
+                                    Some(wifi::Act::Visible) => {
+                                        Some(wifi::Modal::Visible(wifi::List::default()))
+                                    }
+                                    Some(wifi::Act::Saved) => {
+                                        Some(wifi::Modal::Saved(wifi::List::default()))
+                                    }
+                                    // wifi.js has no flow behind the hidden-network
+                                    // row either. The entry point is there to be
+                                    // seen; pressing it does nothing.
+                                    _ => None,
+                                };
+                                wifi_dirty = true;
+                            }
+                            _ if leaving => {
+                                // Leaving gives up what the page was waiting on as
+                                // well as what it was polling. The command itself
+                                // carries on -- nmcli is not ours to stop -- but a
+                                // result nobody is looking at must not sit here
+                                // blocking the next one.
+                                wifi_live = None;
+                                wifi_op = None;
+                                wifi_toast = None;
+                                menu_again!();
+                            }
+                            _ => {}
+                        }
+                    }
+                    wifi::Modal::Visible(list) => {
+                        let scan = wifi_live.as_ref().map(|l| l.scan.get()).unwrap_or_default();
+                        let count = scan.networks.len() as i32;
+                        let layout = wifi::visible_layout(scan.ready, count);
+                        match event.key {
+                            FlipperKey::Down | FlipperKey::Up if count > 0 => {
+                                list.selected = (list.selected + dir).rem_euclid(count);
+                                list.scroll = wifi::keep_row_visible(
+                                    list.selected,
+                                    list.scroll,
+                                    layout.visible,
+                                    count,
+                                );
+                                wifi_dirty = true;
+                            }
+                            // One join at a time: a spinner is already up because
+                            // nmcli is busy with the last one.
+                            FlipperKey::Ok | FlipperKey::Run if count > 0 && wifi_op.is_none() => {
+                                press.row(FlipperKey::Ok, Instant::now() + flash);
+                                wifi_dirty = true;
+                            }
+                            _ if leaving => {
+                                next = Some(wifi::Modal::None);
+                                wifi_toast = None;
+                                wifi_dirty = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    wifi::Modal::Saved(list) => {
+                        let saved = wifi_live.as_ref().and_then(|l| l.saved.get());
+                        let names = wifi::saved_names(saved.as_deref().unwrap_or(&[]));
+                        let count = names.len() as i32;
+                        let layout = wifi::saved_layout(&names);
+                        match event.key {
+                            FlipperKey::Down | FlipperKey::Up if count > 0 => {
+                                list.selected = (list.selected + dir).rem_euclid(count);
+                                list.scroll = wifi::ensure_visible(
+                                    list.selected * flipper_ui::theme::metric::WIFI_ROW_PITCH,
+                                    flipper_ui::theme::metric::WIFI_ROW_H,
+                                    layout.inner_h,
+                                    wifi::saved_content_h(count),
+                                    list.scroll,
+                                );
+                                wifi_dirty = true;
+                            }
+                            FlipperKey::Ok | FlipperKey::Run if count > 0 => {
+                                press.row(FlipperKey::Ok, Instant::now() + flash);
+                                wifi_dirty = true;
+                            }
+                            _ if leaving => {
+                                next = Some(wifi::Modal::None);
+                                wifi_dirty = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    wifi::Modal::Details(d) => {
+                        let view = d.view();
+                        let layout = wifi::detail_layout(view.content_h);
+                        let act = view
+                            .rows
+                            .get(d.selected as usize)
+                            .map(|r| r.act)
+                            .unwrap_or(wifi::DetailAct::None);
+                        match event.key {
+                            FlipperKey::Down | FlipperKey::Up => {
+                                let reachable = wifi::selectable(&view.rows);
+                                let at = wifi::next_selectable(&reachable, d.selected, dir);
+                                if at >= 0 {
+                                    d.selected = at;
+                                    let row = &view.rows[at as usize];
+                                    d.scroll = wifi::ensure_visible(
+                                        row.y as i32,
+                                        row.h as i32,
+                                        layout.inner_h,
+                                        view.content_h,
+                                        d.scroll,
+                                    );
+                                }
+                                wifi_dirty = true;
+                            }
+                            FlipperKey::Left | FlipperKey::Right
+                                if act == wifi::DetailAct::AutoJoin =>
+                            {
+                                d.set_autoconnect();
+                                wifi_dirty = true;
+                            }
+                            FlipperKey::Ok | FlipperKey::Run => match act {
+                                // Held, not pressed: the reveal lasts as long as the
+                                // key is down, and since there is nothing for a
+                                // press to do the row does not flash either.
+                                wifi::DetailAct::Password => {
+                                    d.reveal = true;
+                                    wifi_dirty = true;
+                                }
+                                wifi::DetailAct::None => {}
+                                _ if wifi_op.is_none() => {
+                                    press.row(FlipperKey::Ok, Instant::now() + flash);
+                                    wifi_dirty = true;
+                                }
+                                _ => {}
+                            },
+                            _ if leaving => {
+                                next = Some(wifi::Modal::None);
+                                wifi_dirty = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if let Some(modal) = next {
+                    wifi_modal = modal;
+                }
+                continue;
+            }
+
             // The idle screen's interface cards, which can outnumber the room for
             // them: a machine with several ports, a gadget and a VPN has more than
             // fits, so the keys move the window. How many fit comes from the screen,
@@ -3381,33 +4001,53 @@ fn panel(
                         FlipperKey::Run => press.only(4, Instant::now() + flash),
                         _ => {}
                     }
-                    let being = flipper_ui::boot::Profile {
-                        name: kb_for.clone(),
-                        ..Default::default()
+                    let warning = kb_warning!(input);
+                    // A passphrase is accepted whatever it says: only the AP can
+                    // refuse it. Typing clears whatever it refused last time.
+                    let typed = match input.key(event.key, matches!(kb_for, KbFor::Passphrase { .. }) || warning.is_empty()) {
+                        Some(flipper_ui::keyboard::Exit::Save(text)) => Some(Some(text)),
+                        Some(flipper_ui::keyboard::Exit::Cancel) => Some(None),
+                        None => None,
                     };
-                    let existing = boot.as_ref().map(|m| m.profiles()).unwrap_or(&[]);
-                    let warning =
-                        flipper_ui::boot::rename_warning(&input.text, &being, existing);
-                    match input.key(event.key, warning.is_empty()) {
-                        Some(flipper_ui::keyboard::Exit::Save(text)) => {
+                    if let KbFor::Passphrase { error, .. } = &mut kb_for {
+                        if !error.is_empty() {
+                            error.clear();
+                            kb_dirty = true;
+                        }
+                    }
+                    match (typed, &kb_for) {
+                        (None, _) => kb_dirty = true,
+                        // A profile's rename, committed or abandoned: the menu is
+                        // told either way, since it is showing the name being
+                        // edited while this is up.
+                        (Some(text), KbFor::Profile(name)) => {
                             if let Some(menu) = boot.as_mut() {
-                                menu.renamed(&kb_for, Some(&text));
+                                menu.renamed(name, text.as_deref());
                                 apply_boot(&screen, menu);
                             }
                             kb = None;
                             press.cancel();
                             screen.set_screen(Screen::Boot);
                         }
-                        Some(flipper_ui::keyboard::Exit::Cancel) => {
-                            if let Some(menu) = boot.as_mut() {
-                                menu.renamed(&kb_for, None);
-                                apply_boot(&screen, menu);
+                        // A passphrase. Joining takes as long as it takes, so the
+                        // page comes back with the spinner over its list rather
+                        // than the keyboard sitting there under a wash.
+                        (Some(text), KbFor::Passphrase { ssid, .. }) => {
+                            if let Some(password) = text {
+                                let ssid = ssid.clone();
+                                let joining = ssid.clone();
+                                wifi_op = Some((
+                                    wifi::Op::JoinKeyed(ssid),
+                                    wifi::spawn_op(move || {
+                                        flipper_ui::wifi::connect(&joining, &password)
+                                    }),
+                                ));
                             }
                             kb = None;
                             press.cancel();
-                            screen.set_screen(Screen::Boot);
+                            wifi_dirty = true;
+                            screen.set_screen(Screen::Wifi);
                         }
-                        None => kb_dirty = true,
                     }
                 }
                 continue;
@@ -3438,7 +4078,7 @@ fn panel(
                     // A rename needs a name, and the keyboard is this program's.
                     flipper_ui::boot_menu::Outcome::Rename { name, label } => {
                         kb = Some(flipper_ui::keyboard::TextInput::new("Profile name", &label));
-                        kb_for = name;
+                        kb_for = KbFor::Profile(name);
                         kb_dirty = true;
                         screen.set_screen(Screen::TextInput);
                     }
@@ -3573,6 +4213,117 @@ fn panel(
                             act: DialogAct::None,
                         });
                     }
+                // A modal's row has shown its press; now do what it says. Every one
+                // of these hands the work to a thread: nmcli takes ten to
+                // twenty-five seconds over a join on a slow AP.
+                } else if screen.get_screen() == Screen::Wifi {
+                    let toast_for = Duration::from_millis(timing::TOAST_MS as u64);
+                    let mut next: Option<wifi::Modal> = None;
+                    match &mut wifi_modal {
+                        wifi::Modal::Visible(list) => {
+                            let scan =
+                                wifi_live.as_ref().map(|l| l.scan.get()).unwrap_or_default();
+                            let saved = wifi_live
+                                .as_ref()
+                                .and_then(|l| l.saved.get())
+                                .unwrap_or_default();
+                            if let Some(picked) = scan.networks.get(list.selected as usize) {
+                                let ssid = picked.ssid.clone();
+                                let known = wifi::saved_match(&saved, &ssid);
+                                if net_now.wifi_connected && net_now.ssid == ssid {
+                                    // Nothing to do, said out loud: without this the
+                                    // press looks like it was swallowed.
+                                    wifi_toast =
+                                        Some(("Already connected".into(), Instant::now() + toast_for));
+                                } else if let Some(profile) = known {
+                                    // A profile for it already exists, so nmcli has
+                                    // the passphrase and there is nothing to ask.
+                                    let name = profile.clone();
+                                    wifi_op = Some((
+                                        wifi::Op::JoinSaved(ssid),
+                                        wifi::spawn_op(move || {
+                                            flipper_ui::wifi::connect(&name, "")
+                                        }),
+                                    ));
+                                } else if picked.security.is_empty() {
+                                    // An open network has no passphrase to collect.
+                                    let name = ssid.clone();
+                                    wifi_op = Some((
+                                        wifi::Op::JoinOpen,
+                                        wifi::spawn_op(move || {
+                                            flipper_ui::wifi::connect(&name, "")
+                                        }),
+                                    ));
+                                } else {
+                                    kb = Some(flipper_ui::keyboard::TextInput::new(
+                                        &format!("Password for {ssid}"),
+                                        "",
+                                    ));
+                                    kb_for = KbFor::Passphrase { ssid, error: String::new() };
+                                    kb_dirty = true;
+                                    screen.set_screen(Screen::TextInput);
+                                }
+                            }
+                            wifi_dirty = true;
+                        }
+                        // A saved profile opens its settings, and the list it was
+                        // picked from closes rather than staying behind it: back
+                        // from the settings is back to the page, which is what
+                        // wifi.js does here.
+                        wifi::Modal::Saved(list) => {
+                            let saved = wifi_live
+                                .as_ref()
+                                .and_then(|l| l.saved.get())
+                                .unwrap_or_default();
+                            if let Some(profile) = saved.get(list.selected as usize) {
+                                let title = if profile.ssid.is_empty() {
+                                    &profile.name
+                                } else {
+                                    &profile.ssid
+                                };
+                                let active =
+                                    net_now.wifi_connected && net_now.ssid == profile.name;
+                                next = Some(wifi::Modal::Details(wifi::Detail::open(
+                                    &profile.name,
+                                    title,
+                                    active,
+                                )));
+                            }
+                            wifi_dirty = true;
+                        }
+                        wifi::Modal::Details(d) => {
+                            let view = d.view();
+                            let name = d.name.clone();
+                            match view.rows.get(d.selected as usize).map(|r| r.act) {
+                                Some(wifi::DetailAct::Disconnect) => {
+                                    wifi_op = Some((
+                                        wifi::Op::Profile,
+                                        wifi::spawn_op(move || {
+                                            flipper_ui::wifi::disconnect(&name)
+                                        }),
+                                    ));
+                                }
+                                Some(wifi::DetailAct::Forget) => {
+                                    wifi_op = Some((
+                                        wifi::Op::Profile,
+                                        wifi::spawn_op(move || flipper_ui::wifi::forget(&name)),
+                                    ));
+                                }
+                                // A toggle flips on ok as well as on left and right,
+                                // matching the onToggle branch there.
+                                Some(wifi::DetailAct::AutoJoin) => d.set_autoconnect(),
+                                // A card is reachable and pressing it flashes; the
+                                // address editor behind it is not written yet, there
+                                // or here.
+                                _ => {}
+                            }
+                            wifi_dirty = true;
+                        }
+                        wifi::Modal::None => {}
+                    }
+                    if let Some(modal) = next {
+                        wifi_modal = modal;
+                    }
                 } else if matches!(screen.get_screen(), Screen::Detail | Screen::Ethernet) {
                     match key {
                         // Back to the menu that opened this screen. Dropping the
@@ -3581,18 +4332,7 @@ fn panel(
                             live = None;
                             eth_open = false;
                             eth_scroll = 0.0;
-                            let menu = stack.last().unwrap().0;
-                            demo::apply_menu(&screen, menu, &net_now);
-                            screen.set_breadcrumb(
-                                if menu.title.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!("> {}", menu.title)
-                                }
-                                .as_str()
-                                .into(),
-                            );
-                            screen.set_screen(Screen::Menu);
+                            menu_again!();
                         }
                         FlipperKey::Run => {
                             if let Some(rx) = live.as_ref().and_then(|l| l.start_update()) {
@@ -3721,6 +4461,27 @@ fn panel(
                                 Screen::Detail
                             });
                             eprintln!("detail         {}", which.title());
+                        }
+                        // The Wi-Fi page, with its two pollers. They start here and
+                        // stop when the page is left, which is what wifi.js's
+                        // enter() and exit() do: a scan list and the saved profiles
+                        // are several nmcli processes a minute between them, and
+                        // nothing else on the device wants either.
+                        demo::Act::Wifi => {
+                            wifi_live = Some(wifi::Live::open());
+                            wifi_selected = 0;
+                            wifi_modal = wifi::Modal::None;
+                            wifi_toast = None;
+                            wifi_dirty = true;
+                            stack.last_mut().unwrap().1 = selected;
+                            stack.last_mut().unwrap().2 = scroll;
+                            let trail = demo::crumb(&stack, "Wi-Fi");
+                            screen.set_breadcrumb(trail.as_str().into());
+                            screen.set_screen(Screen::Wifi);
+                            // `pressed` is shared, so a flash still running here
+                            // would land on whichever row is selected on arrival.
+                            press.cancel();
+                            eprintln!("screen         wi-fi");
                         }
                         demo::Act::Boot => {
                             // The menu owns its own state, including the read it
@@ -3981,13 +4742,7 @@ fn panel(
                 if kb_dirty {
                     kb_dirty = false;
                     kb_cursor_shown = cursor_on;
-                    let being = flipper_ui::boot::Profile {
-                        name: kb_for.clone(),
-                        ..Default::default()
-                    };
-                    let existing = boot.as_ref().map(|m| m.profiles()).unwrap_or(&[]);
-                    let warning =
-                        flipper_ui::boot::rename_warning(&input.text, &being, existing);
+                    let warning = kb_warning!(input);
                     apply_text_input(&screen, input, &warning, cursor_on);
                 }
             }
@@ -4196,7 +4951,151 @@ fn panel(
         if net.take_dirty() {
             net_now = net.get();
             demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
+            // The settings modal puts Disconnect at the top only for the live
+            // connection, and which one that is may be what just changed.
+            if let wifi::Modal::Details(d) = &mut wifi_modal {
+                d.active = net_now.wifi_connected && net_now.ssid == d.name;
+            }
+            wifi_dirty = true;
         }
+
+        // The Wi-Fi page: what landed on its own since the last frame, and then the
+        // frame itself.
+        if screen.get_screen() == Screen::Wifi {
+            // A profile's settings arrived.
+            if let wifi::Modal::Details(d) = &mut wifi_modal {
+                if let Some(rx) = d.rx.as_ref() {
+                    match rx.try_recv() {
+                        Ok(details) => {
+                            d.details = Some(details);
+                            d.rx = None;
+                            wifi_dirty = true;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Err(_) => d.rx = None,
+                    }
+                }
+            }
+
+            // A write landed. What its failure means depends on what was asked
+            // for, which is why the op is remembered alongside the receiver.
+            if let Some((op, rx)) = wifi_op.take() {
+                let toast_for = Duration::from_millis(timing::TOAST_MS as u64);
+                match rx.try_recv() {
+                    // Joined, left or deleted. Either way the modal was about a
+                    // state that has just changed, so it closes and the page behind
+                    // it reports the new one; its own poller picks the rest up.
+                    Ok(Ok(())) => {
+                        wifi_modal = wifi::Modal::None;
+                        wifi_dirty = true;
+                    }
+                    Ok(Err(e)) => {
+                        eprintln!("wifi           {e}");
+                        match &op {
+                            // The saved passphrase is not the right one any more,
+                            // or the one just typed was wrong. Either way the
+                            // keyboard comes back with nmcli's own reason on it.
+                            wifi::Op::JoinSaved(ssid) | wifi::Op::JoinKeyed(ssid) => {
+                                kb = Some(flipper_ui::keyboard::TextInput::new(
+                                    &format!("Password for {ssid}"),
+                                    "",
+                                ));
+                                kb_for = KbFor::Passphrase {
+                                    ssid: ssid.clone(),
+                                    error: wifi::one_line(
+                                        &e,
+                                        i32::from(flipper_ui::PANEL_W)
+                                            - 2 * flipper_ui::theme::metric::MARGIN_H,
+                                    ),
+                                };
+                                kb_dirty = true;
+                                screen.set_screen(Screen::TextInput);
+                            }
+                            // An open network has no passphrase to ask for, so
+                            // there is nowhere to go but back to the list.
+                            wifi::Op::JoinOpen => {
+                                wifi_toast = Some((
+                                    "Connection failed".into(),
+                                    Instant::now() + toast_for,
+                                ));
+                            }
+                            wifi::Op::Profile => {
+                                wifi_toast = Some((
+                                    wifi::one_line(
+                                        &e,
+                                        flipper_ui::theme::metric::WIFI_MODAL_W
+                                            - 2 * flipper_ui::theme::metric::WIFI_TOAST_PAD,
+                                    ),
+                                    Instant::now() + toast_for,
+                                ));
+                            }
+                        }
+                        wifi_dirty = true;
+                    }
+                    // Still out: put it back and look again next frame.
+                    Err(std::sync::mpsc::TryRecvError::Empty) => wifi_op = Some((op, rx)),
+                    Err(_) => {}
+                }
+            }
+
+            if wifi_toast
+                .as_ref()
+                .is_some_and(|(_, until)| Instant::now() >= *until)
+            {
+                wifi_toast = None;
+                wifi_dirty = true;
+            }
+
+            // The spinner turns while a modal is waiting on something. The loop
+            // repaints only when something moved, so the frame index is what says
+            // it did.
+            let waiting = wifi_op.is_some()
+                || match &wifi_modal {
+                    wifi::Modal::Visible(_) => {
+                        !wifi_live.as_ref().is_some_and(|l| l.scan.get().ready)
+                    }
+                    wifi::Modal::Details(d) => d.loading(),
+                    _ => false,
+                };
+            if waiting {
+                let frame = (started.elapsed().as_millis()
+                    / timing::SPIN_FRAME_MS.max(1) as u128) as i32
+                    % flipper_ui::theme::metric::SPIN_FRAMES;
+                if frame != wifi_spin {
+                    wifi_spin = frame;
+                    wifi_dirty = true;
+                }
+            }
+
+            if wifi_live.as_ref().is_some_and(|l| l.take_dirty()) || wifi_dirty {
+                wifi_dirty = false;
+                // The rows can shrink underneath the cursor: turning the radio off
+                // leaves the toggle and nothing else.
+                let page = wifi::page_rows(&net_now);
+                wifi_selected = wifi_selected.clamp(0, (page.len() as i32 - 1).max(0));
+                apply_wifi(
+                    &screen,
+                    &net_now,
+                    wifi_selected,
+                    &wifi_modal,
+                    wifi_live.as_ref(),
+                    wifi_spin,
+                    wifi_toast.as_ref().map(|(t, _)| t.as_str()).unwrap_or(""),
+                    wifi_op.is_some(),
+                    if press.row_pressed() {
+                        match &wifi_modal {
+                            wifi::Modal::Visible(list) | wifi::Modal::Saved(list) => list.selected,
+                            wifi::Modal::Details(d) => d.selected,
+                            wifi::Modal::None => -1,
+                        }
+                    } else {
+                        -1
+                    },
+                );
+            }
+        }
+
+
 
         // Nothing repaints unless something changed, so an unattended run needs
         // a reason to redraw. Reuse the animated-icon cadence.

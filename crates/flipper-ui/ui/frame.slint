@@ -35,18 +35,34 @@ export component SelectorFrame {
     // Corner radius in pixels. The selector's 3 is the default; a popup passes
     // FlipperTheme.box. Only 0, 3 and 4 are design values.
     in property <length> radius: FlipperTheme.menu;
+    // Which corners the radius applies to, as ResponsiveFrame's `corners` does.
+    // A modal body squares its top-left so it tucks flush against the tab above
+    // it, and every other caller wants all four.
+    in property <bool> round_tl: true;
+    in property <bool> round_tr: true;
+    in property <bool> round_bl: true;
+    in property <bool> round_br: true;
+
+    property <length> r_tl: root.round_tl ? root.radius : 0;
+    property <length> r_tr: root.round_tr ? root.radius : 0;
+    property <length> r_bl: root.round_bl ? root.radius : 0;
+    property <length> r_br: root.round_br ? root.radius : 0;
+    // How many rows at each end are stepped in at all. A square corner steps in
+    // by nothing, but its neighbour on the same row may still do so.
+    property <length> r_top: Math.max(root.r_tl / 1px, root.r_tr / 1px) * 1px;
+    property <length> r_bot: Math.max(root.r_bl / 1px, root.r_br / 1px) * 1px;
 
     width: frame_w + 1px;
     height: frame_h + 1px;
 
     // Body: a chamfered rectangle. The first and last `radius` rows step in by
-    // radius-1..0 pixels, so the fill follows the same diagonal as the stroke and
-    // the cut corners stay transparent.
+    // radius-1..0 pixels on each rounded side, so the fill follows the same
+    // diagonal as the stroke and the cut corners stay transparent.
     if filled: Rectangle {
         x: 0;
-        y: root.radius;
+        y: root.r_top;
         width: root.frame_w;
-        height: root.frame_h - 2 * root.radius;
+        height: root.frame_h - root.r_top - root.r_bot;
         background: root.fill_color;
     }
     if filled: Rectangle {
@@ -55,18 +71,26 @@ export component SelectorFrame {
         // row is the narrowest. Slint has no numeric range loop, so the array is
         // the largest radius any design uses and the rest are switched off.
         for i in [0, 1, 2, 3, 4]: Rectangle {
-            visible: i < root.radius / 1px;
-            x: (root.radius / 1px - 1 - i) * 1px;
+            property <length> li: root.round_tl
+                ? Math.max(0, root.radius / 1px - 1 - i) * 1px : 0;
+            property <length> ri: root.round_tr
+                ? Math.max(0, root.radius / 1px - 1 - i) * 1px : 0;
+            visible: i < root.r_top / 1px;
+            x: self.li;
             y: i * 1px;
-            width: root.frame_w - 2 * (root.radius / 1px - 1 - i) * 1px;
+            width: root.frame_w - self.li - self.ri;
             height: 1px;
             background: root.fill_color;
         }
         for i in [0, 1, 2, 3, 4]: Rectangle {
-            visible: i < root.radius / 1px;
-            x: (root.radius / 1px - 1 - i) * 1px;
+            property <length> li: root.round_bl
+                ? Math.max(0, root.radius / 1px - 1 - i) * 1px : 0;
+            property <length> ri: root.round_br
+                ? Math.max(0, root.radius / 1px - 1 - i) * 1px : 0;
+            visible: i < root.r_bot / 1px;
+            x: self.li;
             y: root.frame_h - 1px - i * 1px;
-            width: root.frame_w - 2 * (root.radius / 1px - 1 - i) * 1px;
+            width: root.frame_w - self.li - self.ri;
             height: 1px;
             background: root.fill_color;
         }
@@ -75,50 +99,50 @@ export component SelectorFrame {
     if stroke: Rectangle {
         background: transparent;
 
-        // Straight edges, each held back by the radius at both ends.
+        // Straight edges, each held back by whichever corners it runs between.
         Rectangle {
-            x: root.radius; y: 0;
-            width: root.frame_w - 2 * root.radius; height: 1px;
+            x: root.r_tl; y: 0;
+            width: root.frame_w - root.r_tl - root.r_tr; height: 1px;
             background: root.stroke_color;
         }
         Rectangle {
-            x: root.radius; y: root.frame_h - 1px;
-            width: root.frame_w - 2 * root.radius; height: 1px;
+            x: root.r_bl; y: root.frame_h - 1px;
+            width: root.frame_w - root.r_bl - root.r_br; height: 1px;
             background: root.stroke_color;
         }
         Rectangle {
-            x: 0; y: root.radius;
-            width: 1px; height: root.frame_h - 2 * root.radius;
+            x: 0; y: root.r_tl;
+            width: 1px; height: root.frame_h - root.r_tl - root.r_bl;
             background: root.stroke_color;
         }
         Rectangle {
-            x: root.frame_w - 1px; y: root.radius;
-            width: 1px; height: root.frame_h - 2 * root.radius;
+            x: root.frame_w - 1px; y: root.r_tr;
+            width: 1px; height: root.frame_h - root.r_tr - root.r_br;
             background: root.stroke_color;
         }
 
-        // Corner stairs: pixel i of each corner, i in 0..radius.
+        // Corner stairs: pixel i of each rounded corner, i in 0..radius.
         for i in [0, 1, 2, 3, 4]: Rectangle {
-            visible: i < root.radius / 1px;
-            x: i * 1px; y: (root.radius / 1px - 1 - i) * 1px;
+            visible: root.round_tl && i < root.radius / 1px;
+            x: i * 1px; y: root.r_tl - 1px - i * 1px;
             width: 1px; height: 1px;
             background: root.stroke_color;
         }
         for i in [0, 1, 2, 3, 4]: Rectangle {
-            visible: i < root.radius / 1px;
-            x: root.frame_w - root.radius + i * 1px; y: i * 1px;
+            visible: root.round_tr && i < root.radius / 1px;
+            x: root.frame_w - root.r_tr + i * 1px; y: i * 1px;
             width: 1px; height: 1px;
             background: root.stroke_color;
         }
         for i in [0, 1, 2, 3, 4]: Rectangle {
-            visible: i < root.radius / 1px;
-            x: i * 1px; y: root.frame_h - root.radius + i * 1px;
+            visible: root.round_bl && i < root.radius / 1px;
+            x: i * 1px; y: root.frame_h - root.r_bl + i * 1px;
             width: 1px; height: 1px;
             background: root.stroke_color;
         }
         for i in [0, 1, 2, 3, 4]: Rectangle {
-            visible: i < root.radius / 1px;
-            x: root.frame_w - root.radius + i * 1px; y: root.frame_h - 1px - i * 1px;
+            visible: root.round_br && i < root.radius / 1px;
+            x: root.frame_w - root.r_br + i * 1px; y: root.frame_h - 1px - i * 1px;
             width: 1px; height: 1px;
             background: root.stroke_color;
         }
@@ -323,5 +347,105 @@ export component SoftBar inherits Rectangle {
             flush_left: i == 0;
             flush_right: i == 4;
         }
+    }
+}
+
+// The black tab a modal hangs its body from.
+//
+// From ui.js TabHeader: 16px tall, its label inset 3px on each side, and the top
+// two corners rounded at the box radius while the bottom two stay square so the
+// tab and the frame below it read as one silhouette. Which is the chamfered
+// rectangle with two of its corners switched off.
+export component TabHeader inherits Rectangle {
+    in property <string> label;
+
+    label_ref := Text {
+        visible: false;
+        text: root.label;
+        font-size: 16px;
+        font-family: "HaxrCorp 4090";
+    }
+
+    // Slint measures one pixel wider than the prototype's textWidth, so the
+    // measurement is taken back by one. See statusbar.slint.
+    width: (label_ref.width - 1px) + 2 * FlipperTheme.wifi_tab_pad;
+    height: FlipperTheme.wifi_tab_h;
+    background: transparent;
+
+    SelectorFrame {
+        x: 0;
+        y: 0;
+        frame_w: root.width;
+        frame_h: root.height;
+        filled: true;
+        stroke: false;
+        shadow: false;
+        radius: FlipperTheme.box;
+        round_bl: false;
+        round_br: false;
+        fill_color: FlipperTheme.black;
+    }
+
+    Text {
+        x: FlipperTheme.wifi_tab_pad;
+        // Centred on the 11px ink band the font draws in.
+        y: Math.floor((root.height - FlipperTheme.kb_text_ink_h) / 2 / 1px) * 1px;
+        text: root.label;
+        font-size: 16px;
+        font-family: "HaxrCorp 4090";
+        color: FlipperTheme.white;
+    }
+}
+
+// The dotted scrollbar, from UI.Scrollbar.
+//
+// A 1px dotted track over the full height with a 3px thumb centred on it, whose
+// length is the visible fraction of the total and whose travel is inset from both
+// ends by `thumb_pad`. The units are the caller's: the menu counts rows, a modal
+// whose rows differ in height counts pixels, and the arithmetic is the same either
+// way.
+//
+// Three pixels wide, with the track down its middle column, so a caller places it
+// one pixel left of the column the track is to sit in.
+export component Scrollbar inherits Rectangle {
+    in property <int> total;
+    in property <int> visible_extent;
+    in property <int> offset;
+    in property <int> thumb_pad: FlipperTheme.scrollbar_thumb_pad / 1px;
+
+    width: FlipperTheme.scrollbar_w;
+    background: transparent;
+
+    property <length> range: Math.max(FlipperTheme.scrollbar_thumb_min / 1px,
+        root.height / 1px - 2 * root.thumb_pad) * 1px;
+    property <length> thumb_h: Math.max(
+        FlipperTheme.scrollbar_thumb_min / 1px,
+        Math.round(root.total > 0
+            ? (self.range / 1px) * root.visible_extent / root.total
+            : 0)
+    ) * 1px;
+    property <int> max_scroll: root.total - root.visible_extent;
+
+    for dot[i] in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+                   19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+                   36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52,
+                   53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]: Rectangle {
+        visible: dot * 2 < root.height / 1px;
+        x: 1px;
+        y: dot * 2px;
+        width: 1px;
+        height: 1px;
+        background: FlipperTheme.black;
+    }
+
+    Rectangle {
+        x: 0;
+        y: root.thumb_pad * 1px + Math.round(
+            (root.max_scroll > 0
+                ? ((root.range - root.thumb_h) / 1px) * root.offset / root.max_scroll
+                : 0)) * 1px;
+        width: FlipperTheme.scrollbar_w;
+        height: root.thumb_h;
+        background: FlipperTheme.black;
     }
 }

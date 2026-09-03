@@ -12,18 +12,19 @@ import { LogBody } from "log.slint";
 import { Modal } from "modal.slint";
 import { DetailBody, DetailRow } from "detail.slint";
 import { EthernetBody, EthLink, EthDetailRow } from "ethernet.slint";
+import { WifiBody, WifiRow, WifiNetRow, WifiDetailRow } from "wifi.slint";
 import { BootBody, BootRow, BootPopupRow } from "boot.slint";
 import { TextInputBody, KbCell } from "keyboard.slint";
 import { SwitcherBody, SwitchCard } from "switcher.slint";
 import { CardsBody, CardItem } from "card.slint";
 
-export { ListItem, IdleLink, DetailRow, EthLink, EthDetailRow, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem }
+export { ListItem, IdleLink, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetRow, WifiDetailRow, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem }
 
 // Idle is the root. The menu opens over it and the app list over that. There are no
 // screens for an app to be shown on: an app draws its own, and what flipctl puts up
 // while one is running is the app's own frame. `app_log` is ours, the log of an
 // install.
-export enum Screen { idle, menu, detail, ethernet, boot, apps, app_log, text_input, switcher }
+export enum Screen { idle, menu, detail, ethernet, wifi, boot, apps, app_log, text_input, switcher }
 
 export component Root inherits Window {
     width: 256px;
@@ -103,6 +104,37 @@ export component Root inherits Window {
     in property <[EthDetailRow]> eth_detail_rows;
     in property <length> eth_detail_offset;
     in property <length> eth_detail_content_h;
+
+    // The Wi-Fi page, and whichever of its modals is open.
+    in property <[WifiRow]> wifi_rows;
+    in property <int> wifi_selected;
+    // 0 none, 1 a list of networks, 2 one network's settings.
+    in property <int> wifi_overlay;
+    in property <[WifiNetRow]> wifi_net_rows;
+    in property <[WifiDetailRow]> wifi_detail_rows;
+    in property <int> wifi_modal_selected;
+    in property <int> wifi_modal_pressed: -1;
+    in property <string> wifi_modal_tab;
+    // Every modal sizes itself around its content, which is measured on the Rust
+    // side: Slint cannot take a maximum across a model.
+    in property <length> wifi_modal_x;
+    in property <length> wifi_modal_w;
+    in property <length> wifi_modal_y;
+    in property <length> wifi_modal_h;
+    in property <length> wifi_modal_inner_top;
+    in property <length> wifi_modal_inner_h;
+    in property <length> wifi_modal_offset;
+    in property <bool> wifi_modal_signal;
+    in property <bool> wifi_modal_chevron;
+    in property <string> wifi_modal_placeholder;
+    in property <bool> wifi_modal_placeholder_centred;
+    in property <bool> wifi_modal_loading;
+    in property <bool> wifi_modal_busy;
+    in property <int> wifi_modal_spin_frame;
+    in property <string> wifi_modal_toast;
+    in property <int> wifi_modal_bar_total;
+    in property <int> wifi_modal_bar_visible;
+    in property <int> wifi_modal_bar_offset;
 
     // The boot menu, which draws a header instead of the status bar.
     in property <[BootRow]> boot_rows;
@@ -263,6 +295,46 @@ export component Root inherits Window {
         detail_rows: root.eth_detail_rows;
         detail_offset: root.eth_detail_offset;
         detail_content_h: root.eth_detail_content_h;
+    }
+
+    if root.screen == Screen.wifi: WifiBody {
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+        rows: root.wifi_rows;
+        selected: root.wifi_selected;
+        breadcrumb: root.breadcrumb;
+        arrow_pressed: root.arrow_pressed;
+        overlay: root.wifi_overlay;
+        net_rows: root.wifi_net_rows;
+        detail_rows: root.wifi_detail_rows;
+        modal_selected: root.wifi_modal_selected;
+        modal_pressed: root.wifi_modal_pressed;
+        modal_tab: root.wifi_modal_tab;
+        modal_x: root.wifi_modal_x;
+        modal_w: root.wifi_modal_w;
+        modal_y: root.wifi_modal_y;
+        modal_h: root.wifi_modal_h;
+        modal_inner_top: root.wifi_modal_inner_top;
+        modal_inner_h: root.wifi_modal_inner_h;
+        modal_offset: root.wifi_modal_offset;
+        modal_signal: root.wifi_modal_signal;
+        modal_chevron: root.wifi_modal_chevron;
+        modal_placeholder: root.wifi_modal_placeholder;
+        modal_placeholder_centred: root.wifi_modal_placeholder_centred;
+        modal_loading: root.wifi_modal_loading;
+        modal_busy: root.wifi_modal_busy;
+        modal_spin_frame: root.wifi_modal_spin_frame;
+        modal_toast: root.wifi_modal_toast;
+        modal_bar_total: root.wifi_modal_bar_total;
+        modal_bar_visible: root.wifi_modal_bar_visible;
+        modal_bar_offset: root.wifi_modal_bar_offset;
     }
 
     if root.screen == Screen.text_input: TextInputBody {

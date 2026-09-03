@@ -17,6 +17,7 @@ pub mod status;
 pub mod switcher;
 pub mod sysinfo;
 pub mod watch;
+pub mod wifi;
 pub mod paint;
 pub mod pixel;
 pub mod platform;
