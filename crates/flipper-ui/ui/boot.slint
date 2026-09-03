@@ -406,7 +406,10 @@ component BootPopup inherits Rectangle {
             y: 3px;
             text: row.value;
             font-size: 16px;
-            color: FlipperTheme.status_dim;
+            // Black, like the name it belongs to. Grey is what this program uses for
+            // a value nobody chose, and both of these were chosen: the kernel that
+            // boots and the output it drives.
+            color: FlipperTheme.black;
         }
         chevron_r := Text {
             visible: line_box.spinnable;

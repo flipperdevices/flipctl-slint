@@ -210,7 +210,14 @@ const CONFIG_LINES: [&str; 5] = [
     "Services",
     "Kernel",
 ];
+/// Which output the display pipeline is wired to, from `boot::VIDEO_OUT`.
+const CONFIG_VIDEO: usize = 2;
 const CONFIG_KERNEL: usize = 4;
+
+/// Whether a line has a value to spin through, rather than one to read.
+fn spins(line: usize) -> bool {
+    line == CONFIG_VIDEO || line == CONFIG_KERNEL
+}
 
 /// Everything on screen, as data.
 pub struct View {
@@ -409,6 +416,9 @@ pub struct BootMenu {
     /// the line is left -- by OK, by Back, or by moving off it -- so one choice is one
     /// write.
     kernel_pick: Option<usize>,
+    /// Where the Video Out spinner stands, while it is somewhere other than what the
+    /// profile's own entry applies.
+    video_pick: Option<usize>,
     space: Option<Space>,
     space_rx: Option<Receiver<Option<Space>>>,
     space_done: bool,
@@ -461,6 +471,7 @@ impl BootMenu {
             popup: None,
             popup_index: 0,
             kernel_pick: None,
+            video_pick: None,
             space: None,
             space_rx: None,
             space_done: false,
@@ -554,6 +565,22 @@ impl BootMenu {
             self.arm_started = Some(Instant::now());
             self.asked = Some(next);
         }
+    }
+
+    /// Throw away whatever is loaded, and let the next tick load what is wanted now.
+    ///
+    /// Detached, like the disarm on the way out: the panel must not stop for it, and
+    /// the tool waits out a load that is still in flight before discarding what lands.
+    fn discard_arm(&mut self) {
+        if self.holding || self.arming.is_some() {
+            crate::logline!("boot menu      something changed, discarding the loaded image");
+            boot::disarm();
+        }
+        self.arming = None;
+        self.arming_for = None;
+        self.arm_started = None;
+        self.asked = None;
+        self.holding = false;
     }
 
     /// Whether closing this menu should discard an image it loaded.
@@ -683,6 +710,8 @@ impl BootMenu {
                     self.popup = Some(Popup::Config);
                     self.popup_index = 0;
                     self.kernel_pick = None;
+        self.video_pick = None;
+                    self.video_pick = None;
                 }
                 FlipperKey::Escape | FlipperKey::Back | FlipperKey::Edit => {}
                 _ => self.popup = Some(Popup::View),
@@ -745,28 +774,38 @@ impl BootMenu {
         })
     }
 
+    /// Which video out the spinner is on: what has been picked, or what the profile's
+    /// own entry applies.
+    fn video_at(&self, profile: &Option<Profile>) -> usize {
+        self.video_pick.unwrap_or_else(|| {
+            profile.as_ref().map_or(0, boot::video_out_for)
+        })
+    }
+
     /// A key on the Config screen.
     ///
     /// Up and Down move; OK opens what a line opens; Left and Right spin the value of a
-    /// line that has one, which is the kernel. Leaving the kernel line at all commits
-    /// what the spinner shows, so a choice is one write however it was arrived at.
+    /// line that has one, which is the kernel and the video out. Leaving such a line at
+    /// all commits what its spinner shows, so a choice is one write however it was
+    /// arrived at.
     fn config_key(&mut self, key: FlipperKey, profile: &Option<Profile>) -> Outcome {
         let lines = CONFIG_LINES.len();
         let kernels = profile.as_ref().map_or(0, |p| p.entries.len());
+        let outs = boot::VIDEO_OUT.len();
         self.popup = Some(Popup::Config);
         match key {
             FlipperKey::Down => {
-                let commit = self.popup_index == CONFIG_KERNEL;
+                let leaving = self.popup_index;
                 self.popup_index = (self.popup_index + 1) % lines;
-                if commit {
-                    return self.commit_kernel(profile);
+                if spins(leaving) {
+                    return self.commit(leaving, profile);
                 }
             }
             FlipperKey::Up => {
-                let commit = self.popup_index == CONFIG_KERNEL;
+                let leaving = self.popup_index;
                 self.popup_index = (self.popup_index + lines - 1) % lines;
-                if commit {
-                    return self.commit_kernel(profile);
+                if spins(leaving) {
+                    return self.commit(leaving, profile);
                 }
             }
             // One kernel installed is a value to read, not a choice to make.
@@ -778,9 +817,15 @@ impl BootMenu {
                 let at = self.kernel_at(profile);
                 self.kernel_pick = Some((at + kernels - 1) % kernels);
             }
+            FlipperKey::Right if self.popup_index == CONFIG_VIDEO => {
+                self.video_pick = Some((self.video_at(profile) + 1) % outs);
+            }
+            FlipperKey::Left if self.popup_index == CONFIG_VIDEO => {
+                self.video_pick = Some((self.video_at(profile) + outs - 1) % outs);
+            }
             FlipperKey::Ok | FlipperKey::Run => match self.popup_index {
-                CONFIG_KERNEL => return self.commit_kernel(profile),
-                // The four hardware lines: listed, and honest about it.
+                at if spins(at) => return self.commit(at, profile),
+                // The three hardware lines: listed, and honest about it.
                 at => {
                     self.popup = Some(Popup::Said(format!(
                         "{} is not configurable yet",
@@ -789,7 +834,7 @@ impl BootMenu {
                 }
             },
             FlipperKey::Escape | FlipperKey::Back => {
-                let leaving = self.commit_kernel(profile);
+                let leaving = self.commit(self.popup_index, profile);
                 if self.popup.as_ref().is_some_and(|p| matches!(p, Popup::Config)) {
                     // Nothing to commit, so Back goes up to View, which opened this.
                     self.popup = Some(Popup::View);
@@ -818,6 +863,52 @@ impl BootMenu {
     ///
     /// Clearing the pick first: the write is what makes it true, and a pick left behind
     /// a failed write would show a choice the entries do not have.
+    /// Write what the spinner on `line` shows, if it shows something new.
+    ///
+    /// One door for both, because leaving a line is what commits it and there are
+    /// three ways to leave: up, down, and out.
+    fn commit(&mut self, line: usize, profile: &Option<Profile>) -> Outcome {
+        match line {
+            CONFIG_KERNEL => self.commit_kernel(profile),
+            CONFIG_VIDEO => self.commit_video(profile),
+            _ => Outcome::Stay,
+        }
+    }
+
+    /// Put the picked video out on the profile, which is every entry it has.
+    ///
+    /// The setting belongs to the profile rather than to one of its kernels: the row
+    /// says what comes out of the connectors when this profile runs, and it would be a
+    /// poor setting if the answer depended on which kernel a later boot happened to
+    /// pick. Each entry carries the overlay from under its own kernel's tree
+    /// directory, which `set_video_out` reads out of each file.
+    fn commit_video(&mut self, profile: &Option<Profile>) -> Outcome {
+        let Some(at) = self.video_pick.take() else {
+            return Outcome::Stay;
+        };
+        let Some(p) = profile.clone() else { return Outcome::Stay };
+        if at == boot::video_out_for(&p) {
+            return Outcome::Stay;
+        }
+        let label = boot::VIDEO_OUT.get(at).map_or("", |(_, label)| label);
+        crate::logline!(
+            "boot menu      {} video out is to be {label} on {} entr{}",
+            p.name,
+            p.entries.len(),
+            if p.entries.len() == 1 { "y" } else { "ies" }
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.popup = match std::thread::Builder::new()
+            .name("boot-video".into())
+            .spawn(move || {
+                let _ = tx.send(boot::set_video_out(&p, at).map(|()| false));
+            }) {
+            Ok(_) => Some(Popup::Busy("Saving".into(), Some(rx))),
+            Err(_) => Some(Popup::Said("could not start the change".into())),
+        };
+        Outcome::Stay
+    }
+
     fn commit_kernel(&mut self, profile: &Option<Profile>) -> Outcome {
         let Some(at) = self.kernel_pick.take() else {
             return Outcome::Stay;
@@ -897,6 +988,7 @@ impl BootMenu {
         self.popup = Some(Popup::View);
         self.popup_index = 0;
         self.kernel_pick = None;
+        self.video_pick = None;
         self.space = None;
         self.space_done = false;
         let Some(p) = self.selected_profile().cloned() else { return };
@@ -940,6 +1032,7 @@ impl BootMenu {
         self.popup = Some(which);
         self.popup_index = 0;
         self.kernel_pick = None;
+        self.video_pick = None;
     }
 
     /// Start one of the Edit actions on a thread.
@@ -1206,10 +1299,15 @@ impl BootMenu {
         // again, which is the answer. Only a failure has something to report, and it
         // waits for a key.
         let mut restart_read = false;
+        // Whether an action finished at all, however it went: one that failed may have
+        // got part of the way, so what is loaded is no more trustworthy than after one
+        // that worked.
+        let mut acted = false;
         if let Some(Popup::Busy(what, Some(rx))) = self.popup.as_ref() {
             match rx.try_recv() {
                 Ok(Ok(rebooting)) => {
                     crate::logline!("boot action    {what} done, rebooting={rebooting}");
+                    acted = true;
                     self.popup = if rebooting {
                         Some(Popup::Busy("Rebooting".into(), None))
                     } else {
@@ -1220,6 +1318,7 @@ impl BootMenu {
                 }
                 Ok(Err(e)) => {
                     crate::logline!("boot action    {what} failed: {e}");
+                    acted = true;
                     self.popup = Some(Popup::Said(e));
                     moved = true;
                 }
@@ -1229,6 +1328,15 @@ impl BootMenu {
                     moved = true;
                 }
             }
+        }
+        if acted {
+            // What is loaded was built from how things were before that action. The
+            // entry's own name is not enough to tell: setting the video out leaves the
+            // id alone and changes what the entry boots, so an image loaded from it is
+            // stale while looking current, both to this menu and to the tool's own
+            // record of what it armed. So the image goes and the next tick loads what
+            // is wanted now.
+            self.discard_arm();
         }
         if restart_read {
             self.reread();
@@ -1463,16 +1571,21 @@ impl BootMenu {
             }
             Some(Popup::Config) => {
                 for (i, line) in CONFIG_LINES.iter().enumerate() {
-                    let kernel = i == CONFIG_KERNEL;
                     lines.push(PopupLine {
                         // All one kind: a setting, its name on the left and its value on
-                        // the right. The four that are not built yet have no value to
-                        // show; when they do, it goes in the same grey the kernel's
-                        // version is in.
+                        // the right. The three that are not built yet have no value to
+                        // show; when they do, it is drawn like the kernel's version and
+                        // the video out, in the same black as the name.
                         kind: 2,
                         y: 0.0,
                         text: (*line).to_string(),
-                        value: if kernel { self.kernel_value(&profile) } else { String::new() },
+                        value: match i {
+                            CONFIG_KERNEL => self.kernel_value(&profile),
+                            CONFIG_VIDEO => boot::VIDEO_OUT
+                                .get(self.video_at(&Some(profile.clone())))
+                                .map_or(String::new(), |(_, label)| (*label).to_string()),
+                            _ => String::new(),
+                        },
                         selected: i == self.popup_index,
                         heart: false,
                     });
@@ -1737,6 +1850,31 @@ mod tests {
         assert!(!worth_arming(Some(true), ARM_SETTLE, Some(&here), &here));
         assert!(worth_arming(Some(true), ARM_SETTLE, Some(&here), &elsewhere));
         assert!(worth_arming(Some(true), ARM_SETTLE, Some(&here), &on_a_card));
+    }
+
+    /// Changing what an entry boots throws away the image loaded from it.
+    ///
+    /// The identity is the drive and the entry id, and setting the video out changes
+    /// neither: the file it names now boots something else. Without this the menu
+    /// would keep an image built before the change and hand over to it, which is the
+    /// same boot the change was meant to alter.
+    #[test]
+    fn a_change_discards_what_was_loaded() {
+        let mut menu = BootMenu::open(4, AutoStart::Off, Kernels::Modern);
+        let aim = on("", "900-flipperos-Desktop-7.2.0");
+        menu.asked = Some(aim.clone());
+        menu.holding = true;
+        menu.cheap = Some(true);
+        assert!(menu.holds_an_arm());
+
+        menu.discard_arm();
+        assert!(!menu.holds_an_arm(), "an image survived the change");
+        assert_eq!(menu.asked, None, "the same entry would not be loaded again");
+        // What was learned about the kernel is not forgotten: a load's cost does not
+        // change because a setting did.
+        assert_eq!(menu.cheap, Some(true));
+        // And the row under the cursor is loadable again straight away.
+        assert!(worth_arming(menu.cheap, ARM_SETTLE, menu.asked.as_ref(), &aim));
     }
 
     /// An image is remembered until something unloads it.

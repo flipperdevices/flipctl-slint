@@ -19,6 +19,7 @@
 //! profile are the destructive half of the boot menu and are deliberately absent
 //! until they have somewhere safe to be tested.
 
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::sysinfo::output;
@@ -74,6 +75,10 @@ pub struct Entry {
     /// Overlays the entry applies: shipped with the image, and added by hand.
     pub system: Vec<String>,
     pub user: Vec<String>,
+    /// Where its device trees and overlays live, and the file it is written in: what
+    /// changing one of its settings has to edit.
+    pub dtdir: String,
+    pub file: String,
     /// When its file was written, in seconds since the epoch. Which kernel is newest,
     /// since git-describe releases do not compare; see `order`.
     pub at: u64,
@@ -135,6 +140,9 @@ pub struct Conf {
     pub tries: Option<u32>,
     pub system: Vec<String>,
     pub user: Vec<String>,
+    /// The `devicetreedir` line, verbatim: where this entry's trees and overlays are,
+    /// written as the loader sees them.
+    pub dtdir: String,
     /// When the file was written, in seconds since the epoch, or 0 when unknown, and
     /// the file's own name. Both are tiebreaks in the order; see `order`.
     pub at: u64,
@@ -152,6 +160,8 @@ impl Conf {
             tries: self.tries,
             system: self.system.clone(),
             user: self.user.clone(),
+            dtdir: self.dtdir.clone(),
+            file: self.file.clone(),
             at: self.at,
         }
     }
@@ -834,9 +844,186 @@ pub fn parse_conf(name: &str, text: &str) -> Option<Conf> {
         version,
         system,
         user,
+        dtdir: field("devicetreedir").to_string(),
         at: 0,
         file: name.to_string(),
     })
+}
+
+// ── Video out ──────────────────────────────────────────────────────────────
+
+/// What the Video Out line offers, and the overlay each choice applies.
+///
+/// A table rather than a search of the overlay directory: a `.dtbo` says nothing
+/// about what it does, and that directory holds every board's, so "video" in a file
+/// name is as likely to be another machine's demo panel as this one's HDMI.
+///
+/// The first applies nothing, because the base tree already wires HDMI to the 4K pipe
+/// and DP to the 2.5K one. The second swaps them. The third disables the display
+/// pipeline, both PHYs and the HDMI and DP audio cards, and leaves the GPU up for the
+/// panel that is soldered on. Both overlays are SoC nodes from rk3576.dtsi rather than
+/// board ones, which is why they are offered whatever board the profile is for.
+///
+/// User overlays are not part of this. What somebody dropped into /etc/kernel/dtbo is
+/// theirs, `add-dtbo` is what manages it, and this touches only the overlays an entry
+/// carries because the image put them there.
+pub const VIDEO_OUT: &[(&str, &str)] = &[
+    ("", "HDMI 4k"),
+    ("rk3576-dp-4k-hdmi-2.5k", "DisplayPort 4k"),
+    ("rk3576-no-graphics", "Headless"),
+];
+
+/// Which of them a profile is on: what its newest entry that this setting is written
+/// to says, so the row reads back what the write put there.
+pub fn video_out_for(p: &Profile) -> usize {
+    p.entries
+        .iter()
+        .find(|e| version_at_least(&e.version, MIN_KERNEL))
+        .map_or(0, video_out_of)
+}
+
+/// Which of them an entry is on, as an index into `VIDEO_OUT`.
+pub fn video_out_of(entry: &Entry) -> usize {
+    VIDEO_OUT
+        .iter()
+        .position(|(name, _)| {
+            !name.is_empty() && entry.system.iter().any(|o| o == &format!("{name}.dtbo"))
+        })
+        .unwrap_or(0)
+}
+
+/// The entry file's text with `choice` applied.
+///
+/// Pure, so what the file should say can be tested without a device or a loader. The
+/// rule: every overlay this table knows about comes off, the chosen one goes on, and
+/// every other overlay the entry carried stays exactly where it was, user drop-ins
+/// included. A line that ends up with nothing on it is removed rather than left empty,
+/// and an entry that had no such line gets one after its `devicetreedir`, which is
+/// where kernel-install writes it and where a reader looks for it.
+pub fn with_video_out(text: &str, choice: usize) -> String {
+    let dtdir = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("devicetreedir"))
+        .map(str::trim)
+        .find(|rest| !rest.is_empty())
+        .unwrap_or_default();
+    let ours = |path: &str| {
+        let base = path.rsplit('/').next().unwrap_or(path);
+        VIDEO_OUT
+            .iter()
+            .any(|(name, _)| !name.is_empty() && base == format!("{name}.dtbo"))
+    };
+
+    let mut keep: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("devicetree-overlay") {
+            keep.extend(rest.split_whitespace().filter(|p| !ours(p)).map(str::to_string));
+        }
+    }
+    if let Some((name, _)) = VIDEO_OUT.get(choice).filter(|(name, _)| !name.is_empty()) {
+        keep.push(format!("{dtdir}/rockchip/{name}.dtbo"));
+    }
+
+    let mut out = String::with_capacity(text.len() + 96);
+    let mut written = false;
+    for line in text.lines() {
+        if line.starts_with("devicetree-overlay") {
+            // The first of them carries the whole list, and the rest go: one line is
+            // what kernel-install writes and what a reader of this file expects.
+            if !written && !keep.is_empty() {
+                out.push_str(&format!("devicetree-overlay {}\n", keep.join(" ")));
+                written = true;
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+        if line.starts_with("devicetreedir") && !written && !keep.is_empty() {
+            out.push_str(&format!("devicetree-overlay {}\n", keep.join(" ")));
+            written = true;
+        }
+    }
+    out
+}
+
+/// Put `choice` on every entry of a profile.
+///
+/// Every entry, not the one that boots: the row says what comes out of this profile's
+/// video connectors, and a profile that answered differently depending on which of its
+/// kernels happened to boot would be a setting nobody could rely on. Each entry names
+/// its own kernel's tree directory, so each gets the overlay from under its own, which
+/// is why the path is read out of every file rather than built once.
+///
+/// The booted filesystem is written in place; any other drive is mounted at its top
+/// level for as long as the rewrite takes, because that is where its entries are. Both
+/// are the same file edit: nothing here knows or cares which drive it is on, and the
+/// kernel row beside this one has always reached any profile the same way.
+///
+/// Entries below `MIN_KERNEL` are skipped, and `video_out_of` reads the first entry
+/// at or above it, so a profile that still carries a 6.1 entry answers for the
+/// kernels it actually boots.
+pub fn set_video_out(p: &Profile, choice: usize) -> Result<(), String> {
+    // Held for the whole loop, so one mount covers every entry, and dropped with it.
+    let hold = match p.dev.is_empty() {
+        true => None,
+        false => Some(
+            TopLevel::rw(&p.dev)
+                .ok_or_else(|| format!("could not mount {} to write to", p.dev))?,
+        ),
+    };
+    let dir = match &hold {
+        Some(top) => top.path.join("boot/loader/entries"),
+        None => std::path::PathBuf::from(BOOTED_ENTRIES),
+    };
+    for entry in &p.entries {
+        // The BSP kernels are not written to. These overlays are nodes of our own
+        // tree and a 6.1 entry's directory does not hold them, so an overlay line
+        // there would name a file that is not there and the loader would fail on an
+        // entry that boots today. Those entries are hidden from the menu anyway;
+        // --all-kernels brings them back for a bisect and this still leaves them be.
+        if !version_at_least(&entry.version, MIN_KERNEL) {
+            continue;
+        }
+        if entry.file.is_empty() || entry.file.contains('/') {
+            return Err("an entry with no file".into());
+        }
+        set_one_video_out(&dir.join(&entry.file), choice)?;
+    }
+    Ok(())
+}
+
+/// One entry file, rewritten.
+///
+/// The file belongs to root and flipctl does not, so the bytes go through `tee`:
+/// deciding what the file should say is `with_video_out`'s job, and the privileged
+/// step is as small as writing what it decided.
+fn set_one_video_out(path: &std::path::Path, choice: usize) -> Result<(), String> {
+    let shown = path.display();
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{shown}: {e}"))?;
+    let next = with_video_out(&text, choice);
+    if next == text {
+        return Ok(());
+    }
+    let Some(target) = path.to_str() else {
+        return Err(format!("{shown}: not a path a tool can take"));
+    };
+    let mut child = tool(&["tee", target])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("tee: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "tee: no stdin".to_string())?
+        .write_all(next.as_bytes())
+        .map_err(|e| format!("tee: {e}"))?;
+    match child.wait() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("tee {shown}: {status}")),
+        Err(e) => Err(format!("tee {shown}: {e}")),
+    }
 }
 
 /// An entry file name split into its id and the tries left in its boot counter.
@@ -1201,12 +1388,15 @@ fn mount_point(dev: &str) -> String {
     )
 }
 
-/// A read-only top-level mount of another filesystem, unmounted when dropped.
+/// A top-level mount of another filesystem, unmounted when dropped.
 ///
 /// A profile's boot entry lives on the profile's own drive: a card's entry names
-/// kernels only that card has, and an initramfs has no /boot of ours at all. Read-only
-/// because reading is all this is for, and subvolid=5 because that is where the
-/// entries are, as the tools mount it.
+/// kernels only that card has, and an initramfs has no /boot of ours at all.
+/// subvolid=5 because that is where the entries are, as the tools mount it.
+///
+/// Read-only for a listing, which is all a listing needs, and writable for a setting
+/// that lands in an entry file. Writable is the shorter of the two: a file is
+/// rewritten and the mount goes, rather than being held for as long as a popup is open.
 ///
 /// Drop does the unmounting so a read that returns early, or panics, cannot leave the
 /// filesystem mounted: this runs while a popup is open, and the drive it holds is one
@@ -1217,6 +1407,15 @@ struct TopLevel {
 
 impl TopLevel {
     fn ro(dev: &str) -> Option<Self> {
+        Self::mount(dev, "ro,subvolid=5")
+    }
+
+    /// Writable, for changing a setting that lives in a boot entry.
+    fn rw(dev: &str) -> Option<Self> {
+        Self::mount(dev, "rw,subvolid=5")
+    }
+
+    fn mount(dev: &str, opts: &str) -> Option<Self> {
         // /run first, as the tools do: it is tmpfs, root-only, and nobody sweeps it by
         // glob. Whether it can be written is not a question the mode bits answer -- an
         // unprivileged flipctl cannot write root's 0755 /run -- so try and see.
@@ -1227,7 +1426,7 @@ impl TopLevel {
             .find(|path| std::fs::create_dir_all(path).is_ok())?;
         let mount = TopLevel { path };
         let target = mount.path.to_str()?;
-        match run(&["mount", "-t", "btrfs", "-o", "ro,subvolid=5", dev, target]) {
+        match run(&["mount", "-t", "btrfs", "-o", opts, dev, target]) {
             Ok(()) => Some(mount),
             Err(_) => None,
         }
@@ -1324,8 +1523,10 @@ fn run(args: &[&str]) -> Result<(), String> {
 /// userspace without touching the kernel. Everything else is kexec'd, which is the
 /// only way a profile boots with a kernel or a tree of its own: the tool reads that
 /// entry for the kernel, the initrd and the command line, assembles its device tree
-/// (the running profile's is the live one; any other profile's is the board base plus
-/// the entry's overlays through fdtoverlay), loads all of it and hands over.
+/// from the board base plus the entry's overlays through fdtoverlay, loads all of it
+/// and hands over. Which way is the tool's call alone: it compares the tree it
+/// assembled with the one the kernel is running, so a change to an entry since this
+/// kernel booted is seen there, whoever made it.
 ///
 /// The entry is named, not the profile: the row on screen showed one kernel, and that
 /// is the one that has to boot. Handing over a profile name would let the tool choose
@@ -1875,5 +2076,181 @@ mod mount_tests {
             assert!(!name.contains('/'), "{dev:?} -> {name}");
             assert!(name.starts_with("flipctl-entries."), "{dev:?} -> {name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod video_tests {
+    use super::*;
+
+    const ENTRY: &str = "\
+title      Desktop 7.2.0-ge8750f615eb
+version    7.2.0-ge8750f615ebf
+sort-key   debian-1100-Desktop-0
+options    root=UUID=fe225468 rootflags=subvol=@Desktop flipper.entry=900-x
+linux      /@Desktop/usr/lib/modules/7.2.0-ge8750f615ebf/vmlinuz
+devicetreedir /@Desktop/usr/lib/linux-image-7.2.0-ge8750f615ebf
+initrd     /@Desktop/usr/lib/modules/7.2.0-ge8750f615ebf/initrd
+";
+
+    fn overlays(text: &str) -> Vec<String> {
+        text.lines()
+            .filter_map(|l| l.strip_prefix("devicetree-overlay"))
+            .flat_map(|rest| rest.split_whitespace().map(str::to_string))
+            .collect()
+    }
+
+    /// The default applies nothing, so an entry that had no overlay line still has
+    /// none: a line saying "no overlays" is a line a reader has to interpret.
+    #[test]
+    fn the_default_leaves_the_file_alone() {
+        assert_eq!(with_video_out(ENTRY, 0), ENTRY);
+        assert!(!with_video_out(ENTRY, 0).contains("devicetree-overlay"));
+    }
+
+    /// A choice becomes one line, holding the overlay under the device tree
+    /// directory this entry already names.
+    #[test]
+    fn a_choice_is_written_under_the_entrys_own_tree_directory() {
+        let headless = with_video_out(ENTRY, 2);
+        assert_eq!(
+            overlays(&headless),
+            vec![
+                "/@Desktop/usr/lib/linux-image-7.2.0-ge8750f615ebf/rockchip/\
+                 rk3576-no-graphics.dtbo"
+                    .replace("                 ", "")
+            ]
+        );
+        // And it sits after the directory it is relative to, which is where
+        // kernel-install puts it.
+        let lines: Vec<&str> = headless.lines().collect();
+        let dir = lines.iter().position(|l| l.starts_with("devicetreedir")).unwrap();
+        assert!(lines[dir + 1].starts_with("devicetree-overlay"));
+        // Nothing else moved.
+        assert_eq!(
+            headless.lines().filter(|l| !l.starts_with("devicetree-overlay")).count(),
+            ENTRY.lines().count()
+        );
+    }
+
+    /// One at a time: picking another replaces the first rather than stacking, and
+    /// picking the default takes the line away again.
+    #[test]
+    fn a_choice_replaces_the_last_one() {
+        let headless = with_video_out(ENTRY, 2);
+        let dp = with_video_out(&headless, 1);
+        assert_eq!(overlays(&dp).len(), 1);
+        assert!(overlays(&dp)[0].ends_with("rk3576-dp-4k-hdmi-2.5k.dtbo"));
+        assert_eq!(with_video_out(&dp, 0), ENTRY);
+    }
+
+    /// Every other overlay stays, wherever it came from. A user drop-in belongs to
+    /// whoever put it there and add-dtbo is what manages it; an overlay the image
+    /// shipped for something other than video is not this line's business either.
+    #[test]
+    fn overlays_that_are_not_ours_are_untouched() {
+        let with_others = ENTRY.replace(
+            "initrd",
+            "devicetree-overlay /@Desktop/usr/lib/linux-image-7.2.0-ge8750f615ebf/rockchip/\
+             rk3576-flipper-one-sata.dtbo /etc/kernel/dtbo/mine.dtbo\ninitrd",
+        );
+        let headless = with_video_out(&with_others, 2);
+        let got = overlays(&headless);
+        assert_eq!(got.len(), 3, "{got:?}");
+        assert!(got.iter().any(|o| o.ends_with("rk3576-flipper-one-sata.dtbo")));
+        assert!(got.iter().any(|o| o == "/etc/kernel/dtbo/mine.dtbo"));
+        assert!(got.iter().any(|o| o.ends_with("rk3576-no-graphics.dtbo")));
+        // Back to the default: ours goes, theirs stays, and the line survives.
+        let plain = with_video_out(&headless, 0);
+        assert_eq!(overlays(&plain).len(), 2);
+        assert!(!plain.contains("no-graphics"));
+    }
+
+    /// A real entry, off the device, kept verbatim: the leading comment,
+    /// kernel-install's own spacing and a full UUID, none of which the shortened
+    /// fixture above has.
+    const REAL: &str = r#"# Boot Loader Specification type#1 entry (Flipper One)
+title      Desktop 7.2.0-ge8750f615eb
+version    7.2.0-ge8750f615ebf
+sort-key   debian-1100-Desktop-0
+options    root=UUID=fe225468-8170-4391-bd08-934eced9ea38 audit=0 console=tty1 console=ttyS0,1500000n8 console=ttyS4,1500000n8 fbcon=map:1 rootflags=subvol=@Desktop flipper.entry=900-flipperos-Desktop-7.2.0-ge8750f615ebf
+linux      /@Desktop/usr/lib/modules/7.2.0-ge8750f615ebf/vmlinuz
+devicetreedir /@Desktop/usr/lib/linux-image-7.2.0-ge8750f615ebf
+initrd     /@Desktop/usr/lib/modules/7.2.0-ge8750f615ebf/initrd
+"#;
+
+    /// The transformation run against that, so what a keypress writes to a file
+    /// which then has to boot is read before it ever does.
+    #[test]
+    fn a_real_entry_survives_the_round_trip() {
+        let real = REAL;
+        let headless = with_video_out(real, 2);
+        // The overlay goes in the loader's namespace, like every other path in the
+        // file: U-Boot reads the filesystem's top level, so a path without the
+        // subvolume in front of it names nothing.
+        assert!(headless.contains(
+            "devicetree-overlay /@Desktop/usr/lib/linux-image-7.2.0-ge8750f615ebf/\
+             rockchip/rk3576-no-graphics.dtbo"
+                .replace("             ", "")
+                .as_str()
+        ));
+        let back = with_video_out(&headless, 0);
+        assert_eq!(back, real, "the round trip did not land back where it started");
+    }
+
+    /// A profile's other kernels get the same answer, each under its own tree
+    /// directory, and a BSP entry is left alone: these overlays are nodes of our own
+    /// tree, so a 6.1 entry would name a file that does not exist and fail to boot
+    /// something that boots today.
+    #[test]
+    fn every_modern_entry_is_written_and_the_old_ones_are_not() {
+        let conf = |file: &str, version: &str, dir: &str| Conf {
+            file: file.into(),
+            version: version.into(),
+            dtdir: dir.into(),
+            ..Default::default()
+        };
+        let p = Profile {
+            entries: vec![
+                conf("900-a.conf", "7.2.0-new", "/@Desktop/usr/lib/linux-image-7.2.0-new")
+                    .entry(),
+                conf("900-b.conf", "7.1.0-old", "/@Desktop/usr/lib/linux-image-7.1.0-old")
+                    .entry(),
+                conf("900-c.conf", "6.1.172", "/@Desktop/usr/lib/linux-image-6.1.172").entry(),
+            ],
+            ..Default::default()
+        };
+        let written: Vec<&str> = p
+            .entries
+            .iter()
+            .filter(|e| version_at_least(&e.version, MIN_KERNEL))
+            .map(|e| e.file.as_str())
+            .collect();
+        assert_eq!(written, vec!["900-a.conf", "900-b.conf"], "the BSP entry was written");
+
+        // Each takes the overlay from under its own kernel, not the first one's.
+        for entry in &p.entries {
+            let text = format!("devicetreedir {}\n", entry.dtdir);
+            let out = with_video_out(&text, 2);
+            assert!(
+                out.contains(&format!("{}/rockchip/rk3576-no-graphics.dtbo", entry.dtdir)),
+                "{out}"
+            );
+        }
+    }
+
+    /// What the row reads back, which has to agree with what it wrote.
+    #[test]
+    fn an_entry_says_which_one_it_is_on() {
+        let entry = |text: &str| parse_conf("900-x.conf", text).expect("conf").entry();
+        assert_eq!(video_out_of(&entry(ENTRY)), 0);
+        assert_eq!(video_out_of(&entry(&with_video_out(ENTRY, 1))), 1);
+        assert_eq!(video_out_of(&entry(&with_video_out(ENTRY, 2))), 2);
+        // A user drop-in of the same name is theirs, and is not this row's answer.
+        let mine = ENTRY.replace(
+            "initrd",
+            "devicetree-overlay /etc/kernel/dtbo/rk3576-no-graphics.dtbo\ninitrd",
+        );
+        assert_eq!(video_out_of(&entry(&mine)), 0);
     }
 }
