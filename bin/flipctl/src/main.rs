@@ -538,7 +538,9 @@ mod detail {
     /// screen is ever open, and dropping this stops exactly one thread.
     pub enum Live {
         Ethernet(Watch<Vec<flipper_ui::sysinfo::Iface>>),
-        Routing(Watch<Vec<Route>>),
+        /// Not a `Watch`: the kernel says when a route changes, so there is
+        /// nothing to poll. See `route_watch`.
+        Routing(flipper_ui::route_watch::RouteWatch),
         Disk(Watch<Disks>),
         Battery(Watch<Battery>),
         Modem(Watch<Modem>),
@@ -566,13 +568,13 @@ mod detail {
                     Vec::new(),
                     flipper_ui::sysinfo::ethernet,
                 )),
-                // routing.js polls every second.
-                Detail::Routing => Live::Routing(Watch::spawn(
-                    "watch-routing",
-                    Duration::from_secs(1),
-                    Vec::new(),
-                    sysinfo::routes,
-                )),
+                // routing.js polls every second. This does not poll at all:
+                // rtnetlink announces a route changing, which is the only time the
+                // table can differ, and the page then updates at once rather than
+                // up to a second later.
+                Detail::Routing => {
+                    Live::Routing(flipper_ui::route_watch::RouteWatch::spawn())
+                }
                 // diskspace.js fetches once on enter; a slow re-read costs nothing
                 // and picks up a card inserted while the screen is open.
                 Detail::Disk => Live::Disk(Watch::spawn(

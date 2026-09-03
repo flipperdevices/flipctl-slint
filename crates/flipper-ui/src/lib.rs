@@ -13,6 +13,7 @@ pub mod layout;
 pub mod log;
 pub mod net;
 pub mod netlink;
+pub mod route_watch;
 pub mod nl80211;
 pub mod old_flipctl_loader;
 pub mod status;
