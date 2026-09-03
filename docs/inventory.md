@@ -276,6 +276,19 @@ lands in the commit and `fo_plane_atomic_update` writes the SPI buffer.
 `KmsSink::flush_path()` reports which path was taken, so a driver that later gains
 `dirty_fb` becomes visible instead of silently unused.
 
+**No signal in sysfs.** `CONFIG_CFG80211_WEXT` is off in the kernel config, and it
+is the wireless-extensions compat layer that creates both `/proc/net/wireless` and
+the attributes in `/sys/class/net/<if>/wireless/`. So the file is absent and that
+directory exists but is empty, which is how `status::read_wifi` came to pass its
+`is_dir()` check and then read a quality of 0: the bar drew the empty signal icon
+on a full-strength link. `CONFIG_MAC80211_DEBUGFS` is off too, so there is no
+`stations/*/rssi` either, and mt76's own debugfs carries no signal. `nl80211.rs`
+asks the kernel over netlink instead, as `iw` and NetworkManager do.
+
+Turning WEXT on is a one-line addition to `minconfig-mainline` and would make the
+sysfs path work again for everything, including a hosted app's own bar. `status`
+tries the file first and falls back, so that change needs nothing unpicked here.
+
 **No damage clipping and no `DRM_FORMAT_R8`.** As recorded in the plan.
 `fo_set_tx_buffer_data` hardcodes the clip to the whole framebuffer and
 retransmits all 37152 bytes per commit, and the only advertised format is

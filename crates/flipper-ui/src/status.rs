@@ -164,14 +164,23 @@ fn read_wifi() -> (bool, i32) {
     (false, 0)
 }
 
-/// Link quality from `/proc/net/wireless`, third column.
+/// Link quality, from `/proc/net/wireless` where there is one and from the kernel
+/// itself where there is not.
 ///
-/// Most drivers report it out of 70, which is what wireless-tools assumes, so it
-/// is scaled to a percentage on that basis. The icon only has five buckets, so a
-/// driver that reports a different ceiling shifts the picture by at most one step.
+/// The file is the cheap source and the one to prefer: a read of a few hundred
+/// bytes, no socket, and it works for any driver. It comes from the
+/// wireless-extensions compat layer, which this board's kernel does not build
+/// (`CONFIG_CFG80211_WEXT` is off), so the file is absent and the answer used to
+/// be 0 -- which the status bar drew as an empty signal icon on a full-strength
+/// link. Turning WEXT on later is a one-line kernel change and this path picks it
+/// up with nothing to unpick, since the file is tried first.
+///
+/// Most drivers report the file's value out of 70, which is what wireless-tools
+/// assumes, so it is scaled on that basis. The icon has five buckets, so a driver
+/// with a different ceiling shifts the picture by at most one step.
 fn wifi_quality(iface: &str) -> i32 {
     let Some(text) = read("/proc/net/wireless") else {
-        return 0;
+        return crate::nl80211::signal_percent(iface).unwrap_or(0);
     };
     for line in text.lines().skip(2) {
         let Some((name, rest)) = line.split_once(':') else {
@@ -185,7 +194,9 @@ fn wifi_quality(iface: &str) -> i32 {
             return ((link / 70.0) * 100.0).clamp(0.0, 100.0) as i32;
         }
     }
-    0
+    // The file exists but says nothing about this interface, which is the same
+    // gap as its not being there at all.
+    crate::nl80211::signal_percent(iface).unwrap_or(0)
 }
 
 /// A real link wins over the USB gadget: if both are up the bar should say there
