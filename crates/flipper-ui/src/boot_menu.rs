@@ -22,9 +22,50 @@ use crate::theme::{metric::SPIN_FRAMES, timing::SPIN_FRAME_MS};
 /// How often the partition table is compared against the one the list was read from.
 const PARTS_POLL: Duration = Duration::from_millis(500);
 
-/// How long a boot waits for an arm that is still loading before going ahead without it.
-/// The load measures 2.4s on this board; the rest is room for a machine under load.
+/// How long a boot waits for an arm of the same entry that is still loading, before
+/// going ahead without it.
+///
+/// Room for the slow case: a kernel without the page table fix below takes 2.8s on this
+/// board against 0.7s with it, and the rest is for a machine under load. A boot never waits for a load of
+/// some other entry, which cursor-following makes the common case: the tool retries the
+/// kexec syscall itself, so the lock is waited out where the waiting belongs.
 const ARM_WAIT: Duration = Duration::from_secs(6);
+
+/// How quickly an arm has to come back for the menu to treat loading as cheap.
+///
+/// The load itself is one syscall placing the image and cloning the kernel's page tables.
+/// `arm64: trans_pgd: clone only the linear map that exists at runtime` stopped that walk
+/// cloning the entire kernel table 16 times over on a VA-52 kernel running at VA 48,
+/// which is what this board is. Both kernels measured here, on 7.75GB of RAM:
+///
+/// |                        | without the fix | with it |
+/// |------------------------|-----------------|---------|
+/// | the load syscall       | 2481ms          | 432ms   |
+/// | the whole arm, wall    | 2770ms          | 695ms   |
+/// | load and unload again  | 4970ms          | 703ms   |
+///
+/// Which says the clone was 88% of that syscall and is now 1/16th of itself, leaving
+/// about 295ms of work the fix does not touch: copying and hashing 29MB of kernel and
+/// initrd into their destination. So the syscall is 5.7x faster rather than 16x, and the
+/// arm 4x, because the tool around it costs 100ms and the fixed part of the load nearly
+/// 300ms. Unloading has gone from 2.2s to nothing worth measuring, since it frees the
+/// tables the clone made.
+///
+/// What is timed is the whole arm, so this sits between 695ms and 2770ms and near
+/// neither. A threshold set from the syscall alone would call a fixed kernel expensive
+/// and switch the whole thing off.
+///
+/// Measured rather than asked, because nothing in /proc says whether a kernel carries
+/// that patch.
+const LOAD_IS_CHEAP: Duration = Duration::from_millis(1200);
+
+/// How still the cursor has to be before the profile under it is loaded.
+///
+/// Somebody walking down the list passes rows they are not choosing, and the kernel holds
+/// one image at a time, so each load throws the last away. The wait is what keeps a walk
+/// from becoming a queue of loads nobody wanted: long enough to mean "stopped here",
+/// short enough to be finished before a hand reaches Ok.
+const ARM_SETTLE: Duration = Duration::from_millis(400);
 
 /// How long the marked profile has before it is booted.
 ///
@@ -259,6 +300,52 @@ fn partitions() -> String {
     std::fs::read_to_string("/proc/partitions").unwrap_or_default()
 }
 
+/// Which image, for telling one from another: the filesystem it is on and the entry that
+/// names it. Two profiles of the same name on two drives boot different kernels, so the
+/// device is half of the answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Aim {
+    dev: String,
+    entry: String,
+}
+
+/// The image a profile would be loaded from, or None for a profile with no kernel.
+fn aim(p: &Profile) -> Option<Aim> {
+    p.entries.first().map(|e| Aim {
+        dev: p.dev.clone(),
+        entry: e.id.clone(),
+    })
+}
+
+/// What the load that just finished says about this kernel, if anything.
+///
+/// A load that put nothing in the kernel measured nothing. `--arm` on a profile that
+/// would be pivoted into comes back in the time it takes to decide that, a few tens of
+/// milliseconds, and taking it as evidence would turn cursor-following on for a kernel
+/// where every real load costs 2.4s. The marked profile is usually the running one and
+/// usually pivotable, so that is the common case rather than a corner.
+fn cheap_from(loaded_an_image: bool, took: Duration) -> Option<bool> {
+    loaded_an_image.then(|| took < LOAD_IS_CHEAP)
+}
+
+/// Whether the profile under the cursor is worth loading now.
+///
+/// A free function because the policy is the part worth testing and it is made of three
+/// facts, none of which needs a menu, a device or a kexec to state:
+///
+///   * loading has not been found expensive. Not the same as having been found cheap:
+///     until one real load has been timed there is nothing to go on, and the way to get
+///     a measurement is to do one. So an unmeasured menu will load once, which is what
+///     it did before any of this, and a kernel where that turns out to cost 2.4s never
+///     loads on a cursor move again.
+///   * the cursor has stopped rather than passed through.
+///   * this is not what was last asked for. Asked rather than loaded, because a profile
+///     the tool pivots into loads nothing, and comparing against what the kernel holds
+///     would ask for it again on every tick the cursor sat there.
+fn worth_arming(cheap: Option<bool>, still: Duration, asked: Option<&Aim>, next: &Aim) -> bool {
+    cheap != Some(false) && still >= ARM_SETTLE && asked != Some(next)
+}
+
 /// The boot menu's state.
 pub struct BootMenu {
     /// The rows: one per profile, each carrying its entries in boot order, so
@@ -276,12 +363,30 @@ pub struct BootMenu {
     cancelled: bool,
     auto_start: AutoStart,
     booting: Option<(String, Receiver<Result<bool, String>>)>,
-    /// An arm in flight: the image for the marked profile being loaded ahead of the
-    /// boot that would ask for it. Carries nothing but its finish, since what was
-    /// loaded is recorded by the tool and checked there.
-    arming: Option<Receiver<Result<(), String>>>,
-    /// Whether the marked profile's image has been asked for, so it is asked for once.
-    armed: bool,
+    /// An arm in flight: an image being loaded ahead of the boot that would ask for it.
+    /// Carries nothing but its finish, since what was loaded is recorded by the tool and
+    /// checked there.
+    arming: Option<Receiver<Result<bool, String>>>,
+    /// Which image that load is for, so a boot knows whether it is worth waiting for.
+    arming_for: Option<Aim>,
+    /// When it started, so the first one can be timed.
+    arm_started: Option<Instant>,
+    /// What the last arm was for, whatever came of it, so the same one is not asked for
+    /// twice over while the cursor sits on it.
+    asked: Option<Aim>,
+    /// Whether the kernel took an image from this menu, and so whether closing it has
+    /// something to discard.
+    ///
+    /// Read back from the kernel rather than assumed: `--arm` on a profile that would be
+    /// pivoted into loads nothing. Cleared only by a load that put nothing there, since a
+    /// list being read again unloads nothing and forgetting here is how an image outlives
+    /// the menu that loaded it.
+    holding: bool,
+    /// Whether a load has been seen to come back inside `LOAD_IS_CHEAP`, and so whether
+    /// the cursor is worth following. None until the first one has been timed.
+    cheap: Option<bool>,
+    /// When the cursor last moved, for the settle before the row under it is loaded.
+    moved_at: Instant,
     /// What the kernel's partition table looked like when the list was last read, and
     /// when it was last compared, so a drive that arrives late is noticed.
     parts: String,
@@ -343,7 +448,12 @@ impl BootMenu {
             auto_start,
             booting: None,
             arming: None,
-            armed: false,
+            arming_for: None,
+            arm_started: None,
+            asked: None,
+            holding: false,
+            cheap: None,
+            moved_at: Instant::now(),
             parts: partitions(),
             parts_polled: Instant::now(),
             parts_settling: false,
@@ -380,31 +490,69 @@ impl BootMenu {
     /// Load the image of the profile that boots by itself, so the boot that follows
     /// does not have to.
     ///
-    /// That profile and no other: the kernel holds one image at a time, so arming
-    /// anything else would throw this one away, and it is both what a countdown boots
-    /// by itself and what somebody opening this list most often picks.
-    /// Where it can be pivoted into, which is usually the case for the running profile,
-    /// the tool loads nothing and this costs a decision.
+    /// The first load the menu does, and the one it times: it is what a countdown boots
+    /// unattended and what somebody opening this list most often picks, so it is worth
+    /// doing before anything is asked for whatever a load costs.
     fn arm_marked(&mut self) {
-        // One at a time: a re-read allows this again, and a load still running would
-        // otherwise be joined by a second one, which waits out the kexec lock and then
-        // loads the same image over again.
-        if self.armed || self.arming.is_some() {
-            return;
-        }
         let Some(p) = self.first.and_then(|at| self.profiles.get(at)).cloned() else {
             return;
         };
+        self.arm(&p);
+    }
+
+    /// Load the image of the profile under the cursor, once the cursor has stopped
+    /// there and only where loading is cheap.
+    ///
+    /// What the page table fix bought. A load used to cost 2.4s of this board's time, so
+    /// the menu could afford exactly one and spent it on the profile a countdown would
+    /// boot; at 0.16s it can afford to follow a person around the list, and the boot
+    /// they ask for by pressing Ok hands over as fast as the unattended one.
+    ///
+    /// The marked profile's image is thrown away when the cursor moves off it, and the
+    /// countdown then loads again. That is the trade: 0.16s to the boot nobody is
+    /// watching, so the boot somebody is waiting on has none.
+    fn arm_cursor(&mut self) {
+        if self.arming.is_some() || self.popup.is_some() || self.booting.is_some() {
+            return;
+        }
+        let Some(next) = self.selected_profile().and_then(aim) else {
+            return;
+        };
+        if !worth_arming(self.cheap, self.moved_at.elapsed(), self.asked.as_ref(), &next) {
+            return;
+        }
+        let Some(p) = self.selected_profile().cloned() else {
+            return;
+        };
+        self.arm(&p);
+    }
+
+    /// Load one profile's image, unless it is already loaded or a load is in flight.
+    ///
+    /// The kernel holds one image at a time, so a second load waits out the kexec lock
+    /// and then replaces what the first one put there: one at a time, and never the one
+    /// already in place. Where the profile can be pivoted into, which is usually the
+    /// case for the running one, the tool loads nothing and this costs a decision.
+    fn arm(&mut self, p: &Profile) {
+        let Some(next) = aim(p) else {
+            return;
+        };
+        if self.arming.is_some() || self.asked.as_ref() == Some(&next) {
+            return;
+        }
         let (tx, rx) = std::sync::mpsc::channel();
+        let loading = p.clone();
         if std::thread::Builder::new()
             .name("boot-arm".into())
             .spawn(move || {
-                let _ = tx.send(boot::arm(&p));
+                let _ = tx.send(boot::arm(&loading));
             })
             .is_ok()
         {
             self.arming = Some(rx);
-            self.armed = true;
+            self.arming_for = Some(next.clone());
+            self.arm_started = Some(Instant::now());
+            self.asked = Some(next);
         }
     }
 
@@ -414,7 +562,7 @@ impl BootMenu {
     /// image a handover is about to use is not one to throw away. An arm still
     /// loading counts, since the tool waits for it and discards what lands.
     pub fn holds_an_arm(&self) -> bool {
-        self.armed && self.booting.is_none()
+        (self.holding || self.arming.is_some()) && self.booting.is_none()
     }
 
     /// Read the drives again because one appeared, without moving anything the user is
@@ -440,7 +588,6 @@ impl BootMenu {
             .map(|p| (p.name.clone(), p.dev.clone()));
         let again = Self::open(self.visible, self.auto_start, self.kernels);
         self.pending = again.pending;
-        self.armed = false;
     }
 
     /// Read the drives again, from nothing: the list, the marker and the cursor.
@@ -449,9 +596,10 @@ impl BootMenu {
     /// while this screen is up, and nothing else in the program goes looking for it, so a
     /// list read once at startup would show a machine that no longer exists.
     ///
-    /// Prefetching is allowed again, because the marker may now name a different profile
-    /// (a card carries its own), and prefetching the one already loaded costs a decision
-    /// and no load.
+    /// What is loaded is not forgotten: a list changing unloads nothing, and an image
+    /// this menu no longer remembers is one nobody discards. The marker may now name a
+    /// different profile, since a card carries its own, and that one is loaded in its
+    /// place; where it names the same one, there is nothing to do.
     pub fn reread(&mut self) {
         crate::logline!("boot menu      reading the drives again");
         let again = Self::open(self.visible, self.auto_start, self.kernels);
@@ -460,7 +608,6 @@ impl BootMenu {
         self.pending = again.pending;
         self.selected = 0;
         self.popup_index = 0;
-        self.armed = false;
     }
 
     /// The profiles as listed, for a caller judging a new name against them.
@@ -500,6 +647,7 @@ impl BootMenu {
         }
 
         let count = self.profiles.len() as i32;
+        let was = self.selected;
         match event.key {
             FlipperKey::Down if count > 0 => self.selected = (self.selected + 1).rem_euclid(count),
             FlipperKey::Up if count > 0 => self.selected = (self.selected - 1).rem_euclid(count),
@@ -512,6 +660,9 @@ impl BootMenu {
             FlipperKey::Edit if count > 0 => self.open_popup(Popup::Edit),
             FlipperKey::Escape | FlipperKey::Back => return Outcome::Leave,
             _ => {}
+        }
+        if self.selected != was {
+            self.moved_at = Instant::now();
         }
         Outcome::Stay
     }
@@ -852,12 +1003,23 @@ impl BootMenu {
         );
         let (tx, rx) = std::sync::mpsc::channel();
         let label = boot::display_name(&p.name);
-        // An arm still loading is this boot's own image being made ready, and the kernel
-        // takes one caller at a time: starting the boot now means loading it again behind
-        // the first load. Wait for it instead, on the boot's thread so the panel keeps
-        // painting, and then hand over with nothing left to load. Bounded because a wait
-        // that never ends would be a menu that never boots.
-        let arming = self.arming.take();
+        // An arm still loading for this same entry is this boot's own image being made
+        // ready, and the kernel takes one caller at a time: starting the boot now means
+        // loading it again behind the first load. Wait for that one instead, on the
+        // boot's thread so the panel keeps painting, and then hand over with nothing
+        // left to load. Bounded, because a wait that never ends is a menu that never
+        // boots.
+        //
+        // A load for some other entry is not waited for. Following the cursor makes that
+        // the ordinary case (move, then press Ok before the load lands), and the wait
+        // would buy nothing: the image being built is not the one wanted. The kexec lock
+        // is still held, and boot-profile retries the syscall for it, so the waiting
+        // happens where it belongs and this boot is not held up by an image it is about
+        // to replace.
+        let arming = match (aim(&p), self.arming_for.as_ref()) {
+            (Some(want), Some(loading)) if want == *loading => self.arming.take(),
+            _ => None,
+        };
         if std::thread::Builder::new()
             .name("boot-now".into())
             .spawn(move || {
@@ -992,14 +1154,46 @@ impl BootMenu {
             match rx.try_recv() {
                 Ok(res) => {
                     self.arming = None;
-                    if let Err(e) = res {
-                        crate::logline!("boot menu      arming failed: {e}");
+                    let for_what = self.arming_for.take();
+                    let took = self.arm_started.take().map(|at| at.elapsed());
+                    let holding = match res {
+                        Ok(holding) => holding,
+                        Err(e) => {
+                            crate::logline!("boot menu      arming failed: {e}");
+                            false
+                        }
+                    };
+                    // What the kernel took, or did not: a failure and a profile the
+                    // tool pivots into both leave nothing behind to discard.
+                    if self.asked == for_what {
+                        self.holding = holding;
+                    }
+                    // The first real load answers the only question about this kernel
+                    // that matters here, which is what a load costs on it.
+                    if let (None, Some(took)) = (self.cheap, took) {
+                        if let Some(cheap) = cheap_from(holding, took) {
+                            self.cheap = Some(cheap);
+                            crate::logline!(
+                                "boot menu      loading took {}ms, {}",
+                                took.as_millis(),
+                                if cheap {
+                                    "following the cursor"
+                                } else {
+                                    "arming the marked profile only"
+                                }
+                            );
+                        }
                     }
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.arming = None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.arming = None;
+                    self.arming_for = None;
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
+        // And then keep whatever the cursor has settled on loaded, where that is cheap.
+        self.arm_cursor();
 
         // A finished action says nothing: the popup closes and the list is read
         // again, which is the answer. Only a failure has something to report, and it
@@ -1460,5 +1654,105 @@ mod tests {
         // not be read at all: the first entry either way rather than a panic.
         assert_eq!(kernel_base_of(&updated, "7.0.0-gone"), 0);
         assert_eq!(kernel_base_of(&updated, ""), 0);
+    }
+
+    fn on(dev: &str, entry: &str) -> Aim {
+        Aim { dev: dev.into(), entry: entry.into() }
+    }
+
+    /// A load that loaded nothing has measured nothing.
+    ///
+    /// The marked profile is usually the running one, which the tool pivots into
+    /// rather than kexecs, so `--arm` on it returns at once having put no image in
+    /// the kernel. Reading that as "loading is cheap" would follow the cursor on a
+    /// kernel where every real load costs 2.4s, which is the one case this whole
+    /// measurement exists to avoid.
+    #[test]
+    fn a_load_that_loaded_nothing_proves_nothing() {
+        assert_eq!(cheap_from(false, Duration::from_millis(40)), None);
+        assert_eq!(cheap_from(false, Duration::from_secs(3)), None);
+        // A real load, timed. Both figures are this board's own: an arm on a kernel
+        // with the page table fix and one without, tool included.
+        assert_eq!(cheap_from(true, Duration::from_millis(695)), Some(true));
+        assert_eq!(cheap_from(true, Duration::from_millis(2749)), Some(false));
+        // The threshold itself is a wide gap rather than a close call: the two
+        // kernels this tells apart answer 0.70s and 2.77s.
+        assert_eq!(cheap_from(true, LOAD_IS_CHEAP), Some(false));
+        assert_eq!(cheap_from(true, LOAD_IS_CHEAP - Duration::from_millis(1)), Some(true));
+    }
+
+    /// The cursor is followed only where a load is cheap, which is measured rather
+    /// than assumed: the same code runs on a kernel where a load costs 2.4s, and
+    /// spending that on every row somebody walks past would make the list unusable.
+    #[test]
+    fn the_cursor_is_followed_only_where_loading_is_cheap() {
+        let settled = ARM_SETTLE;
+        let next = on("", "900-flipperos-Desktop-7.2.0");
+
+        // Nothing timed yet: load once, because that is how a measurement is got,
+        // and it is what the menu did before any of this.
+        assert!(worth_arming(None, settled, None, &next));
+        // Timed and slow: this kernel gets no more loads on a cursor move.
+        assert!(!worth_arming(Some(false), settled, None, &next));
+        // Timed and cheap.
+        assert!(worth_arming(Some(true), settled, None, &next));
+    }
+
+    /// A walk down the list is not a queue of loads: the row has to be the one the
+    /// cursor stopped on.
+    #[test]
+    fn a_row_passed_through_is_not_loaded() {
+        let next = on("", "900-flipperos-Desktop-7.2.0");
+        assert!(!worth_arming(Some(true), Duration::ZERO, None, &next));
+        assert!(!worth_arming(
+            Some(true),
+            ARM_SETTLE - Duration::from_millis(1),
+            None,
+            &next
+        ));
+        assert!(worth_arming(Some(true), ARM_SETTLE, None, &next));
+    }
+
+    /// What was last asked for is not asked for again: the kernel holds one image, so
+    /// that syscall would throw away the image it then rebuilds. Coming back to a row
+    /// is therefore free, and so is a re-read whose marker has not moved. Asked rather
+    /// than held, because a profile the tool pivots into leaves nothing held and would
+    /// otherwise be asked for on every tick the cursor sat on it.
+    #[test]
+    fn what_was_asked_for_is_not_asked_for_again() {
+        let here = on("", "900-flipperos-Desktop-7.2.0");
+        let elsewhere = on("", "600-flipperos-Minimal-7.2.0");
+        // The same entry on another drive is another image, which is why a device is
+        // half of the identity: entry ids repeat across filesystems written from one
+        // image.
+        let on_a_card = on("/dev/mmcblk1p3", "900-flipperos-Desktop-7.2.0");
+
+        assert!(!worth_arming(Some(true), ARM_SETTLE, Some(&here), &here));
+        assert!(worth_arming(Some(true), ARM_SETTLE, Some(&here), &elsewhere));
+        assert!(worth_arming(Some(true), ARM_SETTLE, Some(&here), &on_a_card));
+    }
+
+    /// An image is remembered until something unloads it.
+    ///
+    /// A re-read used to clear the flag that said one was held, which let a menu
+    /// close without discarding what it had loaded. A device found with
+    /// /sys/kernel/kexec_loaded still 1 from an earlier session is what that leaves.
+    #[test]
+    fn a_reread_does_not_forget_a_loaded_image() {
+        let mut menu = BootMenu::open(4, AutoStart::Off, Kernels::Modern);
+        // Nothing has been loaded, so there is nothing to discard.
+        assert!(!menu.holds_an_arm());
+
+        menu.asked = Some(on("", "900-flipperos-Desktop-7.2.0"));
+        menu.holding = true;
+        assert!(menu.holds_an_arm());
+
+        // The drives changed and the list is being read again. The kernel still holds
+        // the image either way.
+        menu.reread();
+        assert!(
+            menu.holds_an_arm(),
+            "a re-read forgot an image the kernel is still holding"
+        );
     }
 }

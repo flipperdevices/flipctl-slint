@@ -2603,7 +2603,10 @@ fn panel(
             if let Some(menu) = boot.take() {
                 if menu.holds_an_arm() {
                     flipper_ui::boot::disarm();
-                    eprintln!("boot menu      closed, disarming");
+                    // The same sink as everything else the boot menu says, which is
+                    // /dev/kmsg: the initramfs menu has no journal, and a story told
+                    // half in dmesg and half in the journal is one nobody finds.
+                    flipper_ui::logline!("boot menu      closed, disarming");
                 }
             }
         };

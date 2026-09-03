@@ -1364,23 +1364,33 @@ pub fn boot_now(p: &Profile) -> Result<bool, String> {
     Ok(dry)
 }
 
-/// Load the image the profile that boots by itself would kexec into, while nobody is
-/// pressing anything.
+/// Load the image a profile would kexec into, while nobody is pressing anything.
 ///
-/// The loading is the slow half of a kexec boot and none of it is I/O: measured on this
-/// board, 2.4s of a 13.8s boot, spent inside the syscall placing a 29MB kernel at its
-/// destination, against 0.08s to read the files and 0.04s to assemble the device tree.
-/// The menu is idle while it counts down, so that 2.4s can be spent before the boot is
-/// asked for rather than after, and an unattended boot saves all of it.
+/// The loading is the slow half of a kexec boot and none of it is I/O: one syscall
+/// placing a 29MB kernel at its destination and cloning the kernel's page tables,
+/// against 0.05s to read the files and 0.04s to assemble the device tree. Measured on
+/// this board, both kernels: 2.48s in that syscall until `arm64: trans_pgd: clone only
+/// the linear map that exists at runtime`, which stopped the walk cloning the whole
+/// kernel table 16 times on a VA-52 kernel running at VA 48, and 0.43s after it. The
+/// clone was 88% of it; what is left is copying and hashing the image, which no patch
+/// makes free.
+///
+/// Either figure is time a boot then does not spend, and a menu waiting for a key has
+/// it to spare.
 ///
 /// Nothing is loaded for a profile that would be pivoted into: a pivot keeps this
-/// kernel, so there is no image. The kernel holds one image at a time, which is why
-/// this is only ever called for the profile that boots by itself.
+/// kernel, so there is no image. The kernel holds one image at a time, so each of
+/// these replaces the last, and which profile is worth holding is the caller's
+/// decision rather than this function's.
+///
+/// Returns whether the kernel now holds an image, read from it rather than assumed:
+/// the difference between a load and a decision not to load is invisible in the exit
+/// status, and a caller timing the syscall would otherwise time the decision.
 ///
 /// Arming does not count as an attempt -- the tool leaves the counter alone until it
 /// actually hands over -- so a menu that arms and then sits there costs a profile
 /// nothing.
-pub fn arm(p: &Profile) -> Result<(), String> {
+pub fn arm(p: &Profile) -> Result<bool, String> {
     let Some(entry) = p.entries.first() else {
         return Err("nothing to arm".into());
     };
@@ -1393,13 +1403,25 @@ pub fn arm(p: &Profile) -> Result<(), String> {
         args.push(&p.dev);
     }
     args.push(&entry.id);
-    run(&args).map(|_| ())
+    run(&args)?;
+    Ok(kexec_loaded())
+}
+
+/// Whether the kernel is holding a kexec image.
+///
+/// The kernel's own answer, and the only one there is: what a profile's entry asks for
+/// decides whether the tool loads anything, and nothing in the reply distinguishes
+/// "loaded" from "nothing to load".
+pub fn kexec_loaded() -> bool {
+    std::fs::read_to_string("/sys/kernel/kexec_loaded")
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
 }
 
 /// Discard an image left loaded by `arm`.
 ///
-/// Takes no profile: the kernel holds one image at a time, which is why only the
-/// profile that would boot by itself is ever armed.
+/// Takes no profile: the kernel holds one image at a time, so there is only ever one
+/// image to discard, whichever profile it was loaded for.
 ///
 /// Detached and unwaited, because this runs when a screen closes and the panel must
 /// not stop for it. The tool retries the kexec syscall for up to four seconds to
