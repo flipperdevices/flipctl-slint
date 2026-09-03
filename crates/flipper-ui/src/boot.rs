@@ -1396,6 +1396,28 @@ pub fn arm(p: &Profile) -> Result<(), String> {
     run(&args).map(|_| ())
 }
 
+/// Discard an image left loaded by `arm`.
+///
+/// Takes no profile: the kernel holds one image at a time, which is why only the
+/// profile that would boot by itself is ever armed.
+///
+/// Detached and unwaited, because this runs when a screen closes and the panel must
+/// not stop for it. The tool retries the kexec syscall for up to four seconds to
+/// wait out a load that is still going, which is the case that matters here: an arm
+/// still in flight lands and is then discarded, rather than the discard being the
+/// thing that is lost.
+pub fn disarm() {
+    let mut cmd = tool(&["boot-profile", "--disarm"]);
+    if let Err(e) = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        crate::logline!("boot menu      cannot disarm: {e}");
+    }
+}
+
 /// Make this profile the one that boots when nobody presses anything.
 ///
 /// Nothing is recorded anywhere: `set-boot-order` moves the autoboot digit in the

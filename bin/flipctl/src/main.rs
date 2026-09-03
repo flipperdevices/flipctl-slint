@@ -2593,6 +2593,22 @@ fn panel(
         }};
     }
 
+    // Closing the boot menu discards whatever it armed.
+    //
+    // An arm is a whole kernel and initrd loaded into the kexec staging area, ready
+    // for a boot that is now not happening, and the kernel holds one image at a
+    // time. Leaving it there costs that memory until something boots or arms again.
+    macro_rules! close_boot {
+        () => {
+            if let Some(menu) = boot.take() {
+                if menu.holds_an_arm() {
+                    flipper_ui::boot::disarm();
+                    eprintln!("boot menu      closed, disarming");
+                }
+            }
+        };
+    }
+
     // The line under the text field, for whatever the keyboard is collecting.
     macro_rules! kb_warning {
         ($input:expr) => {
@@ -4078,7 +4094,7 @@ fn panel(
                     // stack's copy would put the cursor wherever the last drill-in
                     // happened to store.
                     flipper_ui::boot_menu::Outcome::Leave => {
-                        boot = None;
+                        close_boot!();
                         let menu = stack.last().unwrap().0;
                         demo::apply_menu(&screen, menu, &net_now);
                         screen.set_screen(Screen::Menu);
@@ -4977,6 +4993,18 @@ fn panel(
             live = None;
             eth_open = false;
             eth_scroll = 0.0;
+        }
+        // Stepped out of rather than backed out of: the deck, an app launched over
+        // it, anything that changes the screen without the menu's own Back. Same
+        // principle as a screen's pollers, and the same two exceptions -- the deck
+        // is an overlay the user returns from, and a rename is this menu's own
+        // keyboard with its list still behind it.
+        if boot.is_some()
+            && !matches!(screen.get_screen(), Screen::Boot | Screen::Switcher)
+            && !(screen.get_screen() == Screen::TextInput
+                && matches!(kb_for, KbFor::Profile(_)))
+        {
+            close_boot!();
         }
         if wifi_live.is_some()
             && !matches!(screen.get_screen(), Screen::Wifi | Screen::Switcher)

@@ -408,6 +408,15 @@ impl BootMenu {
         }
     }
 
+    /// Whether closing this menu should discard an image it loaded.
+    ///
+    /// True once an arm has been asked for, and false while a boot is under way: the
+    /// image a handover is about to use is not one to throw away. An arm still
+    /// loading counts, since the tool waits for it and discards what lands.
+    pub fn holds_an_arm(&self) -> bool {
+        self.armed && self.booting.is_none()
+    }
+
     /// Read the drives again because one appeared, without moving anything the user is
     /// looking at.
     ///
