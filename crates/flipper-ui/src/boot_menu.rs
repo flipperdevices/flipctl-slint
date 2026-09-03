@@ -915,10 +915,17 @@ impl BootMenu {
                 .spawn(move || {
                     let at = Instant::now();
                     let space = boot::space(&dev, &name);
+                    // Both numbers, each said to be what it is. The screen shows the
+                    // exclusive one, so a line reporting only the apparent size under
+                    // the same name as the row invites the reader to conclude the menu
+                    // is wrong: 8.0GB in the log against 4.2GB on the panel is one
+                    // subvolume sharing half its extents with the profile it was
+                    // stamped from, not a bug.
                     crate::logline!(
-                        "boot           size {} in {:.3}s: {}",
+                        "boot           size {} in {:.3}s: {} exclusive, {} apparent",
                         name,
                         at.elapsed().as_secs_f64(),
+                        space.as_ref().map_or("unknown", |s| s.unique.as_str()),
                         space.as_ref().map_or("unknown", |s| s.total.as_str())
                     );
                     let _ = tx.send(space);
