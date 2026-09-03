@@ -1,0 +1,12 @@
+# Internet radio: a stream picked from a list, played on the panel's speaker.
+#
+# `audio` is what earns it the sound server, and with it the pinned sink: the stream
+# comes out of the device rather than out of whatever the desktop last plugged in.
+#
+# mpv is the player. mpg123 would do the decoding in a tenth of the size, but mpv
+# answers questions while it plays: it takes a JSON command socket, which is where
+# the volume, the output device and the station's own now-playing title come from.
+name = "Internet radio"
+wayland = "./target/release/radio-app"
+audio = true
+apt = ["mpv"]

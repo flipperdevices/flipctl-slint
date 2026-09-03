@@ -168,6 +168,124 @@ screen under a wash while nmcli works; here the page comes back with the spinner
 over its own list, which is the same state the saved-profile join already showed,
 and a refusal reopens the keyboard with nmcli's own reason under the field.
 
+## Internet radio, ported 2026-09-03
+
+`js/apps/internet_radio.js`, transcribed into `apps/radio` plus a widget both it and
+flipctl's own screens can use: the settings row with a value chip is
+`ui/dropdown.slint` and `src/dropdown.rs` in flipper-ui, and only the page that
+stacks four of them belongs to the app.
+
+The prototype is a scene that asks a server to do everything: `POST /api/radio/play`
+runs mpg123, `/api/radio/status` says whether it is still alive, `/api/sound/volume`
+writes the codec mixer, `/api/sound/outputs` lists the outputs and
+`/api/radio/install` installs the decoder. There is no server here, so each of those
+became something the app does itself, and that is where every divergence comes from.
+
+**The player is mpv, and the app owns it.** mpg123 decodes the same streams in a
+tenth of the size and cannot be asked anything while it does it. mpv takes a JSON
+command socket, which is where three rows get their answers: the volume it applies
+to a running stream, the output it can move one to, and the station's now-playing
+title. It also dies with the app (`PR_SET_PDEATHSIG`), where the prototype's server
+kept mpg123 playing after the user left the scene.
+
+**Titles are transliterated, not shown as question marks.** The panel's fonts are
+printable ASCII, which the prototype worked around by writing every station name in
+ASCII by hand. A now-playing title is not ours to write: Nashe Radio sends Cyrillic
+and Belgrade's stations send Serbian in either alphabet, and both arrived on the
+panel as a row of `?`. `font::ascii` now turns the Latin letters with marks on them
+and the whole Cyrillic alphabet into the letters underneath, so "ДДТ - Что такое
+осень" reads "DDT - Chto takoe osen" and "Đorđe Balašević" reads "Djordje
+Balasevic". It lives in flipper-ui rather than in the app because every screen that
+shows a string from outside the device has the same problem, the Wi-Fi page's SSIDs
+included; only the radio uses it so far.
+
+**A city and two stations more than the prototype.** Belgrade, with Cool Radio and
+Naxi Radio, and drum and bass in London: Jungletrain and Rage FM. All four were
+found in the same directory the prototype's Spreeradio URL came from and probed the
+same way before being written down, and two of the four send a title.
+
+Two candidates were dropped for sending one that is not a title. Rinse FM answers
+`Now Playing info goes here` and Flex FM answers `FOLLOW @FLEXFMUK`, and a page
+that cannot tell those from a track would put either on the panel as if it were
+one. There is no filtering for it: a station either says what is playing or says
+nothing, and nothing is what the fallback to its own name is for.
+
+**Now playing is the station's own title, not just its name.** New here, and the
+reason for choosing mpv: a line under the last row reads `Playing: <icy-title>`
+while the station sends one and falls back to its name when it does not. It went in
+the title bar first, beside the app's name, which is where the prototype puts the
+station name; moved under the rows because a title is the longest string on this
+screen and the bar could only spare 147 of the page's 245 pixels for it. Non-ASCII in a title becomes
+`?` in Rust rather than at the glyph table, so what is measured is what appears.
+
+**The volume is the stream's, not the machine's.** The prototype's slider wrote the
+NAU8822 mixer through `amixer`, so it moved the whole device's output. Here it is
+mpv's own volume: it moves this stream and leaves the user's system volume alone.
+Nothing else on the panel is playing, so the two look the same on the device, and
+only this one cannot surprise somebody by turning the desktop down.
+
+**The outputs come from mpv, and the first one is the sink flipctl pinned.** The
+prototype's server split the codec into Speaker and Headphone and hid Loopback.
+mpv's own enumeration of PipeWire sinks is what the player will actually accept, so
+that is the list, with `Default` for passing it no device at all, which leaves the
+app on the panel's speaker that `wl.rs` pinned for it.
+
+What the row shows depends on when the television was plugged in, which is a device
+quirk rather than an app one and worth writing down. Measured 2026-09-03:
+
+  * With nothing attached the card is left in its `off` profile and there is one
+    sink, `alsa_output.platform-sound.stereo-fallback` ("On-board NAU8822 Analog
+    Output"). The row then has `Default` and that, which are the same output.
+  * With a television attached when wireplumber starts, the card takes its UCM
+    `HiFi` profile and `alsa_output.platform-hdmi-sound.HiFi__HDMI__sink` appears.
+    It plays: the PCM reaches `RUNNING` with `hw_ptr` advancing, and wireplumber
+    makes it the default sink, which the app is immune to because flipctl pins the
+    panel's speaker for it.
+  * Attaching one afterwards changes nothing until wireplumber restarts, even
+    though the ELD is populated the moment the cable goes in (it names the
+    monitor). Nothing tells ALSA the display arrived, so a card probed with nothing
+    attached stays off. That is a kernel-side gap in the HDMI codec's jack
+    reporting, not something the app or wireplumber can see.
+
+The app therefore lists whatever sinks exist when it starts, which is the honest
+answer to a question whose answer changes.
+
+Left alone deliberately, 2026-09-03: attach the television before the machine boots
+and HDMI audio works. The two cheap ways to paper over the hotplug case were both
+tried and rejected as not worth their cost -- a udev rule on the DRM change event
+that restarts wireplumber glitches whatever is playing, and forcing the card's
+`pro-audio` profile in a drop-in gives an always-present sink at the price of
+bypassing its UCM profile. The fix that is actually missing is jack reporting from
+the HDMI codec, in the kernel.
+
+**A stream is judged by whether sound comes out, not by a timer.** The prototype
+could only ask whether mpg123 was still running, so it gave a stream 3.5 seconds to
+prove itself and treated anything else as a failure. mpv answers a better question:
+`time-pos` is the position of the audio being played, so it appears when sound does.
+Measured on the two ways a station can fail: a URL that answers with something
+unplayable ends mpv inside five seconds, which is the dialog, and a host that cannot
+be reached leaves mpv up with no position for as long as its own timeouts take,
+which that line reports as `Connecting...` because nothing has failed yet. A stream
+that dies after it was playing stops without a dialog: the button going back to Play
+is all there is to say about it.
+
+**No install dialog.** The prototype's three-state modal exists because its server
+had no package manager integration. `app.toml` declares mpv and flipctl installs it
+before the app is launched, so the case the modal covered cannot arrive.
+
+**The failure dialog is flipctl's own.** Same wording as the prototype, "Stream
+error" over "Could not start `<station>`", in `Modal` with `Ok` on the right soft
+key rather than the prototype's centred 150x70 frame with a stacked button.
+
+**A truncated value ends in `..`, and `Close` is on the left soft key.** The first
+for the reason every other screen has it. The second is an addition: the prototype
+draws only its right-hand Play button and leaves Back undiscoverable.
+
+**Nothing is remembered between launches.** The prototype parks the city, the
+station and the volume in a module-level object so re-entering the scene finds them,
+which works because the scene is torn down and the page is not. An app here is a
+process: closing it ends the process, and the state goes with it.
+
 ## Poll cadences, revisited 2026-09-03
 
 Each detail screen was given its prototype scene's own interval. Two of those did

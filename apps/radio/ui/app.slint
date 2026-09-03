@@ -1,0 +1,152 @@
+// Internet radio's screen: a title bar the app draws, and four settings rows.
+//
+// Every row is flipctl's own dropdown line, so a chip here and a chip on one of
+// flipctl's screens are the same pixels. What the app adds is the bar across the
+// top, which carries the station's now-playing title while a stream is live.
+//
+// The numbers arrive already worked out: `flipper_ui::dropdown` measured the rows
+// and `src/main.rs` stacked them, because a page whose selector has to clear a
+// divider is arithmetic and Slint cannot do arithmetic across a model.
+import { FlipperTheme } from "@theme";
+import { Shell, PanelStatus } from "@app/shell.slint";
+import { StatusBar } from "@flipctl/statusbar.slint";
+import { DropLine, DropPicker, DropRule, DropRow, DropItem, DropView } from "@flipctl/dropdown.slint";
+import { SelectorFrame, SoftBar } from "@flipctl/frame.slint";
+import { Modal } from "@flipctl/modal.slint";
+
+export { DropRow, DropItem, DropView, PanelStatus }
+
+// The bar under the status bar: the app's icon and its name.
+component AppBar inherits Rectangle {
+    in property <string> name;
+
+    y: FlipperTheme.status_bar_h;
+    width: 100%;
+    height: FlipperTheme.app_bar_h;
+    background: FlipperTheme.app_bar;
+
+    // Frame 0 of the icon's strip. The prototype animates it in the app switcher
+    // and holds it still here, where it is a label rather than an indicator.
+    Image {
+        x: FlipperTheme.app_bar_icon_x;
+        y: FlipperTheme.app_bar_icon_dy;
+        width: FlipperTheme.app_bar_icon_w;
+        height: FlipperTheme.app_bar_icon_w;
+        source: @image-url("../assets/internet_radio_animated.png");
+        source-clip-x: 0;
+        source-clip-y: 0;
+        source-clip-width: FlipperTheme.app_bar_icon_w / 1px;
+        source-clip-height: FlipperTheme.app_bar_icon_w / 1px;
+        colorize: FlipperTheme.black;
+    }
+
+    Text {
+        x: FlipperTheme.app_bar_title_x;
+        y: FlipperTheme.app_bar_title_dy;
+        text: root.name;
+        font-size: 16px;
+        font-family: "Born2bSportyV2";
+        color: FlipperTheme.black;
+    }
+}
+
+export component AppWindow inherits Shell {
+    in property <[DropRow]> rows;
+    // Where the selector sits, and whether it is drawn at all: an open picker owns
+    // the screen, and two selectors would read as two things being chosen.
+    in property <length> sel_y;
+    in property <bool> selector: true;
+    in property <length> rule_y;
+    // What is coming out of the speaker, and where to put it: under the last row,
+    // where a line has the width of the page instead of what the app's name leaves
+    // of the title bar.
+    in property <string> note;
+    in property <length> note_y;
+    in property <int> pressed_slot: -1;
+    in property <string> play_label: "Play";
+    // The picker over a chip, when a row is being changed.
+    in property <bool> picking;
+    in property <DropView> view;
+    in property <[DropItem]> items;
+    // The dialog: mpv missing, or a stream that never came up.
+    in property <[string]> dialog;
+    in property <string> dialog_left;
+    in property <string> dialog_right;
+
+    callback keyed(string, bool);
+    key(text, down) => {
+        root.keyed(text, down);
+    }
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: FlipperTheme.white;
+
+        // The panel's own bar. Its values are the app's to supply, and they come
+        // from the global the framework fills in from sysfs.
+        StatusBar {
+            x: 0;
+            y: 0;
+            battery: PanelStatus.battery;
+            charging: PanelStatus.charging;
+            wifi_connected: PanelStatus.wifi_connected;
+            wifi_quality: PanelStatus.wifi_quality;
+            ethernet: PanelStatus.ethernet;
+            recording: PanelStatus.recording;
+            modem_available: PanelStatus.modem_available;
+            access_tech: PanelStatus.access_tech;
+            modem_quality: PanelStatus.modem_quality;
+        }
+
+        AppBar {
+            name: "Internet radio";
+        }
+
+        for row in root.rows: DropLine {
+            line: row;
+        }
+
+        DropRule {
+            y: root.rule_y;
+        }
+
+        // Aligned with the rows' own titles, on the line a fifth row would have
+        // started on, so it keeps the page's rhythm without pretending to be a
+        // row: there is nothing here to select or change.
+        if root.note != "": Text {
+            x: FlipperTheme.drop_title_x;
+            y: root.note_y;
+            text: root.note;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.black;
+        }
+
+        if root.selector: SelectorFrame {
+            x: FlipperTheme.drop_selector_x;
+            y: root.sel_y;
+            frame_w: FlipperTheme.drop_selector_w;
+            frame_h: FlipperTheme.drop_selector_h;
+            filled: false;
+            stroke: true;
+        }
+
+        SoftBar {
+            buttons: ["Close", "", "", "", root.play_label];
+            pressed_slot: root.pressed_slot;
+        }
+
+        if root.picking: DropPicker {
+            view: root.view;
+            items: root.items;
+        }
+
+        if root.dialog.length > 0: Modal {
+            lines: root.dialog;
+            left_label: root.dialog_left;
+            right_label: root.dialog_right;
+            pressed_slot: root.pressed_slot;
+        }
+    }
+}

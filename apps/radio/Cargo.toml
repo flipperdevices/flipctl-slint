@@ -1,0 +1,38 @@
+# Its own workspace, so this crate is independent of whatever it happens to sit
+# inside. Without it cargo refuses to build: a crate under a workspace directory
+# is assumed to be a member of it.
+[workspace]
+
+[package]
+name = "radio-app"
+version = "0.1.0"
+edition = "2021"
+# The source. The binary is a combined work: it links flipctl-app, and so Slint,
+# which makes the built app GPL-3.0-only like flipctl itself.
+license = "MIT"
+publish = false
+
+# The player is mpv, spoken to over its own JSON socket, so nothing here needs a
+# stream, a codec or an HTTP client. What is not free is the drawing: flipctl-app is
+# the framework, and through it the widgets, the panel's fonts and the Slint
+# software renderer.
+[dependencies]
+flipctl-app = { path = "../../crates/flipctl-app" }
+slint = { version = "1.17", default-features = false, features = ["compat-1-2", "backend-winit-wayland", "renderer-software", "std"] }
+# For one call: the player is asked to die with the app, so a stream cannot outlive
+# the window that started it.
+libc = "0.2"
+
+# The panel's own renderer, for the tests: they draw the page headlessly and read
+# the pixels back, which is the only way to check a layout without the device.
+# Tests only, so an app built on the device never compiles it.
+[dev-dependencies]
+flipper-ui = { path = "../../crates/flipper-ui", default-features = false, features = ["slint"] }
+png = "0.17"
+
+[build-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
+
+[profile.release]
+opt-level = "z"
+strip = true

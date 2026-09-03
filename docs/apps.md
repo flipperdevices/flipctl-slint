@@ -85,7 +85,7 @@ Imported from `@flipctl`, the same components flipctl's own screens are built fr
 | `SoftBar`, `SoftButton` (`frame.slint`) | The five soft keys on their own. |
 | `StatusBar` (`statusbar.slint`) | The top row, if you are not using a body that draws it. |
 
-## The two examples
+## The three examples
 
 `apps/uptime` is the smallest one: five rows in `MenuBody`, a timer that re-reads
 `/proc`, and Close and Refresh on the soft bar.
@@ -93,6 +93,12 @@ Imported from `@flipctl`, the same components flipctl's own screens are built fr
 `apps/sysmon` is the fuller one: four pages, three of rows in `DetailBody` and one
 that paints two graphs into a `Surface` and shows them through `CanvasBody`, with
 the soft keys switching pages.
+
+`apps/radio` is the one that runs something: four `DropLine` rows over a child mpv,
+which it starts, asks questions of over a socket and kills with itself. It is also
+the one with tests that draw: `cargo test` renders the page headlessly and reads the
+pixels back, and `RADIO_RENDER=1 cargo test` leaves the frames in `target/render` to
+look at.
 
 ## What it costs
 
