@@ -71,6 +71,13 @@ build tree is where the build happens and nothing more. From the host:
 
     ./build_deploy.sh --panel      # the panel and its buttons
     ./build_deploy.sh              # browser only, leaving the panel alone
+    ./build_deploy.sh --cross      # build here for aarch64 in docker, not on the device
+
+The build happens on the device by default, because that is where the toolchain for
+it is: about 25s once its target directory is warm. `--cross` builds here instead,
+against `ci/cross.Dockerfile`, and pushes the binary. Nothing in flipctl links a C
+library except libc, so a cross gcc is the whole of what a host needs, and a cold
+build measures 3m against 20m on the device. Warm, the device wins; cold, this does.
 
 or on the device, in the tree the deploy copied over:
 

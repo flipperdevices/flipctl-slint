@@ -14,8 +14,16 @@
 # Usage:
 #   ./build_deploy.sh                 headless, leaving the panel to its owner
 #   ./build_deploy.sh --panel         drive the real panel and its buttons
+#   ./build_deploy.sh --cross         build here for aarch64 in docker, not on the device
 #   ./build_deploy.sh --no-run        build only, install nothing, restart nothing
 #   ./build_deploy.sh --status        report what is running, change nothing
+#
+# --cross is for a cold build, which is what a toolchain change, a freshly flashed
+# device or a first checkout all are: measured on a 14-core host against this board,
+# 3m03s here versus 13 minutes and counting there. A warm build is the other way
+# round -- the device does an incremental in about 25s against 55s in the container,
+# which pays for a bind-mounted target directory -- so the loop stays on the device
+# and this is for the builds that hurt.
 #
 # Environment:
 #   FLIPPER_HOST  default 192.168.1.110
@@ -50,10 +58,12 @@ APP_LOG="sudo journalctl _COMM=flipctl --no-pager -o cat -n"
 
 MODE=headless
 RUN=yes
+CROSS=no
 for arg in "$@"; do
     case "$arg" in
         --panel)   MODE=panel ;;
         --headless) MODE=headless ;;
+        --cross)   CROSS=yes ;;
         --no-run)  RUN=no ;;
         --status)  MODE=status ;;
         -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
@@ -110,6 +120,39 @@ tar czf - \
     -C "$(cd "$(dirname "$0")" && pwd)" . \
   | run "mkdir -p ~/$DEST && tar xzf - -C ~/$DEST"
 
+# Where the binary to install ends up, which is what --cross changes.
+BUILT="~/$DEST/target/release/flipctl"
+
+if [ "$CROSS" = yes ]; then
+    command -v docker >/dev/null || { echo "--cross needs docker" >&2; exit 2; }
+    echo "== cross-building here for aarch64 =="
+    # Its own target directory: the container's rustc and the host's are different
+    # toolchains even at the same version, and sharing one directory makes each
+    # rebuild what the other left, forever.
+    HERE=$(cd "$(dirname "$0")" && pwd)
+    XT="$HERE/target/cross"
+    mkdir -p "$XT/home"
+    docker build -q -t flipctl-cross -f "$HERE/ci/cross.Dockerfile" "$HERE/ci" >/dev/null
+    started=$SECONDS
+    # As the invoking user, so nothing in the tree comes back owned by root. The
+    # profile overrides are the device build's, so the two produce the same binary.
+    docker run --rm -u "$(id -u):$(id -g)" \
+        -v "$HERE:/src" -w /src \
+        -v "$XT:/target" -e CARGO_TARGET_DIR=/target \
+        -v "$XT/home:/cargo" -e CARGO_HOME=/cargo \
+        -e CARGO_PROFILE_RELEASE_LTO=false -e CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+        flipctl-cross \
+        cargo build --release --target aarch64-unknown-linux-gnu \
+            -p flipctl --features device,slint,remote,wayland,gpu
+    echo "== cross-built in $((SECONDS - started))s =="
+    # Pushed as a file rather than built there, so the install below is the same
+    # rename either way.
+    BUILT="~/$DEST/flipctl.cross"
+    run "mkdir -p ~/$DEST" </dev/null
+    run "cat > ~/$DEST/flipctl.cross && chmod 755 ~/$DEST/flipctl.cross" \
+        < "$XT/aarch64-unknown-linux-gnu/release/flipctl"
+else
+
 echo "== building on the device =="
 # LTO off and 16 codegen units are for iteration speed. Drop both when measuring
 # binary size.
@@ -141,6 +184,7 @@ if [ "$status" -ne 0 ]; then
     exit "$status"
 fi
 echo "== built in $((SECONDS - started))s =="
+fi
 
 if [ "$RUN" = no ]; then
     echo "== built, nothing installed and nothing restarted =="
@@ -175,7 +219,7 @@ echo "== installing $BIN, $SHARE/assets and $SHARE/apps =="
 # is that same path, and writing to it fails with ETXTBSY. A rename replaces the
 # directory entry, the running process keeps the inode it started with, and the
 # restart below is what picks the new one up.
-run "sudo install -m 755 ~/$DEST/target/release/flipctl $BIN.new && \
+run "sudo install -m 755 $BUILT $BIN.new && \
      sudo mv -f $BIN.new $BIN && \
      sudo mkdir -p $SHARE/assets/remote && \
      sudo cp -a ~/$DEST/crates/flipper-ui/assets/remote/. $SHARE/assets/remote/"
