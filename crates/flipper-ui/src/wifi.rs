@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::font::TITLE;
 use crate::sysinfo::output;
 use crate::theme::{count, metric};
 use crate::watch::Watch;
@@ -427,41 +426,12 @@ pub fn set_autoconnect(name: &str, on: bool) {
 // a window, which is the same division `boot_menu` draws: the screen's own
 // arithmetic in the library, the Slint structs in whatever binary draws them.
 
-/// Width of `text` in the panel's title face, in the prototype's own units.
-pub fn tw(text: &str) -> i32 {
-    i32::from(TITLE.text_width(text))
-}
+// The two the page shares with every other screen that measures its own strings.
+pub use crate::font::{fit, tw};
 
 /// The tallest a modal's frame can be: the cap on its bottom edge, less the
 /// margin its top would have at the very least, less the tab above it.
 const MAX_FRAME_H: i32 = metric::WIFI_MODAL_MAX_BOT - metric::WIFI_MODAL_PAD - metric::WIFI_TAB_H;
-
-/// Cut `text` to `budget`, ending in ".." when it had to.
-///
-/// wifi.js appends U+2026, which the panel's fonts do not have: every one of
-/// them is printable ASCII and the prototype's own table substitutes "?" for
-/// anything else, so a truncated SSID reads "MyNetwo?" on the device. ".." is
-/// what this port already truncates with, in `detail::elide`.
-pub fn fit(text: &str, budget: i32) -> String {
-    if budget <= 0 {
-        return String::new();
-    }
-    if tw(text) <= budget {
-        return text.to_string();
-    }
-    let tail = tw("..");
-    let mut out = String::new();
-    for c in text.chars() {
-        let mut probe = out.clone();
-        probe.push(c);
-        if tw(&probe) + tail > budget {
-            break;
-        }
-        out = probe;
-    }
-    out.push_str("..");
-    out
-}
 
 /// Cut `text` to `budget` from the left.
 ///
