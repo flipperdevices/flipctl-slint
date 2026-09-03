@@ -297,6 +297,12 @@ impl Idle {
     ///
     /// Returns whether anything changed, so an unchanged reading never dirties the
     /// screen.
+    /// The three readouts on the idle screen: the pack's temperature, the SoC
+    /// package's, and the power flowing in or out.
+    ///
+    /// Three small sysfs reads, and it reports a change only when one of the
+    /// values actually moved, so the screen redraws when a temperature does
+    /// rather than on the clock.
     pub fn refresh_sensors(&mut self) -> bool {
         let before = (self.battery_temp, self.cpu_temp, self.power_mw);
         self.battery_temp = battery_temp();

@@ -168,6 +168,34 @@ screen under a wash while nmcli works; here the page comes back with the spinner
 over its own list, which is the same state the saved-profile join already showed,
 and a refusal reopens the keyboard with nmcli's own reason under the field.
 
+## Poll cadences, revisited 2026-09-03
+
+Each detail screen was given its prototype scene's own interval. Two of those did
+not survive contact with what they cost:
+
+**5G Modem: 500ms to 2s.** `modem5g.js` polls at 2Hz and each poll is four
+subprocesses, three `mmcli` and one `qmicli`. Nothing on the page moves that
+fast: the operator and the access technology change on network events, and the
+signal is whatever ModemManager last cached, refreshed on its own schedule, so
+asking twice a second returns the same number again. Two seconds is the Ethernet
+page's cadence and a quarter of the processes.
+
+**A screen's pollers now stop with the screen.** They were dropped at each way out
+and only the Escape key ever did it, so leaving a detail page through the app
+switcher left its watch running for the rest of the session -- the modem's four
+subprocesses among them. The loop drops them when the screen is no longer the one
+that owns them, which catches every exit including the ones that never touch a
+key. The deck counts as still being on the screen underneath it, since it is an
+overlay the user returns from. An app in front does not: it leaves the screen enum
+alone by design, so a page whose app was launched over it keeps polling.
+
+The status bar (1s), the idle screen's sensors (1s, raised from 5s: three sysfs
+reads that only redraw when a value moves, and a temperature reading that lags five
+seconds behind the fan is worth less than the reads cost) and its addresses (30s)
+are left polling. Those are sysfs reads and `getifaddrs` -- microseconds, no
+processes -- and keeping them warm is what makes the root screen correct the moment
+you land on it rather than up to thirty seconds later.
+
 ## Soft-button strip, approved 2026-08-19
 
 Measured pixel by pixel from the Figma export `soft_button_bar`, which is kept as
@@ -288,6 +316,24 @@ asks the kernel over netlink instead, as `iw` and NetworkManager do.
 Turning WEXT on is a one-line addition to `minconfig-mainline` and would make the
 sysfs path work again for everything, including a hosted app's own bar. `status`
 tries the file first and falls back, so that change needs nothing unpicked here.
+
+**The status bar's 5G block is drawn from numbers nobody fills in.** Latent, not
+live: `read_status` hardcodes `access_tech: "--"` and `modem_quality: 0` while
+`modem_available` comes from a real check for a `wwan`/`wwp`/`ppp` interface. No
+board here has one, so the block is hidden and it has never shown. On a unit that
+does have a modem it would appear permanently empty -- `filled` is
+`ceil(quality / 20)`, so a quality of 0 lights no bars and all five render in
+`bar_dim` -- with `--` for the label, and `modem_w` would push the wifi and
+ethernet icons right to make room for it. The same shape as the wifi badge before
+`nl80211.rs`: a badge drawn from a reading that is never taken.
+
+Left as it is on purpose, and the note at `status::modem_present` says why: writing
+it blind is what was being avoided. `sysinfo::modem` already reads all of it for
+the 5G page, but at four subprocesses a read, so the status bar cannot call it at
+1Hz -- it wants either a slow watch of its own or ModemManager's D-Bus signals, and
+which of those is right depends on what the hardware answers. Also to decide then:
+whether an unknown signal should draw five empty bars at all, or hold the block
+back until there is a number for it.
 
 **No damage clipping and no `DRM_FORMAT_R8`.** As recorded in the plan.
 `fo_set_tx_buffer_data` hardcodes the clip to the whole framebuffer and

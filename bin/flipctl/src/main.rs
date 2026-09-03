@@ -588,11 +588,17 @@ mod detail {
                     Battery::default(),
                     sysinfo::battery,
                 )),
-                // modem5g.js polls every 500ms. Four subprocesses at 2Hz is what
-                // the prototype does; the thread absorbs it.
+                // modem5g.js polls every 500ms, which is four subprocesses at 2Hz:
+                // mmcli three times and qmicli once. Nothing on the page moves at
+                // that rate. Operator and access technology change on network
+                // events, and the signal is whatever ModemManager last cached --
+                // it refreshes on its own schedule, so asking twice a second
+                // cannot produce a newer number, only the same one again. Two
+                // seconds, which is the Ethernet page's cadence, is a quarter of
+                // the processes for the same screen.
                 Detail::Modem => Live::Modem(Watch::spawn(
                     "watch-modem",
-                    Duration::from_millis(500),
+                    Duration::from_secs(2),
                     Modem::default(),
                     || sysinfo::modem(QMI_DEV),
                 )),
@@ -4947,6 +4953,42 @@ fn panel(
             }
         }
 
+        // A screen's pollers belong to the screen, so they are dropped here rather
+        // than at each way out of it. Every exit was supposed to do it itself and
+        // only the Escape key ever did: leaving the 5G Modem page through the deck
+        // left four subprocesses every two seconds running against a screen nobody
+        // was looking at, for as long as the session lasted.
+        //
+        // The deck counts as still being on the screen underneath it. It is an
+        // overlay the user comes back from, and dropping the watch there would put
+        // them back on a page frozen at whatever it last read.
+        //
+        // One case this does not catch: an app in front leaves the screen enum
+        // alone, by design -- an app draws its own screen and there is none of ours
+        // for it to be. A page whose app was launched over it keeps polling.
+        if live.is_some()
+            && !matches!(
+                screen.get_screen(),
+                Screen::Detail | Screen::Ethernet | Screen::Switcher
+            )
+        {
+            live = None;
+            eth_open = false;
+            eth_scroll = 0.0;
+        }
+        if wifi_live.is_some()
+            && !matches!(screen.get_screen(), Screen::Wifi | Screen::Switcher)
+            // The passphrase keyboard is this page's own: the scan list is still
+            // open behind it and the join it is collecting for needs the watcher.
+            && !(screen.get_screen() == Screen::TextInput
+                && matches!(kb_for, KbFor::Passphrase { .. }))
+        {
+            wifi_live = None;
+            wifi_op = None;
+            wifi_toast = None;
+            wifi_modal = wifi::Modal::None;
+        }
+
         // Radio state moved, so any row whose status reads it has to be rebuilt.
         if net.take_dirty() {
             net_now = net.get();
@@ -5109,7 +5151,7 @@ fn panel(
             last_auto = Instant::now();
         }
 
-        if sensor_poll.elapsed() >= Duration::from_secs(5) {
+        if sensor_poll.elapsed() >= Duration::from_secs(1) {
             sensor_poll = Instant::now();
             if idle.refresh_sensors() {
                 apply_idle(&screen, &idle);

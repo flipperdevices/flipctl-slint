@@ -16,6 +16,7 @@
 //! flips immediately so the row redraws on the same frame as the key press, and
 //! the next read reconciles if the radio refused.
 
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
 use crate::sysinfo::output;
@@ -132,13 +133,34 @@ impl NetSource {
                 };
                 loop {
                     publish(read_net());
-                    let mut monitor = match Command::new("nmcli")
-                        .arg("monitor")
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::null())
-                        .spawn()
-                    {
+                    let mut monitor = match {
+                        let mut command = Command::new("nmcli");
+                        command
+                            .arg("monitor")
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::null());
+                        // Die with us. The monitor is useless without the process
+                        // that reads it, and nothing else would ever stop it: the
+                        // unit sets PAMName=login, which puts us in a logind
+                        // session scope rather than the service's cgroup, so
+                        // systemd restarting the service kills us and leaves this
+                        // child parented to init. Four of them had accumulated on
+                        // the test device, one per restart, 58MB between them.
+                        //
+                        // SAFETY: pre_exec runs in the forked child before exec,
+                        // where only async-signal-safe calls are allowed. prctl is
+                        // one, and this call touches nothing else.
+                        unsafe {
+                            command.pre_exec(|| {
+                                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) < 0 {
+                                    return Err(std::io::Error::last_os_error());
+                                }
+                                Ok(())
+                            });
+                        }
+                        command.spawn()
+                    } {
                         Ok(child) => child,
                         // No NetworkManager here, or no nmcli: nothing to watch and
                         // nothing to read, so wait rather than spin.
