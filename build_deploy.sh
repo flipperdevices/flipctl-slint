@@ -206,11 +206,15 @@ run "cd ~/$DEST && \
 # repository for exactly these paths.
 #
 # Root-owned and read-only, unlike the apps: a build writes only into the app's own
-# target/, since a build script writes to OUT_DIR there. tests/ and examples/ are
-# left behind because nothing an app builds reads them.
+# target/, since a build script writes to OUT_DIR there. tests/ is left behind
+# because nothing an app builds reads it; examples/ cannot be, even though nothing
+# reads that either, because flipper-ui's manifest declares three of them by name
+# and cargo refuses to parse a manifest whose declared target has no file. The
+# failure is at the first line of the build, before any of the app is looked at:
+# "can't find `gpu_probe` example at examples/gpu_probe.rs".
 echo "== installing $SHARE/crates and $SHARE/third_party, so apps can be built =="
 run "cd ~/$DEST && \
-     sudo tar cf - --exclude=target --exclude=tests --exclude=examples \
+     sudo tar cf - --exclude=target --exclude=tests \
          crates/flipctl-app crates/flipper-ui crates/flipper-tokens \
          third_party/flipctl-fonts \
        | sudo tar xf - -C $SHARE"

@@ -95,7 +95,7 @@ the soft keys switching pages.
 ## What it costs
 
 Slint links statically, so an app's binary is around 13MB against 300KB for one
-that only wrote JSON, and the first build on the device takes about twelve minutes.
+that only wrote JSON, and the first build on the device takes about twenty minutes.
 After that only the app's own crate rebuilds, in seconds.
 
 ## Licensing
