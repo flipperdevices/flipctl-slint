@@ -339,6 +339,15 @@ pub struct Missing {
     /// Not a package to fetch but a compile, which is why it is a flag rather than
     /// a list: cargo works out what to download from the crate's own manifest.
     pub needs_build: bool,
+    /// True when a Rust app has to be built and there is no cargo to build it.
+    ///
+    /// Offered rather than merely reported, unlike `needs_uv`: rustup is a
+    /// download away and a device flashed from a stock image has no toolchain at
+    /// all, so an app that draws with the framework could not be built on the
+    /// machine it is installed on. Known up front so the question names it,
+    /// instead of apt running for a minute and the build then failing with
+    /// "cargo is not installed".
+    pub needs_cargo: bool,
     /// True when Python packages are wanted but `uv` is not installed.
     ///
     /// Not something the user can be offered, because uv is not in the Debian
@@ -363,10 +372,16 @@ impl Missing {
         let n = apt.len() + self.pip.len();
         let mut names = apt;
         names.extend(self.pip.iter().cloned());
-        if n == 0 && self.needs_build {
-            return "a build".into();
+        let build = if self.needs_cargo {
+            " and a build, which needs a Rust toolchain this machine has not got"
+        } else if self.needs_build {
+            " and a build"
+        } else {
+            ""
+        };
+        if n == 0 {
+            return build.trim_start().trim_start_matches("and ").to_string();
         }
-        let build = if self.needs_build { " and a build" } else { "" };
         format!(
             "{n} package{}: {}{build}",
             if n == 1 { "" } else { "s" },
@@ -487,6 +502,33 @@ fn cargo() -> Option<PathBuf> {
         .map(|_| PathBuf::from("cargo"))
 }
 
+/// The floor slint 1.17 sets, and with it everything that draws with the
+/// framework. `build-flipctl.sh` checks the same number before it starts.
+const CARGO_MSRV: u32 = 92;
+
+/// The minor version out of `cargo 1.94.1 (...)`.
+fn cargo_minor(version: &str) -> Option<u32> {
+    version
+        .split_whitespace()
+        .nth(1)?
+        .strip_prefix("1.")?
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// What a program says its version is.
+fn version_of(program: &std::path::Path) -> Option<String> {
+    let out = Command::new(program)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 fn uv() -> Option<PathBuf> {
     let candidates = [PathBuf::from("/usr/local/bin/uv"), PathBuf::from("/usr/bin/uv")];
     for path in candidates {
@@ -550,6 +592,12 @@ pub fn missing(entry: &AppEntry) -> Missing {
             Err(_) => true,
             Ok(built) => newest_source(&entry.dir).is_some_and(|src| src > built),
         };
+        // Reported, not offered, exactly as `needs_uv` is: the image installs the
+        // toolchain, from backports because trixie's own cargo is too old, so a
+        // machine without one is a machine whose image predates that or has had it
+        // removed. Nothing here can fix that, and saying so up front beats a build
+        // that fails after apt has run for a minute.
+        m.needs_cargo = m.needs_build && cargo().is_none();
     }
     if entry.pip.is_empty() {
         return m;
@@ -578,6 +626,17 @@ pub fn missing(entry: &AppEntry) -> Missing {
 pub fn install(entry: &AppEntry, missing: &Missing, mut log: impl FnMut(String)) -> Result<(), String> {
     let apt = missing.apt_all();
     if !apt.is_empty() {
+        // Always update first. A device flashed from a stock image has no package
+        // lists at all, and one that has sat for a while has stale ones, so the
+        // install fails with "unable to locate package" for a package that is in
+        // the archive. The cost is one round trip against a minute of installing.
+        log("apt-get update".into());
+        run_logged(
+            Command::new("sudo")
+                .args(["apt-get", "update"])
+                .env("DEBIAN_FRONTEND", "noninteractive"),
+            &mut log,
+        )?;
         log(format!("apt: {}", apt.join(" ")));
         run_logged(
             Command::new("sudo")
@@ -594,6 +653,17 @@ pub fn install(entry: &AppEntry, missing: &Missing, mut log: impl FnMut(String))
         let Some(cargo) = cargo() else {
             return Err("cargo is not installed, or not on this service's PATH".into());
         };
+        // Refuse a toolchain too old to build with, here rather than deep in a
+        // registry download: trixie's own cargo is 1.85 and slint 1.17 needs 1.92,
+        // so a machine whose archive lacks the newer one would otherwise fail with
+        // that complaint repeated for every crate in the graph.
+        if let Some(minor) = version_of(&cargo).as_deref().and_then(cargo_minor) {
+            if minor < CARGO_MSRV {
+                return Err(format!(
+                    "cargo 1.{minor} is too old to build this app, which needs 1.{CARGO_MSRV}"
+                ));
+            }
+        }
         log(format!("{} build --release", cargo.display()));
         // Progress, because this is minutes of work with the log as the only thing
         // on screen. Cargo names each crate as it starts it, so counting those
@@ -697,7 +767,10 @@ fn run_logged(cmd: &mut Command, log: &mut impl FnMut(String)) -> Result<(), Str
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("cannot start: {e}"))?;
+        // Name the program. Without it a missing curl or an unavailable sudo reads
+        // as "cannot start: No such file or directory (os error 2)" on a log screen
+        // with no other context, which says nothing about what to install.
+        .map_err(|e| format!("cannot start {}: {e}", cmd.get_program().to_string_lossy()))?;
 
     // Both pipes, on threads of their own, onto one channel. stderr is where the
     // interesting output is: apt and pip report their problems there and cargo
@@ -736,5 +809,58 @@ fn run_logged(cmd: &mut Command, log: &mut impl FnMut(String)) -> Result<(), Str
             .find(|l| !l.trim().is_empty())
             .cloned()
             .unwrap_or_else(|| format!("exited with {status}")))
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    /// A program that is not there says which one, since the log screen is all
+    /// the context there is.
+    #[test]
+    fn a_missing_program_is_named() {
+        let mut log = |_: String| {};
+        let err = run_logged(&mut Command::new("definitely-not-a-program"), &mut log)
+            .expect_err("it cannot start");
+        assert!(err.starts_with("cannot start definitely-not-a-program:"), "{err}");
+    }
+
+    /// The version gate, which is what turns "the archive did not have it" into a
+    /// sentence rather than a build that dies in a registry download.
+    #[test]
+    fn a_cargo_version_is_read_and_compared() {
+        assert_eq!(cargo_minor("cargo 1.94.1 (29ea6fb6a 2026-03-24)"), Some(94));
+        assert_eq!(cargo_minor("cargo 1.85.0+dfsg3-1"), Some(85));
+        assert!(cargo_minor("cargo 1.85.0").unwrap() < CARGO_MSRV);
+        assert!(cargo_minor("cargo 1.94.1").unwrap() >= CARGO_MSRV);
+        // Something that is not a version reports nothing rather than 0, which
+        // would read as "far too old" and refuse a toolchain that works.
+        assert_eq!(cargo_minor("cargo"), None);
+        assert_eq!(cargo_minor("nonsense"), None);
+    }
+
+    #[test]
+    fn the_question_names_a_toolchain_when_there_is_none() {
+        let mut m = Missing::default();
+        m.needs_build = true;
+        assert_eq!(m.summary(), "a build");
+        m.needs_cargo = true;
+        assert_eq!(
+            m.summary(),
+            "a build, which needs a Rust toolchain this machine has not got"
+        );
+        // Alongside an app's own packages, which are still offered: only the
+        // toolchain is beyond our reach.
+        m.apt = vec!["libfoo".into()];
+        assert_eq!(
+            m.summary(),
+            "1 package: libfoo and a build, which needs a Rust toolchain this machine has not got"
+        );
+        let mut m = Missing::default();
+        m.apt = vec!["libfoo".into(), "libbar".into()];
+        assert_eq!(m.summary(), "2 packages: libfoo, libbar");
+        // Nothing wanted at all is still nothing.
+        assert!(Missing::default().is_empty());
     }
 }
