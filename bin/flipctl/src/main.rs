@@ -1827,6 +1827,19 @@ fn apply_text_input(
     screen.set_kb_discard(input.discard.map_or(-1, |at| at as i32));
 }
 
+/// What starting an install is called, given what the app still needs.
+///
+/// A Rust app that only wants compiling is a build, because calling that "0 packages"
+/// says nothing. Shared by the dialog that asks and by the log that offers it again, so
+/// the same act cannot be called two different things on two screens.
+fn install_verb(m: &flipper_ui::app::Missing) -> &'static str {
+    if m.apt_all().is_empty() && m.pip.is_empty() && m.needs_build {
+        "Build"
+    } else {
+        "Install"
+    }
+}
+
 /// The package names, wrapped to lines that fit the dialog.
 ///
 /// Measured against the frame's inner width with the real advance table, because a
@@ -2504,11 +2517,13 @@ fn panel(
         Checking(i32, std::sync::mpsc::Receiver<flipper_ui::app::Missing>),
         /// The dialog is up, waiting for an answer.
         Asking(i32, flipper_ui::app::Missing),
-        /// Installing, with output arriving and a result at the end.
+        /// Installing, with output arriving, a result at the end, and a handle on the
+        /// one step that may be cut short.
         Installing(
             i32,
             std::sync::mpsc::Receiver<String>,
             std::sync::mpsc::Receiver<Result<(), String>>,
+            flipper_ui::app::Stop,
         ),
         /// Finished, with the log left on screen.
         Done(i32, Result<(), String>),
@@ -2519,6 +2534,20 @@ fn panel(
     // Stick to the tail while output arrives, until the user scrolls back. Same
     // behaviour as an app's own log: watch it live, or read what went past.
     let mut deps_follow = true;
+    // Whether the user has walked away from the install's log. The build keeps running and
+    // its lines keep arriving; this only says the panel is showing something else, which is
+    // what makes a twenty-minute compile survivable. The app's card in the deck brings it
+    // back, and so does its row.
+    let mut deps_detached = false;
+    // Whether the build that just ended was ended on purpose. A stopped build fails like
+    // any other, and saying "Failed" for something the user asked to stop reads as a bug
+    // in the app rather than an answer to a keypress.
+    let mut deps_stopped = false;
+    // What the install was asked to do, kept so it can be asked again. A build that was
+    // stopped, or that failed, is the case: the answer has not changed, and making the
+    // user walk back out to the list and in again to say the same thing is a worse
+    // answer than a key on the screen they are already looking at.
+    let mut deps_missing: Option<flipper_ui::app::Missing> = None;
 
     // The boot menu, while it is open. All of it -- the profiles, the cursor, the
     // countdown, the popups and their actions -- lives in flipper-ui, because the
@@ -2545,6 +2574,56 @@ fn panel(
     let mut card_stash = Instant::now();
     // The app a pending question belongs to, by name. Its card is what the user is
     // looking at while the question is up.
+    // Start the install for one app, from the answer already given. Both the dialog's
+    // Install and the log's Retry come through here, so a retry cannot drift from a
+    // first attempt.
+    macro_rules! start_install {
+        ($idx:expr, $entry:expr, $missing:expr) => {{
+            let (log_tx, log_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let stop = flipper_ui::app::Stop::default();
+            let theirs = stop.clone();
+            let entry = $entry;
+            let m = $missing;
+            let mine = m.clone();
+            std::thread::Builder::new()
+                .name("dep-install".into())
+                .spawn(move || {
+                    let r = flipper_ui::app::install(
+                        &entry,
+                        &m,
+                        |line| {
+                            let _ = log_tx.send(line);
+                        },
+                        &theirs,
+                    );
+                    let _ = done_tx.send(r);
+                })
+                .ok();
+            deps_log.clear();
+            deps_offset = 0;
+            deps_follow = true;
+            deps_detached = false;
+            deps_stopped = false;
+            deps_missing = Some(mine);
+            deps = Some(Deps::Installing($idx, log_rx, done_rx, stop));
+        }};
+    }
+
+    // The pending install, but only while its log is what the panel is showing. An
+    // install whose log has been put aside is not in front of anything, and treating it
+    // as the front card is how its tile ended up holding a picture of the menu: the
+    // frame is stashed under the front card's name, here and once a second after.
+    macro_rules! pending_front {
+        () => {
+            if deps_detached {
+                None
+            } else {
+                pending_app!()
+            }
+        };
+    }
+
     macro_rules! pending_app {
         () => {
             match deps.as_ref() {
@@ -3393,7 +3472,9 @@ fn panel(
                         // that was running still is, one Tab away. A question that
                         // was waiting when the deck opened is still waiting, so that
                         // comes back instead, wherever it was asked.
-                        screen.set_screen(if deps.is_some() || dialog.is_some() {
+                        screen.set_screen(if (deps.is_some() && !deps_detached)
+                            || dialog.is_some()
+                        {
                             Screen::Apps
                         } else {
                             before_switcher
@@ -3401,6 +3482,13 @@ fn panel(
                     }
                     Some(flipper_ui::switcher::Action::Launch(name, kind)) => {
                         switcher = None;
+                        // A card for an app that is still being installed has nothing to
+                        // launch: what it leads back to is the log.
+                        if deps.is_some() && pending_app!() == Some(name.as_str()) {
+                            deps_detached = false;
+                            eprintln!("app            back to the install log (card)");
+                            continue;
+                        }
                         launch_card(
                             &screen,
                             &mut recents,
@@ -3530,7 +3618,7 @@ fn panel(
                 // What the user is looking at is the top card when it is a focused
                 // app or one of our tracked screens, and either way that is what
                 // the panel is showing right now.
-                let front = front_card(pending_app!(), open_screen(screen.get_screen(), &stack));
+                let front = front_card(pending_front!(), open_screen(screen.get_screen(), &stack));
                 // Something of ours in front means the focus starts one below it,
                 // which is what makes Tab twice a switch to the previous app. An
                 // app waiting on a question counts: it is what the user is looking
@@ -3569,17 +3657,49 @@ fn panel(
             // The dependency flow owns the keys while it is on screen. Its dialog
             // goes through the normal dialog path below; the log does not, because
             // it scrolls.
-            if let Some(stage) = deps.as_ref() {
+            if let Some(stage) = deps.as_ref().filter(|_| !deps_detached) {
                 match stage {
                     Deps::Checking(..) => continue,
-                    Deps::Installing(..) => {
-                        // Scroll only: cancelling an apt run halfway would leave
-                        // packages half configured.
+                    Deps::Installing(_, _, _, stop) => {
+                        // Scroll, or leave. What must not happen is cancelling: an apt run
+                        // stopped halfway leaves packages half configured. Leaving is not
+                        // cancelling -- the install has its own thread and keeps sending
+                        // lines into deps_log -- and a build that takes twenty minutes
+                        // cannot hold the panel for twenty minutes. Back is labelled on
+                        // this screen, so it has to do something.
                         match event.key {
                             FlipperKey::Down => deps_offset += 1,
                             FlipperKey::Up => {
                                 deps_offset = (deps_offset - 1).max(0);
                                 deps_follow = false;
+                            }
+                            FlipperKey::Escape | FlipperKey::Back => {
+                                // The card is what leads back here, so it gets the log as
+                                // it looked when it was put aside. Without this the tile
+                                // carries whatever it was last given -- nothing at all for
+                                // a build started from the row, since the app has no cage
+                                // to draw one from and never will until it is built.
+                                stash_front(
+                                    &mut recents,
+                                    pending_app!().map(str::to_string),
+                                    &frame,
+                                );
+                                deps_detached = true;
+                                screen.set_screen(Screen::Apps);
+                                eprintln!("app            left the install log; it keeps going");
+                            }
+                            // Under the rightmost label, and only there: apt never
+                            // registers with the handle, so while packages are going in
+                            // this offers nothing and says so rather than half-doing it.
+                            FlipperKey::Run => {
+                                if stop.stop() {
+                                    deps_stopped = true;
+                                    eprintln!("app            stopping the build");
+                                } else {
+                                    eprintln!(
+                                        "app            nothing to stop: apt is not                                          interruptible"
+                                    );
+                                }
                             }
                             _ => {}
                         }
@@ -3591,6 +3711,25 @@ fn panel(
                         match event.key {
                             FlipperKey::Down => deps_offset += 1,
                             FlipperKey::Up => deps_offset = (deps_offset - 1).max(0),
+                            // A stopped or failed install, started again from here under
+                            // the same word the dialog used: the key that offered Stop
+                            // while it ran. Without it the way back to a build is out to
+                            // the list and in again, answering a question already
+                            // answered.
+                            FlipperKey::Run if !ok => {
+                                match (apps.get(idx as usize).cloned(), deps_missing.clone()) {
+                                    (Some(entry), Some(m)) => {
+                                        eprintln!("app            building {} again", entry.name);
+                                        start_install!(idx, entry, m);
+                                    }
+                                    // Nothing kept to repeat, so ask from the top rather
+                                    // than guess at what was needed.
+                                    _ => {
+                                        deps = None;
+                                        screen.set_screen(Screen::Apps);
+                                    }
+                                }
+                            }
                             FlipperKey::Escape | FlipperKey::Back => {
                                 deps = None;
                                 // Leaving without starting it: the card goes with
@@ -4195,21 +4334,7 @@ fn panel(
                             // Install: run it, streaming output to the log.
                             (Some(4), Some(Deps::Asking(idx, m))) => {
                                 if let Some(entry) = apps.get(idx as usize).cloned() {
-                                    let (log_tx, log_rx) = std::sync::mpsc::channel();
-                                    let (done_tx, done_rx) = std::sync::mpsc::channel();
-                                    std::thread::Builder::new()
-                                        .name("dep-install".into())
-                                        .spawn(move || {
-                                            let r = flipper_ui::app::install(&entry, &m, |line| {
-                                                let _ = log_tx.send(line);
-                                            });
-                                            let _ = done_tx.send(r);
-                                        })
-                                        .ok();
-                                    deps_log.clear();
-                                    deps_offset = 0;
-                                    deps_follow = true;
-                                    deps = Some(Deps::Installing(idx, log_rx, done_rx));
+                                    start_install!(idx, entry, m);
                                 }
                             }
                             // Cancel, or a dialog with nothing behind it. The app
@@ -4394,6 +4519,18 @@ fn panel(
                         Some(AppRow::App(at)) => *at as i32,
                         _ => -1,
                     };
+                    // Its install is already running and its log was put aside: this row
+                    // is how the user asks for it back. Checking again would start a
+                    // second check for work already in flight and throw away the log of
+                    // the first, which is what left a hidden build with no way back to it.
+                    if deps.is_some()
+                        && deps_detached
+                        && apps.get(at as usize).map(|a| a.name.as_str()) == pending_app!()
+                    {
+                        deps_detached = false;
+                        eprintln!("app            back to the install log");
+                        continue;
+                    }
                     if let Some(entry) = apps.get(at as usize).cloned() {
                         let (tx, rx) = std::sync::mpsc::channel();
                         let for_check = entry.clone();
@@ -4404,7 +4541,7 @@ fn panel(
                             })
                             .ok();
                         let front =
-                            front_card(pending_app!(), open_screen(screen.get_screen(), &stack));
+                            front_card(pending_front!(), open_screen(screen.get_screen(), &stack));
                         stash_front(&mut recents, front, &frame);
                         // In the stack from the moment it is started, not from the
                         // moment it succeeds: an app waiting to be built is
@@ -4668,7 +4805,7 @@ fn panel(
         // something in front worth photographing.
         if switcher.is_none() && card_stash.elapsed() >= Duration::from_secs(1) {
             card_stash = Instant::now();
-            let front = front_card(pending_app!(), open_screen(screen.get_screen(), &stack));
+            let front = front_card(pending_front!(), open_screen(screen.get_screen(), &stack));
             stash_front(&mut recents, front, &frame);
         }
 
@@ -4701,6 +4838,11 @@ fn panel(
                         );
                         continue;
                     }
+                    if deps.is_some() && pending_app!() == Some(name.as_str()) {
+                        deps_detached = false;
+                        eprintln!("app            back to the install log (card, tick)");
+                        continue;
+                    }
                     launch_card(
                         &screen,
                         &mut recents,
@@ -4713,7 +4855,9 @@ fn panel(
                 Some(flipper_ui::switcher::Action::Close) => {
                     eprintln!("switcher       closing back to {:?} (tick)", before_switcher);
                     switcher = None;
-                    screen.set_screen(if deps.is_some() || dialog.is_some() {
+                    screen.set_screen(if (deps.is_some() && !deps_detached)
+                        || dialog.is_some()
+                    {
                         Screen::Apps
                     } else {
                         before_switcher
@@ -4825,10 +4969,11 @@ fn panel(
                     let apt = m.apt_all();
                     let count = apt.len() + m.pip.len();
                     let mut lines = Vec::new();
-                    let right = if count == 0 && m.needs_build {
+                    let right = install_verb(&m);
+                    if count == 0 && m.needs_build {
                         lines.push("Build this app?".to_string());
-                        lines.push("Compiling takes a minute.".to_string());
-                        "Build"
+                        lines.push("20 minutes the first time,".to_string());
+                        lines.push("a couple of minutes after.".to_string());
                     } else {
                         lines.push(format!(
                             "Install {count} package{}{}?",
@@ -4836,8 +4981,7 @@ fn panel(
                             if m.needs_build { " and build" } else { "" }
                         ));
                         lines.extend(dialog_wrap(&apt, &m.pip));
-                        "Install"
-                    };
+                    }
                     dialog = Some(Dialog {
                         lines,
                         left: "Cancel",
@@ -4851,7 +4995,7 @@ fn panel(
                 }
                 Err(_) => {}
             },
-            Some(Deps::Installing(idx, log_rx, done_rx)) => {
+            Some(Deps::Installing(idx, log_rx, done_rx, stop)) => {
                 while let Ok(line) = log_rx.try_recv() {
                     deps_log.extend(wrap_log(&line));
                 }
@@ -4867,10 +5011,28 @@ fn panel(
                                 deps_log.extend(wrap_log(e));
                             }
                         }
+                        if deps_detached {
+                            // Done, so the log is worth seeing again: this is where Ready or
+                            // Failed is said, and where the Run key sits. Not over a hosted
+                            // app, though -- taking the panel from something the user is
+                            // using, to announce a build, is worse than letting them come
+                            // back to it through the card.
+                            #[cfg(feature = "wayland")]
+                            let busy = wl_front.is_some();
+                            #[cfg(not(feature = "wayland"))]
+                            let busy = false;
+                            eprintln!(
+                                "app            {} finished while its log was hidden: {}{}",
+                                apps.get(idx as usize).map_or("?", |a| a.name.as_str()),
+                                if result.is_ok() { "ok" } else { "failed" },
+                                if busy { ", staying hidden" } else { ", showing it" }
+                            );
+                            deps_detached = busy;
+                        }
                         deps = Some(Deps::Done(idx, result));
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        deps = Some(Deps::Installing(idx, log_rx, done_rx));
+                        deps = Some(Deps::Installing(idx, log_rx, done_rx, stop));
                     }
                     Err(_) => deps = Some(Deps::Done(idx, Err("install thread died".into()))),
                 }
@@ -4881,6 +5043,7 @@ fn panel(
         // The install log is its own screen: it can outlast several frames and has
         // more lines than a dialog can hold.
         if switcher.is_none()
+            && !deps_detached
             && matches!(deps, Some(Deps::Installing(..)) | Some(Deps::Done(..)))
         {
             let visible = flipper_ui::theme::count::LOG_VISIBLE_LINES;
@@ -4905,9 +5068,13 @@ fn panel(
                 .map(|l| slint::SharedString::from(l.as_str()))
                 .collect();
             let done = matches!(deps, Some(Deps::Done(_, Ok(()))));
+            // Only a build offers a Stop, so the label appears when one is running and
+            // goes away for the apt and pip steps around it.
+            let stoppable = matches!(&deps, Some(Deps::Installing(_, _, _, s)) if s.offered());
             screen.set_app_title(
                 match &deps {
                     Some(Deps::Done(_, Ok(()))) => "Ready",
+                    Some(Deps::Done(_, Err(_))) if deps_stopped => "Stopped",
                     Some(Deps::Done(_, Err(_))) => "Failed",
                     _ => "Working",
                 }
@@ -4916,8 +5083,17 @@ fn panel(
             screen.set_app_lines(slint::ModelRc::new(slint::VecModel::from(window)));
             screen.set_app_log_total(total);
             screen.set_app_log_offset(deps_offset);
+            // A stopped or failed install offers the same key it was started with, and
+            // the same word: back to Build, not on to something called Retry.
+            let again = matches!(&deps, Some(Deps::Done(_, Err(_))))
+                .then(|| deps_missing.as_ref().map(install_verb))
+                .flatten();
             screen.set_app_buttons(demo::labels(&if done {
                 ["Back", "", "", "", "Run"]
+            } else if stoppable {
+                ["Back", "", "", "", "Stop"]
+            } else if let Some(verb) = again {
+                ["Back", "", "", "", verb]
             } else {
                 ["Back", "", "", "", ""]
             }));

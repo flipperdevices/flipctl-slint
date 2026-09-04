@@ -451,6 +451,54 @@ pub fn stop_group(pid: u32) {
     }
 }
 
+/// A handle on the one step of an install that may be interrupted.
+///
+/// apt is not that step. Stopped halfway it leaves packages half configured, so nothing
+/// here can reach it: the pid is registered only while the build runs, and `offered` says
+/// whether stopping is on the table at all. A cargo build is interruptible by nature -- it
+/// writes into target/ and picks up from wherever it reached -- which is why twenty minutes
+/// of compiling may be cut short and a minute of apt may not.
+#[derive(Clone, Default)]
+pub struct Stop {
+    /// The build's process group while it runs, nothing otherwise.
+    pid: std::sync::Arc<std::sync::Mutex<Option<u32>>>,
+    /// Whether the failure on the way back is one somebody asked for.
+    asked: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Stop {
+    /// Whether something stoppable is running right now.
+    pub fn offered(&self) -> bool {
+        self.pid.lock().map(|p| p.is_some()).unwrap_or(false)
+    }
+
+    /// Stop the build. The install then fails the way any failed build does, and
+    /// `asked` distinguishes that from a build that broke on its own.
+    pub fn stop(&self) -> bool {
+        let pid = self.pid.lock().ok().and_then(|p| *p);
+        match pid {
+            Some(pid) => {
+                self.asked
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                stop_group(pid);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether somebody asked for this to end.
+    pub fn asked(&self) -> bool {
+        self.asked.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn holding(&self, pid: Option<u32>) {
+        if let Ok(mut slot) = self.pid.lock() {
+            *slot = pid;
+        }
+    }
+}
+
 /// A `size = "320x200"` field, as a pair.
 fn py_size(src: &str, key: &str) -> Option<(u32, u32)> {
     let raw = py_string(src, key)?;
@@ -623,7 +671,12 @@ pub fn missing(entry: &AppEntry) -> Missing {
 /// Blocking and slow: apt reaches the network. `log` is called per output line so
 /// a caller can show it while it runs, which matters because this can take a
 /// minute and a frozen screen looks broken.
-pub fn install(entry: &AppEntry, missing: &Missing, mut log: impl FnMut(String)) -> Result<(), String> {
+pub fn install(
+    entry: &AppEntry,
+    missing: &Missing,
+    mut log: impl FnMut(String),
+    stop: &Stop,
+) -> Result<(), String> {
     let apt = missing.apt_all();
     if !apt.is_empty() {
         // Always update first. A device flashed from a stock image has no package
@@ -683,7 +736,10 @@ pub fn install(entry: &AppEntry, missing: &Missing, mut log: impl FnMut(String))
                 None => log(line),
             }
         };
-        run_logged(
+        // The one step a person may cut short, so it is the one that runs in its own
+        // process group: cargo starts a rustc per crate, and signalling only cargo would
+        // leave those compiling against a build nobody is waiting for.
+        run_logged_in(
             Command::new(&cargo)
                 .args(["build", "--release"])
                 .current_dir(&entry.dir)
@@ -692,6 +748,7 @@ pub fn install(entry: &AppEntry, missing: &Missing, mut log: impl FnMut(String))
                 .env("CARGO_TERM_COLOR", "never")
                 .env("CARGO_TERM_PROGRESS_WHEN", "never"),
             &mut build_log,
+            Some(stop),
         )?;
         drop(build_log);
         // Not the end of the job: an app can carry a crate and want Python packages
@@ -762,6 +819,20 @@ fn pump<R: std::io::Read + Send + 'static>(
 }
 
 fn run_logged(cmd: &mut Command, log: &mut impl FnMut(String)) -> Result<(), String> {
+    run_logged_in(cmd, log, None)
+}
+
+/// `run_logged`, and with a `Stop` the child is put in its own process group and its pid
+/// registered there for the length of the run, so somebody watching the log can end it.
+fn run_logged_in(
+    cmd: &mut Command,
+    log: &mut impl FnMut(String),
+    stop: Option<&Stop>,
+) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    if stop.is_some() {
+        cmd.process_group(0);
+    }
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -771,6 +842,22 @@ fn run_logged(cmd: &mut Command, log: &mut impl FnMut(String)) -> Result<(), Str
         // as "cannot start: No such file or directory (os error 2)" on a log screen
         // with no other context, which says nothing about what to install.
         .map_err(|e| format!("cannot start {}: {e}", cmd.get_program().to_string_lossy()))?;
+
+    // Registered while it runs, and cleared however this returns. A pid left behind would
+    // offer a Stop for something that had already finished, and the next process handed
+    // that number would get the signal meant for it.
+    if let Some(stop) = stop {
+        stop.holding(Some(child.id()));
+    }
+    struct Clear<'a>(Option<&'a Stop>);
+    impl Drop for Clear<'_> {
+        fn drop(&mut self) {
+            if let Some(stop) = self.0 {
+                stop.holding(None);
+            }
+        }
+    }
+    let _clear = Clear(stop);
 
     // Both pipes, on threads of their own, onto one channel. stderr is where the
     // interesting output is: apt and pip report their problems there and cargo
