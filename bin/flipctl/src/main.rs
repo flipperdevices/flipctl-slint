@@ -3342,6 +3342,11 @@ fn panel(
                             host.release(gone.place.clone(), gone.size.0, gone.size.1);
                         }
                         attention.remove(&gone.name);
+                        // And its card, which the reaper further up would have closed
+                        // had it still been in wl_apps: this branch takes it out first,
+                        // so an app that ended while it was in front used to leave a
+                        // card behind that led nowhere.
+                        recents.close(&gone.name);
                     }
                 }
                 wl_front = None;
