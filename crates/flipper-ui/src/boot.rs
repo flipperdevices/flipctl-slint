@@ -123,7 +123,7 @@ pub enum Kernels {
 /// nothing anybody wants, and a menu is a list of things worth choosing. They are
 /// hidden rather than removed, because the files are not ours to delete, and
 /// `--all-kernels` brings them back for a bisect.
-const MIN_KERNEL: (u32, u32) = (7, 0);
+pub const MIN_KERNEL: (u32, u32) = (7, 0);
 
 /// A boot entry as its own file states it, before the profile it names is looked up.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -499,6 +499,9 @@ pub struct Listing {
     /// Which profile boots when nobody presses anything: the one holding the first
     /// entry on the machine's own storage. None when nothing is bootable there.
     pub first: Option<usize>,
+    /// How many entries this listing left out for naming a kernel below
+    /// `MIN_KERNEL`. Reported once by whoever asked, not per profile.
+    pub hidden: usize,
 }
 
 /// The profiles on every filesystem of ours, the booted drive's first.
@@ -527,6 +530,10 @@ pub fn profiles() -> Vec<Profile> {
 pub fn listing(kernels: Kernels) -> Listing {
     let drives = read_drives();
     let mut profiles: Vec<Profile> = Vec::new();
+    // Entries left out for naming a kernel below the floor, counted rather than
+    // announced one profile at a time: it is the same sentence about every profile that
+    // still has a BSP entry, on every boot.
+    let mut hidden = 0usize;
     // The best (profile index, order key) seen on internal storage, which is what boots.
     let mut best: Option<(usize, Order)> = None;
 
@@ -550,16 +557,7 @@ pub fn listing(kernels: Kernels) -> Listing {
             if kernels == Kernels::Modern {
                 mine.retain(|c| version_at_least(&c.version, MIN_KERNEL));
             }
-            if mine.len() != all {
-                crate::logline!(
-                    "boot           {} of {} entries for {} name a kernel older than {}.{}",
-                    all - mine.len(),
-                    all,
-                    profile.name,
-                    MIN_KERNEL.0,
-                    MIN_KERNEL.1
-                );
-            }
+            hidden += all - mine.len();
             sort_confs(&mut mine);
 
             let at = profiles.len();
@@ -588,7 +586,7 @@ pub fn listing(kernels: Kernels) -> Listing {
     } else {
         crate::logline!("boot           nothing on the machine's own storage is bootable");
     }
-    Listing { profiles, first }
+    Listing { profiles, first, hidden }
 }
 
 /// Whether a kernel release is `min` or newer, on major and minor alone.
@@ -639,14 +637,23 @@ struct Drive {
 /// machine with no profile tools at all.
 fn read_drives() -> Vec<Drive> {
     let found = stores();
-    for s in &found {
-        crate::logline!(
-            "boot           drive {} on {} ({}{})",
-            s.dev,
-            s.disk,
-            s.kind,
-            if s.booted { ", booted" } else { "" }
-        );
+    // All of them on one line, and before the reads: which drives were seen is what a
+    // read that never returns leaves behind, and /dev/kmsg gives a process ten lines
+    // every five seconds, so a line per drive is one the pivot cannot spare.
+    if !found.is_empty() {
+        let seen: Vec<String> = found
+            .iter()
+            .map(|s| {
+                format!(
+                    "{} on {} ({}{})",
+                    s.dev,
+                    s.disk,
+                    s.kind,
+                    if s.booted { ", booted" } else { "" }
+                )
+            })
+            .collect();
+        crate::logline!("boot           drives: {}", seen.join("; "));
     }
     // No lsblk, or nothing recognisable: ask about the booted filesystem alone, which
     // is what every tool takes as its default and where our own /boot is. Named as a

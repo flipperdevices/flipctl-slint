@@ -1166,9 +1166,19 @@ impl BootMenu {
             match rx.try_recv() {
                 Ok(listing) => {
                     crate::logline!(
-                        "boot menu      {} profiles, {} entries",
+                        "boot menu      {} profiles, {} entries{}",
                         listing.profiles.len(),
-                        listing.profiles.iter().map(|p| p.entries.len()).sum::<usize>()
+                        listing.profiles.iter().map(|p| p.entries.len()).sum::<usize>(),
+                        if listing.hidden == 0 {
+                            String::new()
+                        } else {
+                            format!(
+                                ", {} below {}.{} not shown",
+                                listing.hidden,
+                                crate::boot::MIN_KERNEL.0,
+                                crate::boot::MIN_KERNEL.1
+                            )
+                        }
                     );
                     self.profiles = listing.profiles;
                     self.first = listing.first;
