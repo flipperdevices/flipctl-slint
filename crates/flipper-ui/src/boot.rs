@@ -996,6 +996,12 @@ pub fn set_video_out(p: &Profile, choice: usize) -> Result<(), String> {
         }
         set_one_video_out(&dir.join(&entry.file), choice)?;
     }
+    // The lines are written, but on btrfs metadata reaches the disk with the next
+    // transaction commit, up to `commit=` seconds later, and what this row changes is
+    // what the next boot does. Somebody who picks an output and pulls the power should
+    // not come back to the old one. Once for the whole change, since a profile can have
+    // four entries, and `sync` needs no privilege, unlike the writes above.
+    unsafe { libc::sync() };
     Ok(())
 }
 
