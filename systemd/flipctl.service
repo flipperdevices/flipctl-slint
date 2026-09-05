@@ -25,8 +25,8 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/games
 
 DevicePolicy=closed
 # The panel, by path rather than by number: card numbers move between kernels. The
-# render node is for the apps' compositors, which draw with the GPU inside their own
-# cage and hand us the result.
+# render node is for converting a hosted app's frames on the GPU rather than the CPU,
+# and for the apps that draw with it themselves.
 DeviceAllow=/dev/dri/by-path/platform-2acf0000.spi-cs-0-card rw
 DeviceAllow=/dev/dri/by-path/platform-27800000.gpu-render rw
 DeviceAllow=char-input rw
@@ -53,7 +53,7 @@ ExecStart=/usr/bin/flipctl --panel \
 # new one came up with no endpoint for Back or the app switcher.
 #
 # sway covers the hosted apps: it is the parent of every one of them, so killing it
-# takes the cages, the terminals and the games with it.
+# takes the terminals and the games with it.
 ExecStopPost=-/usr/bin/pkill -x flipctl
 ExecStopPost=-/usr/bin/pkill -x sway
 Restart=on-failure

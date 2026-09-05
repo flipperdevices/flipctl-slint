@@ -1437,18 +1437,14 @@ impl PanelOut {
     }
 }
 
-/// An app running as a client of the compositor that owns the panel.
+/// An app running as a client of the host compositor.
 ///
-/// There is no session to set up and nothing to hand over: the app is spawned into
-/// the same compositor on a workspace of its own, and showing it is making that
-/// workspace visible. It gets no DRM device, no framebuffer, no VT and no input
-/// device, which is stronger isolation than the console kind could offer even with
-/// An app hosted in a compositor of its own.
-///
-/// One cage per app, headless, sized to whatever the app draws at. flipctl reads its
-/// frames, fits them to the panel and commits them itself, so the panel never changes
-/// hands: there is no output to share, no workspace to allocate, no window to place
-/// and nothing to hand back when the app exits.
+/// One headless output and workspace of its own in the shared sway, sized to whatever
+/// the app draws at. flipctl reads that output with screencopy, fits the frames to the
+/// panel and commits them itself, so the panel never changes hands and there is no
+/// handover to get wrong. The app gets no DRM device, no framebuffer, no VT and no
+/// input device, which is stronger isolation than the console kind could offer, and is
+/// why it has no way to reach HDMI.
 #[cfg(feature = "wayland")]
 struct WlApp {
     name: String,
@@ -3163,7 +3159,7 @@ fn panel(
             );
         }
 
-        // An app in its own cage has no input device of its own: flipctl holds the
+        // The host compositor runs with no input devices at all: flipctl holds the
         // buttons, so every press is forwarded, physical and simulated alike. That is
         // the whole of the forwarding policy now, with no allowlist, no held-key rule
         // and nothing to decide about what the kernel may already have delivered.
@@ -3320,7 +3316,7 @@ fn panel(
                 app_counted = Instant::now();
             }
 
-            // A cage that has gone, or one that has shown nothing at all since it
+            // An app that has gone, or one that has shown nothing at all since it
             // started, must not keep the panel: flipctl would go on committing the
             // last frame with no way back.
             let alive = wl_apps
@@ -3353,7 +3349,7 @@ fn panel(
 
             if let Some(deck) = leave {
                 // Left running, not stopped: an app in the background is the point of
-                // a switcher, and its cage keeps drawing for its card.
+                // a switcher, and its output keeps drawing for its card.
                 eprintln!("app            {front} to the background");
                 wl_front = None;
                 window.request_redraw();
@@ -3372,7 +3368,8 @@ fn panel(
             }
 
             // Anything that exited in the background, so its card stops claiming it
-            // is running and its cage is reaped rather than left as a zombie.
+            // is running and its output goes back to the host rather than being
+            // leaked, since sway can create an output and cannot destroy one.
             let mut ended: Vec<(flipper_ui::sway::Placement, (u32, u32), String)> = Vec::new();
             wl_apps.retain_mut(|a| {
                 if a.session.alive() {
@@ -3501,10 +3498,10 @@ fn panel(
                         );
                     }
                     Some(flipper_ui::switcher::Action::Kill(name, _)) => {
-                        // Dropping the session is the whole of it: it signals the
-                        // cage's process group, so the compositor and the program
-                        // inside it go together, and there is no window to close and
-                        // no workspace to give back.
+                        // Dropping the session signals the app's process group, so a
+                        // game and the shell that launched it go together. The host
+                        // compositor stays up for the other apps, so its output and
+                        // workspace are handed back separately, just below.
                         #[cfg(feature = "wayland")]
                         if let Some(at) = wl_apps.iter().position(|a| a.name == name) {
                             let gone = wl_apps.remove(at);
@@ -3679,7 +3676,7 @@ fn panel(
                                 // The card is what leads back here, so it gets the log as
                                 // it looked when it was put aside. Without this the tile
                                 // carries whatever it was last given -- nothing at all for
-                                // a build started from the row, since the app has no cage
+                                // a build started from the row, since the app has no output
                                 // to draw one from and never will until it is built.
                                 stash_front(
                                     &mut recents,
@@ -4818,7 +4815,7 @@ fn panel(
             match sw.tick() {
                 Some(flipper_ui::switcher::Action::Launch(name, kind)) => {
                     switcher = None;
-                    // A hosted app has been drawing all along in its own cage, so
+                    // A hosted app has been drawing all along on its own output, so
                     // bringing it back is naming it: the next turn of the loop reads
                     // its frame and puts it on the panel.
                     #[cfg(feature = "wayland")]
@@ -4866,8 +4863,9 @@ fn panel(
                     });
                 }
                 Some(flipper_ui::switcher::Action::Kill(name, _)) => {
-                    // Dropping the session signals the cage's process group, so the
-                    // compositor and the program inside it go together.
+                    // Dropping the session signals the app's process group, so a game
+                    // and the shell that launched it go together. The host compositor
+                    // stays up, and its output is released just below.
                     #[cfg(feature = "wayland")]
                     if let Some(at) = wl_apps.iter().position(|a| a.name == name) {
                         let gone = wl_apps.remove(at);
@@ -5395,7 +5393,7 @@ fn panel(
         // Handing Slint a freshly built model is a change even when its contents
         // are identical, so doing this every iteration marked the whole window
         // dirty every iteration and the panel repainted forever. On a static
-        // screen that pinned the remote view at its 10fps cap and kept the SPI
+        // screen that pinned the remote view at its frame cap and kept the SPI
         // bus busy for nothing. Setting a scalar property to the same value is
         // free, because Slint compares it; a model is not.
         // The switcher is part of the key: a dialog does not draw over the cards,

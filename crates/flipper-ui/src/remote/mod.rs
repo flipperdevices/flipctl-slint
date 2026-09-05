@@ -46,7 +46,7 @@ const MAX_INPUT_BODY: usize = 256; // not-a-panel-dimension
 const HEADER: usize = 8;
 
 /// How many frames may wait to be sent. Three is enough to carry a 30ms flash
-/// through a 100ms send interval without letting a stalled viewer accumulate
+/// through a 33ms send interval without letting a stalled viewer accumulate
 /// megabytes.
 const QUEUE_DEPTH: usize = 3;
 
@@ -70,12 +70,12 @@ struct Shared {
     /// thrifty choice, but a single shared accumulator is consumed by whichever
     /// viewer reads first, so a second viewer, or one that reconnects, gets a
     /// partial screen or nothing at all. A whole 256x144 greyscale frame is
-    /// 36864 bytes, and at the 10fps cap that is 368 KB/s, which is free on any
+    /// 36864 bytes, and at the 30fps cap that is 1.1 MB/s, which is free on any
     /// link this device has. Correctness is worth more than the bandwidth.
     ///
     /// A short queue per viewer rather than a single slot, because the UI has
     /// states that live for less than one send interval: a soft button's press
-    /// flash is 30ms against a 100ms cadence, so storing only the newest frame
+    /// flash is 30ms against a 33ms cadence, so storing only the newest frame
     /// overwrites the pressed frame before any viewer sees it. That looked like the
     /// press state failing intermittently, and looked different per row because
     /// animated icons commit every 200ms and shift the sender's phase. Keeping a

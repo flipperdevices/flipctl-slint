@@ -13,9 +13,10 @@
 name = "Doom"
 # What it insists on drawing. Doom renders 320x200 and will not take a smaller
 # window, so without this sway tiles it into a 256x144 output and shows a corner of
-# the frame. Declared, flipctl scales the output while Doom is in front: 0.720 makes
-# the output 355x200 logical, the window fits, and the whole picture reaches the
-# panel at 230x144, which is Doom's aspect rather than ours.
+# the frame. Declared, the output is moded to 320x200 and the window fits, and
+# flipctl fits the frame to the panel while Doom is in front: the whole picture
+# reaches it at 230x144, which is Doom's aspect rather than ours, with a 13px bar
+# down each side.
 size = "320x200"
 # By absolute path: Debian puts games in /usr/games, which is not on the PATH the
 # compositor's unit gives its children, so the bare name is not found.

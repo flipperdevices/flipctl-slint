@@ -1,7 +1,8 @@
 //! Apps hosted in a compositor of their own.
 //!
-//! An app gets a `cage` instance with one headless output the size of the panel,
-//! and nothing else: no DRM device, no framebuffer, no VT, no input device. It
+//! An app gets one headless output of its own in the host compositor, sized to
+//! whatever it draws at, and nothing else: no DRM device, no framebuffer, no VT and
+//! no input device of its own. It
 //! draws as an ordinary Wayland client, we read its output with wlr-screencopy and
 //! we drive it with a virtual keyboard. flipctl keeps the panel throughout, so
 //! there is no handover to get wrong and no way for an app to reach HDMI.
@@ -186,10 +187,10 @@ struct Want {
 
 /// One connection, and what it takes to read frames over it.
 ///
-/// Shared by two callers with the same need and different reasons: an app in its
-/// own cage, and the compositor that owns the panel, whose output is whatever is in
-/// front. Both want "give me the current frame as grey8", and neither wants to know
-/// how screencopy negotiates a buffer.
+/// Shared by two callers with the same need and different reasons: a hosted app on
+/// its own output, and the compositor flipctl is itself a client of, whose output is
+/// whatever is in front. Both want "give me the current frame as grey8", and neither
+/// wants to know how screencopy negotiates a buffer.
 struct Grab {
     /// Which output this grab reads, by name. Under one compositor every app has an
     /// output of its own, so "the first one" is somebody else's app.

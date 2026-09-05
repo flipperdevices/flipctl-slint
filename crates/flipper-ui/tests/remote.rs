@@ -84,7 +84,7 @@ fn commits_are_free_while_unwatched() {
 ///
 /// Whole frames rather than damaged regions: a single shared damage accumulator
 /// is drained by whichever viewer reads first, so a second viewer or a reconnect
-/// would get a partial screen. 36 KB at 10fps is affordable; a wrong screen is
+/// would get a partial screen. 36 KB at 30fps is affordable; a wrong screen is
 /// not.
 #[test]
 fn streams_whole_frames_with_a_header() {
