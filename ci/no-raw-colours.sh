@@ -25,10 +25,14 @@ if [ -n "$hits" ]; then
     status=1
 fi
 
-# Panel dimensions. Anything hardcoding 256 or 144 has bypassed theme::PANEL_W.
-# A line that genuinely means something else says so with a
+# Panel dimensions. Anything hardcoding 256 or 144 has bypassed theme::PANEL_W or
+# FlipperTheme.panel_w. A line that genuinely means something else says so with a
 # `not-a-panel-dimension` comment, which is rare enough to be worth spelling out.
-hits=$(grep -rInE '\b(256|144)\b' \
+#
+# The `px` is not optional decoration: `\b256\b` never matches `256px`, because a
+# digit followed by a letter is no word boundary at all. Three Slint Window
+# components sat on a literal 256px for as long as this guard has existed.
+hits=$(grep -rInE '\b(256|144)(px)?\b' \
         --include='*.rs' --include='*.slint' \
         crates bin 2>/dev/null \
     | grep -v '^crates/flipper-ui/build.rs:' \

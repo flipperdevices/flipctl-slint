@@ -241,6 +241,16 @@ pub fn slint_theme(doc: &toml::Value) -> String {
         )
         .unwrap();
     }
+
+    // The panel size as a length, so the Window components bind to tokens.toml rather
+    // than each repeating the numbers. Only Rust had these before, which is how three
+    // literal 256px slipped past ci/no-raw-colours.sh.
+    let meta = table(doc, "meta");
+    let w = meta["panel_width"].as_integer().unwrap();
+    let h = meta["panel_height"].as_integer().unwrap();
+    writeln!(s, "    out property <length> panel_w: {w}px;").unwrap();
+    writeln!(s, "    out property <length> panel_h: {h}px;").unwrap();
+
     s.push_str("}\n");
     s
 }

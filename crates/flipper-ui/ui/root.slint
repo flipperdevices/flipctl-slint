@@ -27,8 +27,8 @@ export { ListItem, IdleLink, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetR
 export enum Screen { idle, menu, detail, ethernet, wifi, boot, apps, app_log, text_input, switcher }
 
 export component Root inherits Window {
-    width: 256px;
-    height: 144px;
+    width: FlipperTheme.panel_w;
+    height: FlipperTheme.panel_h;
     background: FlipperTheme.white;
     default-font-family: "HaxrCorp 4090";
     default-font-size: 16px;
