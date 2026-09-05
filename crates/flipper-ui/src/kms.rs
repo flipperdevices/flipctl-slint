@@ -15,6 +15,7 @@
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use drm::buffer::{Buffer, DrmFourcc};
 use drm::control::dumbbuffer::DumbBuffer;
@@ -26,6 +27,9 @@ use crate::platform::{Frame, FrameSink};
 
 /// The driver name `flipper-one-display.c` registers.
 const DRIVER: &str = "flipper_one_display";
+
+/// How long a start-up waits to be DRM master before giving up.
+const MASTER_WAIT: Duration = Duration::from_secs(15);
 
 struct Card(File);
 
@@ -86,7 +90,7 @@ impl KmsSink {
             None => Self::find_panel()?,
         };
 
-        let card = Card(OpenOptions::new().read(true).write(true).open(&path)?);
+        let card = Self::open_as_master(&path, MASTER_WAIT)?;
 
         let name = card.get_driver()?.name;
         if explicit.is_none() && name != DRIVER {
@@ -357,22 +361,26 @@ impl KmsSink {
         self.detached
     }
 
-    /// Wait until the kernel will hand us DRM master, for at most `limit`.
+    /// Open the card as its DRM master, waiting for at most `limit`.
     ///
-    /// flipctl takes the panel through a logind session (`PAMName=login`, for seat1's
-    /// devices), and the kernel refuses SET_MASTER until logind has made that session the
-    /// active one on the seat. That happens a moment after the unit starts, so a flipctl
-    /// that opens the card and modesets immediately dies with EACCES on its first commit.
+    /// A fd becomes master at open when nobody holds master. Otherwise SET_MASTER is
+    /// EACCES for that fd for good: without CAP_SYS_ADMIN the kernel grants it only to a
+    /// fd that was master before. So EACCES means somebody held the card when it was
+    /// opened, and the only way forward is to close and open again once they are gone.
+    /// EBUSY is a fd that was master and lost it, which takes it back when the holder
+    /// drops it. Both are waited out here, before any buffer is created on the fd, since a
+    /// buffer belongs to the fd that made it.
     ///
-    /// It used to be hidden: the session scope itself took ~1.8s to come up, by which time
-    /// the session was active, so the race never showed. Removing that delay exposed it, and
-    /// the failure was expensive, because systemd's `RestartSec=2` then cost more than the
-    /// wait it had replaced. Waiting here is what makes an earlier start worth anything.
-    pub fn wait_for_master(&self, limit: std::time::Duration) -> std::io::Result<()> {
-        let began = std::time::Instant::now();
+    /// The wait exists because logind activates this session a moment after the unit
+    /// starts, and it was seen to last 10s once in 19 boots for a reason the kernel log
+    /// did not show. Giving up costs a restart that re-pays the whole start-up, so the
+    /// error says what was seen: the card, how long, and which refusal.
+    fn open_as_master(path: &Path, limit: Duration) -> std::io::Result<Card> {
+        let began = Instant::now();
+        let mut card = Card(OpenOptions::new().read(true).write(true).open(path)?);
         let mut waited = false;
         loop {
-            match self.card.acquire_master_lock() {
+            let err = match card.acquire_master_lock() {
                 Ok(()) => {
                     if waited {
                         crate::logline!(
@@ -380,23 +388,29 @@ impl KmsSink {
                             began.elapsed().as_millis()
                         );
                     }
-                    return Ok(());
+                    return Ok(card);
                 }
-                Err(e) => {
-                    if began.elapsed() >= limit {
-                        return Err(e);
-                    }
-                    if !waited {
-                        crate::logline!("panel          waiting for DRM master on this seat");
-                        waited = true;
-                    }
-                    // 100ms, and a 10s ceiling, so the whole wait is at most a hundred
-                    // ioctls: the panel is a tenth of a second late at worst and nothing
-                    // spins while the seat settles. A tighter poll buys nothing here, since
-                    // what is being waited for is logind activating a session, which takes
-                    // hundreds of milliseconds, not microseconds.
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
+                Err(e) => e,
+            };
+            let never_ours = err.kind() == std::io::ErrorKind::PermissionDenied;
+            if began.elapsed() >= limit {
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "{}: no DRM master after {}ms: {err}{}",
+                        path.display(),
+                        began.elapsed().as_millis(),
+                        if never_ours { " (another client held master at every open)" } else { "" }
+                    ),
+                ));
+            }
+            if !waited {
+                crate::logline!("panel          waiting for DRM master on {} ({err})", path.display());
+                waited = true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            if never_ours {
+                card = Card(OpenOptions::new().read(true).write(true).open(path)?);
             }
         }
     }
