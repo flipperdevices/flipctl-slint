@@ -30,6 +30,8 @@ pub mod platform;
 pub mod evdev;
 #[cfg(feature = "device")]
 pub mod kms;
+#[cfg(feature = "device")]
+pub mod haptic;
 #[cfg(feature = "remote")]
 pub mod remote;
 pub mod scale;
