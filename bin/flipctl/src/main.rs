@@ -2565,6 +2565,8 @@ fn panel(
     // The text-input screen, open only while something is being named. It carries
     // the name it will rename, because the list can be re-read while it is up.
     let mut kb: Option<flipper_ui::keyboard::TextInput> = None;
+    // Whether the boot has been acknowledged with the motor.
+    let mut buzzed_boot = false;
     // What the keyboard is collecting. A profile's new name is checked as it is
     // typed, and the line under the field says why it is refused; a passphrase is
     // never refused by us, so that line carries the AP's own last refusal instead.
@@ -4927,6 +4929,9 @@ fn panel(
                 // A tick per key the finger crossed, which is the prototype's
                 // one use of the motor.
                 if let Some(buzz) = buzz.as_mut() {
+                    // The lightest click the library has, cut short: it fires
+                    // once per key a stroke slides over, so it has to read as
+                    // texture rather than as an event.
                     buzz.play(3, 10);
                 }
             }
@@ -4959,6 +4964,18 @@ fn panel(
             if let Some(menu) = boot.as_mut() {
                 if menu.tick() {
                     apply_boot(&screen, menu);
+                }
+                // The same acknowledgement the standalone menu gives, because it
+                // is the same menu and the same commitment: from here the machine
+                // is on its way to another kernel. Once, not once a frame.
+                if !menu.view().booting.is_empty() && !buzzed_boot {
+                    buzzed_boot = true;
+                    if let Some(buzz) = buzz.as_mut() {
+                        // A step above the per-key tick and below the hardest thing
+                        // the motor can do: the difference between saying "that is
+                        // happening now" and startling someone.
+                        buzz.play(2, 0);
+                    }
                 }
             }
         }

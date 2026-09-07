@@ -30,6 +30,7 @@ use flipper_ui::tui::{text::Rules, Terminal, TerminalEvent};
 use flipper_ui::{keyboard, Frame, FrameSink, InputSource, PANEL_H, PANEL_W};
 use slint::ComponentHandle;
 
+
 slint::include_modules!();
 
 fn main() -> std::process::ExitCode {
@@ -106,6 +107,8 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
     let mut dirty = true;
     // Whether the takeover has had its one frame; see the loop for why it gets only one.
     let mut takeover_committed = false;
+    // Whether the boot has been acknowledged. One buzz, not one a frame.
+    let mut buzzed_boot = false;
     // Whether anything has reached the panel yet, for the one line that says so, and
     // for the terminal: that is opened after the first frame and never before.
     // Somebody holding the device is waiting on the panel, and setting a terminal up
@@ -176,6 +179,9 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
             if field.touch(touch) {
                 // One tick per key crossed, as the prototype does it.
                 if let Some(buzz) = buzz.as_mut() {
+                    // The lightest click the library has, cut short: it fires
+                    // once per key a stroke slides over, so it has to read as
+                    // texture rather than as an event.
                     buzz.play(3, 10);
                 }
             }
@@ -211,6 +217,22 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
             // once here for `booting` and once inside apply().
             let view = menu.view();
             let booting = !view.booting.is_empty();
+            // Say so with the motor the moment a boot commits, whether a key
+            // chose it or the countdown ran out. The panel is about to be given
+            // over and then left alone, so this is the last thing the device
+            // does that anyone can perceive until the next kernel draws.
+            //
+            // A single strong click, not the keyboard's 10ms tick: a tick means
+            // "you moved", and this means "that is happening now".
+            if booting && !buzzed_boot {
+                buzzed_boot = true;
+                if let Some(buzz) = buzz.as_mut() {
+                    // A step above the per-key tick and below the hardest thing
+                    // the motor can do: the difference between saying "that is
+                    // happening now" and startling someone.
+                    buzz.play(2, 0);
+                }
+            }
             apply(&ui, &view, kb.as_ref(), &warning);
             window.request_redraw();
             if !booting || !takeover_committed {
