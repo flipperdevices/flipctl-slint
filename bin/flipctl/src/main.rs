@@ -2339,6 +2339,20 @@ fn panel(
     } else {
         Some(EvdevSource::open()?)
     };
+    // The pad and the motor, on the same terms as the buttons: not in headless or
+    // under a compositor, and never fatal. Neither exists on every board, and the
+    // pad reaches only the text-input screen, so a missing one costs that screen
+    // a way in rather than costing anything else.
+    let mut pad = if headless || wayland {
+        None
+    } else {
+        flipper_ui::evdev::TouchpadSource::open().ok()
+    };
+    let mut buzz = if headless || wayland {
+        None
+    } else {
+        flipper_ui::haptic::Haptic::open().ok()
+    };
 
     // The browser view is a second sink over the same frames and a second source
     // of the same key events, so nothing downstream can tell a remote click from
@@ -4899,6 +4913,24 @@ fn panel(
             screen.set_switch_can_kill(sw.can_kill());
             screen.set_switch_pressed_slot(press.soft_slot());
             screen.set_switch_empty("No running apps".into());
+        }
+
+        // The pad, which only the text-input screen has anything to do with. Read
+        // even when another screen is up so a stroke that started elsewhere does
+        // not arrive as one enormous jump the moment the keyboard opens.
+        while let Some(touch) = pad.as_mut().and_then(flipper_ui::evdev::TouchpadSource::poll) {
+            if screen.get_screen() != Screen::TextInput {
+                continue;
+            }
+            let Some(input) = kb.as_mut() else { continue };
+            if input.touch(touch) {
+                // A tick per key the finger crossed, which is the prototype's
+                // one use of the motor.
+                if let Some(buzz) = buzz.as_mut() {
+                    buzz.play(3, 10);
+                }
+            }
+            kb_dirty = true;
         }
 
         // The text-input screen. Its cells are rebuilt only when something moved:

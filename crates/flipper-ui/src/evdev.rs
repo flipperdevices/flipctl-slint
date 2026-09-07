@@ -3,8 +3,11 @@
 //! The MCU input driver registers `Flipper One Buttons` and `Flipper One Software
 //! Buttons` with identical keycodes, one carrying physical presses and one
 //! carrying injected ones, so a remote viewer's click and a finger are
-//! indistinguishable downstream. Both are opened. The touchpad and headset
-//! devices are ignored here.
+//! indistinguishable downstream. Both are opened. The headset is ignored.
+//!
+//! The touchpad is a device of its own, `TouchpadSource` below: it reports
+//! absolute axes rather than keys, and a consumer that wants buttons should not
+//! have to filter them out.
 //!
 //! libinput is deliberately absent: it would drag libwacom and glib into a
 //! maskrom-loaded initramfs to service thirteen buttons, and libxkbcommon would
@@ -17,7 +20,7 @@ use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
-use crate::platform::InputSource;
+use crate::platform::{InputSource, Touch};
 use crate::{FlipperKey, KeyEvent};
 
 /// `struct input_event` on 64-bit Linux: a 16-byte timeval, then type, code and
@@ -145,6 +148,114 @@ impl InputSource for EvdevSource {
             self.drain();
         }
         self.queue.pop_front()
+    }
+}
+
+/// The pad beside the screen.
+///
+/// Single touch: the driver reports `ABS_X`, `ABS_Y` and `BTN_TOUCH` and has no
+/// MT slots, so one finger is all there is to track and a report is a whole
+/// position rather than a delta.
+///
+/// Absent on a board without one, which is why `open` returning an error is an
+/// ordinary outcome and not a reason for anything to stop.
+pub struct TouchpadSource {
+    device: File,
+    queue: std::collections::VecDeque<Touch>,
+    buf: [u8; EVENT_SIZE * 32],
+    /// The report being assembled. A packet is several events and then a
+    /// `SYN_REPORT`, and only the whole of it means anything.
+    at: Touch,
+    /// What was last handed out, so a packet that changed nothing is dropped
+    /// rather than waking the caller.
+    sent: Option<Touch>,
+}
+
+const TOUCHPAD_NAME: &str = "Flipper One Touchpad";
+const EV_SYN: u16 = 0;
+const EV_ABS: u16 = 3;
+const ABS_X: u16 = 0;
+const ABS_Y: u16 = 1;
+const BTN_TOUCH: u16 = 0x14a;
+
+impl TouchpadSource {
+    pub fn open() -> std::io::Result<Self> {
+        let mut path = None;
+        for entry in std::fs::read_dir("/sys/class/input")? {
+            let entry = entry?;
+            let node = entry.file_name();
+            let Some(node) = node.to_str() else { continue };
+            if !node.starts_with("event") {
+                continue;
+            }
+            let Ok(name) = std::fs::read_to_string(entry.path().join("device/name")) else {
+                continue;
+            };
+            if name.trim() == TOUCHPAD_NAME {
+                path = Some(PathBuf::from("/dev/input").join(node));
+                break;
+            }
+        }
+        let Some(path) = path else {
+            return Err(std::io::Error::other(format!(
+                "no input device named {TOUCHPAD_NAME}"
+            )));
+        };
+        let device = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc_o_nonblock())
+            .open(path)?;
+        Ok(Self {
+            device,
+            queue: std::collections::VecDeque::new(),
+            buf: [0; EVENT_SIZE * 32],
+            at: Touch { x: 0, y: 0, down: false },
+            sent: None,
+        })
+    }
+
+    /// Non-blocking. One item per report the pad actually changed something in.
+    pub fn poll(&mut self) -> Option<Touch> {
+        if self.queue.is_empty() {
+            self.drain();
+        }
+        self.queue.pop_front()
+    }
+
+    fn drain(&mut self) {
+        loop {
+            let read = match self.device.read(&mut self.buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            for chunk in self.buf[..read].chunks_exact(EVENT_SIZE) {
+                let kind = u16::from_ne_bytes([chunk[16], chunk[17]]);
+                let code = u16::from_ne_bytes([chunk[18], chunk[19]]);
+                let value = i32::from_ne_bytes([chunk[20], chunk[21], chunk[22], chunk[23]]);
+                match (kind, code) {
+                    (EV_ABS, ABS_X) => self.at.x = value,
+                    (EV_ABS, ABS_Y) => self.at.y = value,
+                    (EV_KEY, BTN_TOUCH) => self.at.down = value != 0,
+                    (EV_SYN, 0) => {
+                        if self.sent != Some(self.at) {
+                            self.sent = Some(self.at);
+                            self.queue.push_back(self.at);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if read < EVENT_SIZE {
+                break;
+            }
+        }
+    }
+
+    /// The raw fd, for a caller that blocks in `poll(2)` over every source.
+    pub fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        use std::os::fd::AsFd;
+        self.device.as_fd()
     }
 }
 

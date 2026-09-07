@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 
 use flipper_ui::boot::Kernels;
 use flipper_ui::boot_menu::{AutoStart, BootMenu, Outcome, View as BootView};
-use flipper_ui::evdev::EvdevSource;
+use flipper_ui::evdev::{EvdevSource, TouchpadSource};
+use flipper_ui::haptic::Haptic;
 use flipper_ui::kms::KmsSink;
 use flipper_ui::slint_render::{render_into, FlipperSlintPlatform};
 use flipper_ui::theme::count::BOOT_VISIBLE_ROWS;
@@ -85,6 +86,11 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
         }
     };
     let mut looked_for_input = Instant::now();
+    // Both optional, and for the same reason the buttons are: a board without
+    // one still has to boot. The pad only ever reaches the rename keyboard, and
+    // the motor only ever acknowledges a key it crossed.
+    let mut pad = TouchpadSource::open().ok();
+    let mut buzz = Haptic::open().ok();
 
     let window = FlipperSlintPlatform::install();
     let ui = Menu::new().map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -161,6 +167,19 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
                 }
                 TerminalEvent::Closed => tui = None,
             }
+        }
+
+        // The pad drives the rename keyboard and nothing else: there is no
+        // pointer on this screen for it to move, and the list is a d-pad list.
+        while let Some(touch) = pad.as_mut().and_then(TouchpadSource::poll) {
+            let Some(field) = kb.as_mut() else { continue };
+            if field.touch(touch) {
+                // One tick per key crossed, as the prototype does it.
+                if let Some(buzz) = buzz.as_mut() {
+                    buzz.play(3, 10);
+                }
+            }
+            dirty = true;
         }
 
         if menu.tick() {
