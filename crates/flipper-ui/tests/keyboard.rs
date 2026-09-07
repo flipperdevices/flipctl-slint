@@ -236,3 +236,215 @@ fn the_field_grows_with_the_text() {
     assert_eq!(keyboard::field_w(200), 212);
     assert_eq!(keyboard::field_w(1000), 238, "the cap");
 }
+
+// ── The touchpad ───────────────────────────────────────────────────────────
+//
+// keyboard_test.js's scheme, and its numbers: the selection moves by how far the
+// finger has travelled since it went down, never to where the finger is. The pad
+// sits beside the screen, so no point on it means a particular key.
+
+use flipper_ui::platform::Touch;
+
+/// A finger down at the pad's middle, which is where every drag below starts.
+const MID: Touch = Touch { x: 512, y: 400, down: true };
+
+fn drag(input: &mut TextInput, dx: i32, dy: i32) -> bool {
+    input.touch(Touch { x: MID.x + dx, y: MID.y + dy, down: true })
+}
+
+#[test]
+fn a_touch_alone_moves_nothing() {
+    let mut input = TextInput::new("Name", "");
+    let (row, col) = (input.row, input.col);
+    assert!(!input.touch(MID), "landing is not a move");
+    assert_eq!((input.row, input.col), (row, col));
+}
+
+/// One column per 48 pad units, after the sensitivity divider halves the delta:
+/// 96 raw units of X is one cell. Slower than the prototype's 32 on purpose.
+#[test]
+fn a_column_is_ninety_six_raw_units() {
+    let mut input = TextInput::new("Name", "");
+    input.touch(MID);
+    assert_eq!(input.col, 0);
+    assert!(!drag(&mut input, 47, 0), "under half a step stays put");
+    assert_eq!(input.col, 0);
+    assert!(drag(&mut input, 96, 0), "a full step moves one column");
+    assert_eq!(input.col, 1);
+    drag(&mut input, 288, 0);
+    assert_eq!(input.col, 3, "three steps from the anchor, not from the last report");
+}
+
+/// A row is 90 units after the same halving, so 180 raw. Quicker than the
+/// prototype's 130, which could not cross the keyboard in one stroke.
+#[test]
+fn a_row_is_one_hundred_and_eighty_raw_units() {
+    let mut input = TextInput::new("Name", "");
+    input.touch(MID);
+    let start = input.row;
+    drag(&mut input, 0, 180);
+    assert_eq!(input.row, start + 1);
+    drag(&mut input, 0, 360);
+    assert_eq!(input.row, start + 2);
+}
+
+/// Lifting ends the stroke, and the next one measures from where it lands: a
+/// drag is never continued across a lift.
+#[test]
+fn lifting_re_anchors_the_next_drag() {
+    let mut input = TextInput::new("Name", "");
+    input.touch(MID);
+    drag(&mut input, 192, 0);
+    let col = input.col;
+    assert_eq!(col, 2);
+    input.touch(Touch { down: false, ..MID });
+    // Same absolute position as the end of the last stroke: a scheme that
+    // measured from the old anchor would jump, this one does not move at all.
+    input.touch(Touch { x: MID.x + 192, y: MID.y, down: true });
+    assert_eq!(input.col, col);
+}
+
+/// Lifting never presses. The pad reaches a key; OK is what types it.
+#[test]
+fn lifting_does_not_type() {
+    let mut input = TextInput::new("Name", "");
+    input.touch(MID);
+    drag(&mut input, 64, 0);
+    assert!(input.touch(Touch { down: false, ..MID }).eq(&false));
+    assert_eq!(input.text, "", "a stroke that crossed keys typed nothing");
+}
+
+/// Dragging above the top row reaches the field, and X there is the caret.
+#[test]
+fn dragging_up_reaches_the_field_and_moves_the_caret() {
+    let mut input = TextInput::new("Name", "abcd");
+    assert_eq!(input.focus, Focus::Keys);
+    input.touch(MID);
+    // Far enough up to clear every keyboard row.
+    drag(&mut input, 0, -260 * 6);
+    assert_eq!(input.focus, Focus::Field);
+    let at = input.cursor;
+    // Entering does not drag the caret; only movement after it does.
+    assert_eq!(at, 4, "the caret stayed where it was on the way in");
+    input.touch(Touch { x: MID.x - 192, y: MID.y - 260 * 6, down: true });
+    assert_eq!(input.cursor, 2, "two columns left of the anchor");
+}
+
+/// The tab strip is a dead end: dragging past it does not wrap onto the number
+/// row, which is the D-pad's way in alone.
+#[test]
+fn the_tab_strip_does_not_wrap_onto_the_numbers() {
+    let mut input = TextInput::new("Name", "");
+    input.touch(MID);
+    drag(&mut input, 0, 260 * 8);
+    assert!(
+        matches!(input.focus, Focus::Tab123 | Focus::TabBackspace | Focus::Keys),
+        "focus {:?}",
+        input.focus
+    );
+    assert_ne!(input.row, 0, "never landed back on the number row");
+}
+
+/// The step boundary, against keyboard_test.js's own arithmetic:
+/// `round((raw / TP_SLOW_DIVIDER) / TP_Y_UNITS_PER_STEP)`, all in floating point.
+/// A row is 180 raw units, so the tick is at half of that.
+#[test]
+fn a_row_ticks_at_half_a_step_the_way_the_prototype_rounds_it() {
+    for (raw, want) in [(0, 0), (89, 0), (90, 1), (180, 1), (269, 1), (270, 2)] {
+        let mut input = TextInput::new("Name", "");
+        input.touch(MID);
+        let start = input.row as i32;
+        drag(&mut input, 0, raw);
+        assert_eq!(
+            input.row as i32 - start,
+            want,
+            "{raw} raw units of Y should be {want} rows"
+        );
+    }
+}
+
+/// Dragging up reaches the number row before the field, because the prototype's
+/// _setSelection clamps the row to 0 rather than skipping the peek row. Only the
+/// step past it goes to the field.
+#[test]
+fn dragging_up_passes_through_the_number_row() {
+    let mut input = TextInput::new("Name", "ab");
+    assert_eq!(input.row, 1, "starts on QWERTY, the number row is the opt-in one");
+    input.touch(MID);
+    drag(&mut input, 0, -180);
+    assert_eq!(input.focus, Focus::Keys);
+    assert_eq!(input.row, 0, "the peek row is a row the pad can reach");
+    drag(&mut input, 0, -360);
+    assert_eq!(input.focus, Focus::Field, "one more step leaves for the field");
+}
+
+/// Ties round toward positive, because Math.round does and the step arithmetic
+/// is ported from it. So down ticks at exactly half a step and up has to pass
+/// it: an asymmetry that is the prototype's, not an accident here.
+#[test]
+fn a_tie_rounds_down_the_screen_not_away_from_zero() {
+    let mut input = TextInput::new("Name", "");
+    input.touch(MID);
+    let start = input.row as i32;
+    drag(&mut input, 0, 90);
+    assert_eq!(input.row as i32 - start, 1, "+90 is a tie and goes down");
+
+    let mut input = TextInput::new("Name", "");
+    input.touch(MID);
+    let start = input.row as i32;
+    drag(&mut input, 0, -90);
+    assert_eq!(input.row as i32 - start, 0, "-90 is the same tie and does not go up");
+    drag(&mut input, 0, -91);
+    assert_eq!(input.row as i32 - start, -1, "one unit past it does");
+}
+
+/// A vertical drag lands under the finger, not on the same index.
+///
+/// The rows are ragged: the home and shift rows lead with a 35px key where QWERTY
+/// leads with a 15px one, so index 4 on one row is a key to the side of index 4 on
+/// the next. Carrying the index is what made a straight drag down step sideways;
+/// the d-pad has always carried the position instead, through closest_col.
+#[test]
+fn a_vertical_drag_keeps_its_place_across_ragged_rows() {
+    let grid = Grid::new(Layout::Abc);
+    for col in [0usize, 4, 8] {
+        let mut input = TextInput::new("Name", "");
+        // Start on QWERTY at a known cell.
+        for _ in 0..col {
+            press(&mut input, Right);
+        }
+        assert_eq!((input.row, input.col), (1, col));
+        let want = grid.closest_col(2, cell_center(&grid, 1, col));
+
+        input.touch(MID);
+        drag(&mut input, 0, 180);
+        assert_eq!(input.row, 2, "one row down");
+        assert_eq!(
+            input.col, want,
+            "row 1 col {col} should land under itself on row 2, which is {want}"
+        );
+    }
+}
+
+/// The same, upward, where the offset runs the other way.
+#[test]
+fn dragging_up_a_ragged_row_also_lands_under_the_finger() {
+    let grid = Grid::new(Layout::Abc);
+    let mut input = TextInput::new("Name", "");
+    press(&mut input, Down);
+    for _ in 0..4 {
+        press(&mut input, Right);
+    }
+    assert_eq!(input.row, 2);
+    let from = input.col;
+    let want = grid.closest_col(1, cell_center(&grid, 2, from));
+    input.touch(MID);
+    drag(&mut input, 0, -180);
+    assert_eq!(input.row, 1);
+    assert_eq!(input.col, want, "row 2 col {from} should land on row 1 col {want}");
+}
+
+/// `cell_center_2x` is private, so measure it the way the grid does.
+fn cell_center(grid: &Grid, row: usize, col: usize) -> i32 {
+    2 * grid.cell_x(row, col) + grid.rows[row][col].width()
+}

@@ -43,6 +43,20 @@ pub trait FrameSink {
     fn commit(&mut self, frame: Frame<'_>, damage: Rect) -> std::io::Result<()>;
 }
 
+/// A finger on the touchpad, as the pad reports it.
+///
+/// Absolute pad coordinates, not screen ones: the pad is beside the panel and a
+/// different shape, so nothing here maps to a pixel. What consumes this reads
+/// movement, not position.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct Touch {
+    pub x: i32,
+    pub y: i32,
+    /// Whether the finger is still down. The last report of a stroke has this
+    /// false, and is what ends the drag.
+    pub down: bool,
+}
+
 /// Somewhere key events come from.
 pub trait InputSource {
     /// Non-blocking. `None` when nothing is queued.

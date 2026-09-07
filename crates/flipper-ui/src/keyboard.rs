@@ -441,10 +441,72 @@ pub struct TextInput {
     blink: std::time::Instant,
     /// Open with the highlighted button: 0 keeps the text, 1 discards it.
     pub discard: Option<usize>,
+    /// Where the finger went down, while one is down.
+    tp: Option<Anchor>,
 }
 
 /// canvas.js drawKeyboard, the press flash on a cell.
 const PRESS_MS: u128 = 100;
+
+/// Pad units per cell of movement, and the sensitivity the two are divided by.
+///
+/// Neither is keyboard_test.js's any more.
+///
+/// Y was its 130, which costs 260 raw units of an 800-unit axis: a full-height
+/// sweep crossed 3.1 rows and a realistic thumb swipe of ~400 units got 1.5, so
+/// the number row and the shift row were not reachable from each other in one
+/// stroke. 90 makes a row 180 raw, a full sweep 4.4 rows, and still leaves a row
+/// costing twice the travel of a column, which four rows want. The prototype's
+/// figure was picked before the axis lock below existed and had to be cautious.
+///
+/// X is not its number either. The prototype uses 32, which puts a column inside 6% of the pad's
+/// width and makes the axis four times the more sensitive of the two; a swipe
+/// meant to change row changed column as well. 48 is a third of that back, so a
+/// practical sweep still crosses most of the widest row. Recorded as a
+/// divergence in docs/inventory.md, along with the axis lock below.
+///
+/// The divider is the one knob to turn if the whole thing feels twitchy.
+const TP_X_UNITS_PER_STEP: i32 = 48;
+const TP_Y_UNITS_PER_STEP: i32 = 90;
+const TP_SLOW_DIVIDER: i32 = 2;
+
+/// Where a drag started, and what was selected when it did.
+///
+/// The whole scheme is relative to this: a stroke never jumps the selection to
+/// where the finger is, it moves it by how far the finger has gone. The pad sits
+/// beside the screen, so there is no position on it that means a particular key.
+#[derive(Copy, Clone, Debug)]
+struct Anchor {
+    x: i32,
+    y: i32,
+    /// Row -1 is the field above the keyboard and `rows.len()` the tab strip
+    /// below it, so one step of dy carries the selection across either boundary.
+    row: i32,
+    /// A column index, for the two surfaces where a column is an index and not a
+    /// place: the caret in the field, and the parked column on the tab strip.
+    col: i32,
+    /// Where the finger was pointing, in half-pixels across the keyboard.
+    ///
+    /// Rows are ragged: the home and shift rows lead with a 35px key where the
+    /// QWERTY row leads with a 15px one, so the same index sits at a different x
+    /// on each. Carrying the index down a row slides the selection sideways by a
+    /// key, which is what the d-pad avoids by carrying the centre through
+    /// `closest_col`. This is that, for the pad.
+    center_2x: i32,
+}
+
+/// How many cells a movement of `delta` pad units comes to.
+///
+/// Kept in floating point the whole way, as keyboard_test.js is: dividing by the
+/// sensitivity first in integers would truncate before the step divide and lose
+/// up to a step's worth of travel at every report.
+///
+/// `Math.round`, too, which is not Rust's: ties go up rather than away from
+/// zero, so -0.5 is 0 and `f32::round` would make it -1.
+fn steps(delta: i32, per: i32) -> i32 {
+    let moved = delta as f32 / TP_SLOW_DIVIDER as f32;
+    (moved / per as f32 + 0.5).floor() as i32
+}
 
 impl TextInput {
     pub fn new(title: &str, text: &str) -> Self {
@@ -470,7 +532,111 @@ impl TextInput {
             wave: Wave { rest_center: 0.0, rest_amp: 0.0, anim: None },
             blink: std::time::Instant::now(),
             discard: None,
+            tp: None,
         }
+    }
+
+    /// A touchpad report. Returns whether the finger crossed onto a different
+    /// key, which is what earns a tick of haptic feedback.
+    ///
+    /// Moves the selection and nothing else: lifting does not press. The pad is
+    /// a way to reach a key, OK is still what commits it, which is the
+    /// prototype's behaviour and the reason a stray brush cannot type.
+    pub fn touch(&mut self, t: crate::platform::Touch) -> bool {
+        if !t.down {
+            self.tp = None;
+            return false;
+        }
+        let rows = self.grid.rows.len() as i32;
+        let anchor = *self.tp.get_or_insert_with(|| {
+            let last = self.grid.rows.len().saturating_sub(1);
+            let (row, col) = match self.focus {
+                Focus::Field => (-1, self.cursor as i32),
+                // Parked at the middle of the focused tab, so coming back up
+                // lands on the cells above it rather than wherever the last
+                // keyboard column happened to be.
+                Focus::Tab123 => (rows, 2),
+                Focus::TabBackspace => (rows, 9),
+                Focus::Keys => (self.row as i32, self.col as i32),
+            };
+            let center_2x = match self.focus {
+                Focus::Keys => self.grid.cell_center_2x(self.row, self.col),
+                // The tabs and the field have no cell of their own, so the place
+                // to come back to is the column parked on the bottom row.
+                _ => self.grid.cell_center_2x(last, col.clamp(0, last as i32) as usize),
+            };
+            Anchor {
+                x: t.x,
+                y: t.y,
+                row,
+                col,
+                center_2x,
+            }
+        });
+
+        let target_row = anchor.row + steps(t.y - anchor.y, TP_Y_UNITS_PER_STEP);
+        // Cells sideways since the anchor. On the keyboard this is added to the
+        // cell nearest the anchor's position on whichever row is landed on; the
+        // field and the tab strip index from the anchor's column instead.
+        let target_across = steps(t.x - anchor.x, TP_X_UNITS_PER_STEP);
+        let target_col = anchor.col + target_across;
+
+        if target_row < 0 {
+            if self.focus == Focus::Field {
+                // Already up here: the column delta is a cursor delta.
+                let max = self.text.chars().count() as i32;
+                let at = target_col.clamp(0, max) as usize;
+                if at != self.cursor {
+                    self.cursor = at;
+                    self.blink = std::time::Instant::now();
+                }
+            } else {
+                // Arriving. Re-anchor on the way in so entering the field does
+                // not also drag the caret: only movement from here does.
+                self.focus = Focus::Field;
+                self.tp = Some(Anchor {
+                    x: t.x,
+                    y: t.y,
+                    row: -1,
+                    col: self.cursor as i32,
+                    center_2x: anchor.center_2x,
+                });
+            }
+            return false;
+        }
+
+        if target_row >= rows {
+            // The tab strip is a dead end. Dragging further down does not wrap
+            // onto the number row: that way in is the D-pad's alone.
+            let col = target_col.max(0) as usize;
+            if let Some(tab) = self.tab_for_col(col) {
+                self.focus = tab;
+                self.wave.drive(false, self.col);
+                return false;
+            }
+            self.focus = Focus::Keys;
+            return self.touch_select(rows - 1, anchor.center_2x, target_across);
+        }
+
+        self.focus = Focus::Keys;
+        self.touch_select(target_row, anchor.center_2x, target_across)
+    }
+
+    /// Put the selection on a cell, clamped to the row, and say whether it moved.
+    ///
+    /// The column is the cell nearest `center_2x` on the row being landed on, plus
+    /// however many cells the finger has gone sideways. Nearest, rather than the
+    /// index carried down, because the rows do not line up.
+    fn touch_select(&mut self, row: i32, center_2x: i32, across: i32) -> bool {
+        let row = row.clamp(0, self.grid.rows.len() as i32 - 1) as usize;
+        let col = self.grid.closest_col(row, center_2x) as i32 + across;
+        let last = self.grid.rows.get(row).map_or(1, Vec::len) as i32 - 1;
+        let col = col.clamp(0, last.max(0)) as usize;
+        if (row, col) == (self.row, self.col) {
+            return false;
+        }
+        self.move_to(row, col);
+        true
     }
 
     pub fn changed(&self) -> bool {

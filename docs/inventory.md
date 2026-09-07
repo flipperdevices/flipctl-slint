@@ -350,6 +350,48 @@ test therefore compares rows 0..3 exactly and then the border-column set, both o
 which are height independent; replace the reference with a 14-row export to
 compare the whole strip again.
 
+## The keyboard's touchpad, ported 2026-09-07
+
+`keyboard_test.js`'s scheme, taken as it stands: a stroke moves the selection by
+how far the finger has travelled since it landed, never to where the finger is,
+because the pad sits beside the screen and no point on it means a key. Row -1 is
+the field, where the column delta becomes the caret; the tab strip below is a
+dead end, since the number row is the D-pad's way in. Lifting does not press.
+
+The input is the prototype's too: raw `ABS_X` / `ABS_Y` / `BTN_TOUCH`, flushed on
+`SYN_REPORT`. Its server transforms nothing, and neither does `TouchpadSource`.
+The comment there about the Y axis spanning "~400 units" is the practical span of
+a swipe; the hardware reports 0..800.
+
+Two deliberate divergences, both about the same problem. With the prototype's
+`TP_X_UNITS_PER_STEP` of 32 a column costs 64 raw units, 6% of the pad's width,
+against a row's 260, so **X is four times the more sensitive axis** and a swipe
+meant to change row changed column as well. Reported from the device.
+
+- **X slowed to 48**, so a column is 96 raw units. A practical sweep still
+  crosses most of the widest row.
+- **Y quickened to 90**, so a row is 180 raw of an 800-unit axis. At the
+  prototype's 130 a row cost 260 and a full-height sweep crossed only 3.1 of the
+  four rows, so the number row and the shift row could not be reached from each
+  other in one stroke. Reported from the device as Y feeling slow against X.
+An axis lock was tried for this and removed on the device: with X slowed and Y
+quickened it fought a stroke that wanted to change direction more than it helped
+a stroke that did not. A vertical swipe can still creep a column if the finger
+wanders; slowing X is what keeps that rare.
+
+A third divergence, in the other axis. The prototype's `_setSelection` carries the
+column **index** across a row change, and our rows are ragged: the home and shift
+rows lead with a 35px key where QWERTY leads with a 15px one, so index 4 on row 1
+sits at x=102 and index 4 on row 2 at x=87. Measured, a straight drag between
+those rows stepped one key sideways. The pad now carries the **position** and
+takes `closest_col` on the row it lands on, which is what the D-pad's
+`snap_to_row` has always done. Reported from the device as up and down not suiting
+the layout.
+
+`Math.round`'s tie behaviour is kept: ties go toward positive, so the first tick
+downward comes at exactly half a step and upward has to pass it. Asymmetric, and
+the prototype's.
+
 ## Which source is normative
 
 This document treats **fake-flipctl2 source** as normative for measurements and
