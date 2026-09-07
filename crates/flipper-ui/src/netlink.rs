@@ -146,7 +146,19 @@ pub fn message(kind: u16, flags: u16, header: &[u8], attrs: &[(u16, &[u8])]) -> 
     out
 }
 
+/// The type bits of an attribute header. The top two are flags, not type.
+///
+/// `NLA_F_NESTED` (0x8000) and `NLA_F_NET_BYTEORDER` (0x4000) ride in the same
+/// field as the type, so a raw comparison against a plain attribute number fails
+/// for every nested attribute the kernel sends. nl80211's STA_INFO arrives as
+/// 0x8015 rather than 21, which is how the signal badge came to read 0 on a
+/// full-strength link: the walk never recognised the attribute holding it.
+const NLA_TYPE_MASK: u16 = 0x3fff;
+
 /// Visit each attribute of an attribute stream.
+///
+/// The type is handed over masked, because a caller wants to know which
+/// attribute this is and not how the kernel chose to frame it.
 ///
 /// A length shorter than its own header, or longer than what is left, is a
 /// malformed stream and ends the walk rather than wrapping or panicking.
@@ -154,7 +166,7 @@ pub fn each_attr(body: &[u8], mut visit: impl FnMut(u16, &[u8])) {
     let mut at = 0;
     while at + ATTR_HDR <= body.len() {
         let len = u16::from_ne_bytes([body[at], body[at + 1]]) as usize;
-        let kind = u16::from_ne_bytes([body[at + 2], body[at + 3]]);
+        let kind = u16::from_ne_bytes([body[at + 2], body[at + 3]]) & NLA_TYPE_MASK;
         if len < ATTR_HDR || at + len > body.len() {
             return;
         }
@@ -353,5 +365,17 @@ mod tests {
         let (waiter, stopper) = Stop::new().expect("an eventfd").split();
         stopper.stop();
         assert_eq!(waiter.wait(&socket).expect("poll"), Wake::Stopped);
+    }
+
+    /// The kernel puts NLA_F_NESTED in the type field, so a nested attribute
+    /// arrives as 0x8000 | type. Handing that through unmasked is what made the
+    /// wifi badge read 0: nl80211's STA_INFO is 0x8015, never 21.
+    #[test]
+    fn a_nested_attribute_is_reported_by_its_type_not_its_flags() {
+        // len 8, type 0x8015 (nested, 21), four bytes of payload.
+        let body = [8u8, 0, 0x15, 0x80, 1, 2, 3, 4];
+        let mut seen = Vec::new();
+        each_attr(&body, |kind, payload| seen.push((kind, payload.to_vec())));
+        assert_eq!(seen, vec![(21u16, vec![1u8, 2, 3, 4])]);
     }
 }
