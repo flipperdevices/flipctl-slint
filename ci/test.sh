@@ -18,6 +18,11 @@ cargo test --quiet -p flipper-ui --features screens
 echo "== the browser view (needs the remote feature) =="
 cargo test --quiet -p flipper-ui --features remote
 
+echo "== the terminal front end (needs the tui feature) =="
+# --examples for the same reason the other probes are built: tui_probe is the only
+# way the drawing gets looked at off the device, so it must not break silently.
+cargo test --quiet -p flipper-ui --features tui --examples
+
 echo "== no raw colours or panel dimensions =="
 ./ci/no-raw-colours.sh
 

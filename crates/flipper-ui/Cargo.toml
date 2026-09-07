@@ -51,6 +51,11 @@ slint = ["dep:slint", "dep:i-slint-common"]
 # the installer draw one screen each and would otherwise pay for a second component
 # set and a second glyph atlas beside their own.
 screens = ["slint", "dep:slint-build"]
+# The terminal drawing side, for a serial console. The parallel of `slint`: the
+# view models are shared, this is a second way to put one on a screen. Pure Rust,
+# so an image needs no ncurses and no terminfo, and nothing here is linked unless
+# a consumer asks for it.
+tui = ["dep:cursive"]
 
 [dependencies]
 # getifaddrs, for the idle screen's IPv4 addresses. procfs exposes IPv6 as text
@@ -80,6 +85,15 @@ version = "=1.17.1"
 features = ["fontconfig-dlopen"]
 optional = true
 
+# The terminal front end. `crossterm-backend` alone: cursive's other backends are
+# ncurses and termion, and a C terminfo library is exactly what an initramfs does
+# not have. Same version flipperos-installer runs on its serial console.
+[dependencies.cursive]
+version = "0.21"
+default-features = false
+features = ["crossterm-backend"]
+optional = true
+
 [dependencies.slint]
 version = "1.17"
 default-features = false
@@ -106,3 +120,7 @@ required-features = ["wayland"]
 [[example]]
 name = "wl_sink_probe"
 required-features = ["wayland"]
+
+[[example]]
+name = "tui_probe"
+required-features = ["tui"]

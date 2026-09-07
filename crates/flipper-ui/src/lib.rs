@@ -42,6 +42,8 @@ pub mod wl;
 pub mod wl_sink;
 #[cfg(feature = "slint")]
 pub mod slint_render;
+#[cfg(feature = "tui")]
+pub mod tui;
 
 /// The compiled .slint components.
 ///

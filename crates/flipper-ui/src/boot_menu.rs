@@ -254,6 +254,13 @@ pub struct View {
     pub size_slot_w: f32,
     /// The five soft keys, as the prototype labels them on this screen.
     pub buttons: [&'static str; 5],
+    /// The selected profile's own size, when it has already been measured.
+    ///
+    /// Not `size_num`/`size_unit`: those belong to the open popup and hold whatever
+    /// was last measured, which on the list screen is another profile's number. A
+    /// screen that shows a size beside every row needs one that is about that row, so
+    /// this is looked up per profile and is `None` until View has measured it.
+    pub selected_size: Option<(String, String)>,
 }
 
 /// Whether a row can show its status text beside its name.
@@ -1736,6 +1743,10 @@ impl BootMenu {
             } else {
                 ["", "View", "", "Edit", ""]
             },
+            selected_size: self
+                .measured
+                .get(&(profile.dev.clone(), profile.name.clone()))
+                .map(|space| boot::size_parts(&space.unique)),
         }
     }
 }

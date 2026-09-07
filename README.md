@@ -4,8 +4,8 @@ Slint implementation of the Flipper One UI: the shared component library plus a
 demo binary that drives the 256x144 SPI panel, its buttons, and a browser view.
 
 This is Phase 0 and Phase 1 of the flipctl UI plan. The library is intended to be
-shared by `flipperos-installer`, `flipper-boot-menu` and `flipctl`; only the demo
-consumer exists so far.
+shared by `flipperos-installer`, `flipper-boot-menu` and `flipctl`; the first two of
+those consume it today, the installer still draws its own components.
 
 ## Licensing
 
@@ -45,6 +45,7 @@ So, in the terms the rest of the org states this in:
 | `crates/flipper-ui/src/kms.rs` | DRM/KMS panel sink. |
 | `crates/flipper-ui/src/evdev.rs` | Raw evdev button reader, no libinput. |
 | `crates/flipper-ui/src/remote/` | Browser view: frame stream, input endpoint, comparison page. |
+| `crates/flipper-ui/src/tui/` | The same view models in a character grid, for a serial console. Cursive over crossterm, behind the `tui` feature. |
 | `tools/` | Converters for the prototype's packed fonts and 6-bit greyscale sprites. |
 | `crates/flipper-tokens/` | The theme generators, as a library both flipctl's build script and an app's can call. |
 | `crates/flipctl-app/` | The framework a hosted app draws itself with: the window, the keys, the status global, and the widget library. |

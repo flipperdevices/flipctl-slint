@@ -18,6 +18,7 @@ reports success while they are broken. That has happened. `ci/test.sh` runs all
 three passes.
 
     cargo test -p flipper-ui --lib wifi                          unit tests, by name
+    cargo test -p flipper-ui --features tui tui::                 the terminal front end
     cargo test -p flipper-ui --features screens --test wifi      one golden test file
     cargo test -p flipper-ui --features remote --test remote      the browser view
     FLIPPER_UI_BLESS=1 cargo test -p flipper-ui --features screens    rewrite goldens
@@ -101,6 +102,16 @@ every number that positions them are plain Rust in `flipper-ui` (`wifi::Row`,
 structs at the boundary. Row `y` and `h` are given, not computed in the component.
 When a component does need a string's width, measure it with a hidden `Text` and
 take `(ref.width - 1px)`.
+
+**There are two drawing sides now, and the view models belong to neither.** `ui/` is
+the panel; `src/tui/` (feature `tui`, cursive over crossterm) is a terminal, used by
+the boot menu on the debug UART. A view model may not mention either: `boot_menu.rs`
+says so at the top of the file and is the worked example. The pixel fields of a view
+(`popup_w`, `PopupLine::y`) are simply ignored by the terminal, which measures in
+columns instead; anything a cell cannot express is dropped rather than approximated.
+`src/tui/boot.rs` keeps its whole screen in one pure `render()` returning positioned
+runs, so `screen()` can lay it out as text for tests and for `--example tui_probe
+-- --dump`. Look at that dump before believing a terminal layout change.
 
 **Live data has three shapes, and picking the wrong one is the usual mistake:**
 
