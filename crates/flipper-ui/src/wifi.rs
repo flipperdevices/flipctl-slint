@@ -408,7 +408,7 @@ pub fn forget(name: &str) -> Result<(), String> {
 /// flips optimistically and must not wait on a process. A refusal here is a
 /// profile that has gone, which the next read of it reports anyway.
 pub fn set_autoconnect(name: &str, on: bool) {
-    crate::net::spawn_detached(&[
+    crate::system::spawn_detached(&[
         "nmcli",
         "connection",
         "modify",

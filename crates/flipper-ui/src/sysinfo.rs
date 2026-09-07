@@ -638,14 +638,7 @@ pub fn update_apply(repo: &str, branch: &str, unit: &str) -> Result<(), String> 
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(err.lines().next().unwrap_or("pull failed").to_string());
     }
-    crate::net::spawn_detached(&[
-        "systemd-run",
-        "--collect",
-        "--no-block",
-        "sh",
-        "-c",
-        &format!("systemctl daemon-reload && systemctl restart {unit}"),
-    ]);
+    crate::system::spawn_transient(&format!("systemctl daemon-reload && systemctl restart {unit}"));
     Ok(())
 }
 

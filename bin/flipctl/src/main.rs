@@ -4668,7 +4668,7 @@ fn panel(
                         }
                         demo::Act::Reboot => {
                             eprintln!("action         reboot");
-                            flipper_ui::net::reboot();
+                            flipper_ui::system::reboot();
                         }
                         // Nothing to draw while this happens: the handover stops
                         // us, so the last frame on the panel is this menu until

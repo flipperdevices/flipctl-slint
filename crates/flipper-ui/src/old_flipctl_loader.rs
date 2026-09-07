@@ -79,11 +79,5 @@ pub fn start() {
              systemctl start flipctl.service; \
          fi"
     );
-    let mut args = vec!["systemd-run", "--collect", "--no-block", "sh", "-c", &script];
-    // The transient unit then runs as root, so nothing inside the script needs
-    // sudo of its own.
-    if unsafe { libc::geteuid() } != 0 {
-        args.insert(0, "sudo");
-    }
-    crate::net::spawn_detached(&args);
+    crate::system::spawn_transient(&script);
 }

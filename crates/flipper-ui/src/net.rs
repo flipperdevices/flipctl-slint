@@ -258,7 +258,7 @@ impl NetSource {
             }
         }
         self.dirty.store(true, Ordering::Relaxed);
-        spawn_detached(&["nmcli", "radio", "wifi", if on { "on" } else { "off" }]);
+        crate::system::spawn_detached(&["nmcli", "radio", "wifi", if on { "on" } else { "off" }]);
         let _ = self.poke.send(Wake::Ours);
     }
 
@@ -278,37 +278,9 @@ impl NetSource {
             }
         }
         self.dirty.store(true, Ordering::Relaxed);
-        spawn_detached(&["nmcli", "radio", "all", if on { "off" } else { "on" }]);
+        crate::system::spawn_detached(&["nmcli", "radio", "all", if on { "off" } else { "on" }]);
         // The row is showing what we asked for, not what happened: have the watcher
         // look again once the radio has had time to refuse.
         let _ = self.poke.send(Wake::Ours);
     }
-}
-
-/// Start a command and do not wait for it.
-///
-/// The child is deliberately left unreaped: it outlives the call by design and
-/// the process count here is bounded by how fast a person can press a key.
-pub fn spawn_detached(args: &[&str]) {
-    let _ = Command::new(args[0])
-        .args(&args[1..])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-}
-
-/// Reboot, the way the prototype's `/api/system/reboot` does it.
-///
-/// The command goes into a transient unit rather than running as our child, so
-/// systemd tearing this process down does not kill the reboot mid-flight.
-pub fn reboot() {
-    spawn_detached(&[
-        "systemd-run",
-        "--collect",
-        "--no-block",
-        "sh",
-        "-c",
-        "sudo reboot",
-    ]);
 }

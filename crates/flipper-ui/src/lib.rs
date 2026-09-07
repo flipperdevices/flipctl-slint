@@ -19,6 +19,7 @@ pub mod nl80211;
 pub mod old_flipctl_loader;
 pub mod status;
 pub mod switcher;
+pub mod system;
 pub mod sysinfo;
 pub mod watch;
 pub mod wifi;
