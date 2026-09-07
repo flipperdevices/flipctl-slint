@@ -55,8 +55,10 @@ pub enum TerminalEvent {
 struct Termios(libc::termios);
 
 /// Everything the reset sequence has to undo: the alternate screen, a hidden cursor,
-/// and mouse reporting, which crossterm turns on and a dead process never turns off.
-const RESET: &str = "\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1006l";
+/// mouse reporting, and every graphic attribute. Crossterm's teardown sends neither
+/// SGR 0 nor anything after leaving the alternate screen, so without this a cell left
+/// on a white background colours whatever prints next.
+const RESET: &str = "\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[0m";
 
 static SAVED: Mutex<Option<Termios>> = Mutex::new(None);
 static HOOK: Once = Once::new();
@@ -372,6 +374,10 @@ impl Terminal {
         let _ = self.cb.send(Box::new(|siv: &mut Cursive| siv.quit()));
         let _ = thread.join();
         restore_termios();
+        // After the join, so it lands once the backend has left the alternate screen.
+        let mut out = std::io::stdout();
+        let _ = out.write_all(RESET.as_bytes());
+        let _ = out.flush();
     }
 }
 
@@ -419,4 +425,17 @@ fn run(tx: Sender<TerminalEvent>, ready: Sender<CbSink>) {
         crate::logline!("tui            {e}");
     }
     let _ = tx.send(TerminalEvent::Closed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RESET;
+
+    #[test]
+    fn the_reset_clears_every_attribute_last() {
+        assert!(RESET.ends_with("\x1b[0m"), "{RESET:?}");
+        let alt = RESET.find("\x1b[?1049l").expect("leaves the alternate screen");
+        let sgr = RESET.find("\x1b[0m").expect("resets attributes");
+        assert!(sgr > alt, "the attribute reset must come after the switch back");
+    }
 }
