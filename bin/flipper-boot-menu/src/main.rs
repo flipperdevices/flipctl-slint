@@ -10,16 +10,22 @@
 //! btrfs tools. What is here is the loop, the panel, the keys, and the keyboard a
 //! rename needs.
 //!
-//! Usage: flipper-boot-menu [--kms-device /dev/dri/cardN] [--all-kernels]
+//! When stdio is a terminal, the same menu is drawn on it as well, so a boot can be
+//! watched and driven from a debug probe. One `BootMenu` answers both: the terminal
+//! is a second pair of eyes on the state the panel is showing, never a second copy.
+//!
+//! Usage: flipper-boot-menu [--kms-device /dev/dri/cardN] [--all-kernels] [--no-tui]
 
+use std::os::unix::process::CommandExt;
 use std::time::{Duration, Instant};
 
 use flipper_ui::boot::Kernels;
-use flipper_ui::boot_menu::{AutoStart, BootMenu, Outcome};
+use flipper_ui::boot_menu::{AutoStart, BootMenu, Outcome, View as BootView};
 use flipper_ui::evdev::EvdevSource;
 use flipper_ui::kms::KmsSink;
 use flipper_ui::slint_render::{render_into, FlipperSlintPlatform};
 use flipper_ui::theme::count::BOOT_VISIBLE_ROWS;
+use flipper_ui::tui::{text::Rules, Terminal, TerminalEvent};
 use flipper_ui::{keyboard, Frame, FrameSink, InputSource, PANEL_H, PANEL_W};
 use slint::ComponentHandle;
 
@@ -29,10 +35,14 @@ fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         flipper_ui::logline!(
-            "Usage: flipper-boot-menu [--kms-device /dev/dri/cardN] [--all-kernels]"
+            "Usage: flipper-boot-menu [--kms-device /dev/dri/cardN] [--all-kernels] [--no-tui]"
         );
         return std::process::ExitCode::SUCCESS;
     }
+    // The terminal is taken when there is one, which is the useful default: run from
+    // init with stdio on /dev/console there is none, and nothing happens. --no-tui is
+    // for a console somebody else wants, and for proving the menu is no slower without.
+    let want_tui = !args.iter().any(|a| a == "--no-tui");
     let card = args
         .windows(2)
         .find(|w| w[0] == "--kms-device")
@@ -45,7 +55,7 @@ fn main() -> std::process::ExitCode {
         Kernels::Modern
     };
 
-    match run(card.as_deref(), kernels) {
+    match run(card.as_deref(), kernels, want_tui) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             flipper_ui::logline!("boot menu      {e}");
@@ -54,7 +64,7 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run(card: Option<&str>, kernels: Kernels) -> std::io::Result<()> {
+fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<()> {
     let mut sink = KmsSink::open(card.map(std::path::Path::new))?;
     let (w, h) = sink.size();
     if (w, h) != (PANEL_W, PANEL_H) {
@@ -90,8 +100,13 @@ fn run(card: Option<&str>, kernels: Kernels) -> std::io::Result<()> {
     let mut dirty = true;
     // Whether the takeover has had its one frame; see the loop for why it gets only one.
     let mut takeover_committed = false;
-    // Whether anything has reached the panel yet, for the one line that says so.
+    // Whether anything has reached the panel yet, for the one line that says so, and
+    // for the terminal: that is opened after the first frame and never before.
+    // Somebody holding the device is waiting on the panel, and setting a terminal up
+    // (termios, the alternate screen, its first draw) is work that belongs behind it.
     let mut drawn = false;
+    let mut tui: Option<Terminal> = None;
+    let mut tui_tried = !want_tui;
     // The same 8ms flipctl paces its loop at: the panel takes a frame every 16 to 19
     // milliseconds, so this is twice the rate anything can be shown at and the keys
     // never wait for a frame.
@@ -112,47 +127,39 @@ fn run(card: Option<&str>, kernels: Kernels) -> std::io::Result<()> {
         // both have to be seen on the turn they land, or a held key reads as stuck.
         while let Some(event) = input.as_mut().and_then(InputSource::poll) {
             dirty = true;
-            // What makes the name invalid, which also gates saving it.
-            warning = match kb.as_ref() {
-                Some(field) => {
-                    let being = flipper_ui::boot::Profile {
-                        name: kb_for.clone(),
-                        ..Default::default()
-                    };
-                    flipper_ui::boot::rename_warning(&field.text, &being, menu.profiles())
+            press(event, &mut menu, &mut kb, &mut kb_for, &mut warning, tui.as_ref());
+        }
+
+        // The terminal, drained the same way and into the same place. A key typed on
+        // a debug probe moves the panel's cursor and a button moves the terminal's,
+        // because there is one menu and these are two views of it.
+        while let Some(event) = tui.as_mut().and_then(Terminal::poll_event) {
+            dirty = true;
+            match event {
+                TerminalEvent::Key(event) => {
+                    press(event, &mut menu, &mut kb, &mut kb_for, &mut warning, tui.as_ref())
                 }
-                None => String::new(),
-            };
-            match kb.as_mut() {
-                // The keyboard owns every key while it is up, and a release is not a
-                // press: acting on both typed every character twice. The only thing that
-                // wants the release is the OK hold that latches caps lock, which never
-                // fired here because release() was never the call being made.
-                Some(field) if !event.down => {
-                    field.release(event.key);
+                // Typed rather than picked out of the on-screen keyboard, but the
+                // same answer to the same question: the panel's field goes with it.
+                TerminalEvent::Renamed(text) => {
+                    menu.renamed(&kb_for, text.as_deref());
+                    kb = None;
                 }
-                Some(field) => match field.key(event.key, warning.is_empty()) {
-                    Some(keyboard::Exit::Save(text)) => {
-                        menu.renamed(&kb_for, Some(&text));
-                        kb = None;
+                // A shell, for somebody diagnosing a boot from the probe. Disarm
+                // first: an image left loaded boots on the next reset, which is not
+                // what asking for a shell asked for. init respawns the menu when the
+                // shell exits, because exec keeps this PID.
+                TerminalEvent::Quit => {
+                    if menu.holds_an_arm() {
+                        flipper_ui::boot::disarm();
                     }
-                    Some(keyboard::Exit::Cancel) => {
-                        menu.renamed(&kb_for, None);
-                        kb = None;
+                    if let Some(terminal) = tui.take() {
+                        terminal.stop();
                     }
-                    None => {}
-                },
-                None => match menu.key(event) {
-                    Outcome::Stay => {}
-                    // Nothing behind this screen: the menu is the program, so Back
-                    // has nowhere to go. It reads the drives again instead, which is
-                    // what somebody who just pushed a card in is asking for.
-                    Outcome::Leave => menu.reread(),
-                    Outcome::Rename { name, label } => {
-                        kb = Some(keyboard::TextInput::new("Profile name", &label));
-                        kb_for = name;
-                    }
-                },
+                    let e = std::process::Command::new("/bin/sh").exec();
+                    flipper_ui::logline!("boot menu      no shell: {e}");
+                }
+                TerminalEvent::Closed => tui = None,
             }
         }
 
@@ -179,10 +186,13 @@ fn run(card: Option<&str>, kernels: Kernels) -> std::io::Result<()> {
         // nearly every attempt, dmac0 reading INTEN=0x1. With this one frame only: dmac0
         // gated and idle, and the boot succeeds. The proper fix is a shutdown hook in the
         // pl330 driver, after which frames here would be harmless again.
-        let booting = !menu.view().booting.is_empty();
         if dirty {
             dirty = false;
-            apply(&ui, &menu, kb.as_ref(), &warning);
+            // Built once and shown to both screens. It used to be built twice a frame,
+            // once here for `booting` and once inside apply().
+            let view = menu.view();
+            let booting = !view.booting.is_empty();
+            apply(&ui, &view, kb.as_ref(), &warning);
             window.request_redraw();
             if !booting || !takeover_committed {
                 if let Some(damage) = render_into(&window, &mut frame) {
@@ -197,16 +207,121 @@ fn run(card: Option<&str>, kernels: Kernels) -> std::io::Result<()> {
                     flipper_ui::logline!("boot menu      takeover drawn; the panel is left alone from here");
                 }
             }
+            match tui.take() {
+                // The console is given back at the handover rather than held to the
+                // end. Whatever the alternate screen is showing is thrown away when it
+                // closes, so the line that says what is booting has to be printed after
+                // it, in cooked mode, where it stays above the next kernel's log.
+                Some(terminal) if booting => {
+                    terminal.stop();
+                    println!("Booting {}", view.booting);
+                }
+                Some(terminal) => {
+                    terminal.show(view);
+                    tui = Some(terminal);
+                }
+                None => {}
+            }
+        }
+
+        // Behind the first frame, so nothing the panel is waiting for queues behind a
+        // termios call. Tried once: no terminal is the ordinary case, not an error.
+        if drawn && !tui_tried {
+            tui_tried = true;
+            match Terminal::open() {
+                // No line of our own on success: Terminal::open logs what it found
+                // while the console can still be seen, which is the only window there
+                // is for it.
+                Ok(terminal) => {
+                    tui = Some(terminal);
+                    dirty = true;
+                }
+                Err(e) => flipper_ui::logline!("boot menu      no terminal: {e}"),
+            }
         }
 
         std::thread::sleep(pace);
     }
 }
 
-/// Push the menu's view onto the window, and the keyboard's if it is up.
-fn apply(ui: &Menu, menu: &BootMenu, kb: Option<&keyboard::TextInput>, warning: &str) {
-    let view = menu.view();
+/// One press, wherever it came from.
+///
+/// A button and a key typed on the serial console are the same event by the time
+/// they reach here, which is what keeps the two screens showing the same thing. The
+/// only asymmetry is the rename: the panel has a d-pad and needs its on-screen
+/// keyboard, the terminal has a real one and gets a field, so both go up together and
+/// whichever is answered first takes the other down.
+fn press(
+    event: flipper_ui::KeyEvent,
+    menu: &mut BootMenu,
+    kb: &mut Option<keyboard::TextInput>,
+    kb_for: &mut String,
+    warning: &mut String,
+    tui: Option<&Terminal>,
+) {
+    // What makes the name invalid, which also gates saving it.
+    *warning = match kb.as_ref() {
+        Some(field) => {
+            let being = flipper_ui::boot::Profile {
+                name: kb_for.clone(),
+                ..Default::default()
+            };
+            flipper_ui::boot::rename_warning(&field.text, &being, menu.profiles())
+        }
+        None => String::new(),
+    };
+    match kb.as_mut() {
+        // The keyboard owns every key while it is up, and a release is not a press:
+        // acting on both typed every character twice. The only thing that wants the
+        // release is the OK hold that latches caps lock, which never fired here
+        // because release() was never the call being made.
+        Some(field) if !event.down => {
+            field.release(event.key);
+        }
+        Some(field) => match field.key(event.key, warning.is_empty()) {
+            Some(keyboard::Exit::Save(text)) => {
+                menu.renamed(kb_for, Some(&text));
+                *kb = None;
+                if let Some(terminal) = tui {
+                    terminal.dismiss_prompt();
+                }
+            }
+            Some(keyboard::Exit::Cancel) => {
+                menu.renamed(kb_for, None);
+                *kb = None;
+                if let Some(terminal) = tui {
+                    terminal.dismiss_prompt();
+                }
+            }
+            None => {}
+        },
+        None => match menu.key(event) {
+            Outcome::Stay => {}
+            // Nothing behind this screen: the menu is the program, so Back has
+            // nowhere to go. It reads the drives again instead, which is what
+            // somebody who just pushed a card in is asking for.
+            Outcome::Leave => menu.reread(),
+            Outcome::Rename { name, label } => {
+                if let Some(terminal) = tui {
+                    let being = flipper_ui::boot::Profile {
+                        name: name.clone(),
+                        ..Default::default()
+                    };
+                    let rules = Rules {
+                        being,
+                        profiles: menu.profiles().to_vec(),
+                    };
+                    terminal.prompt_rename("Profile name", &label, rules);
+                }
+                *kb = Some(keyboard::TextInput::new("Profile name", &label));
+                *kb_for = name;
+            }
+        },
+    }
+}
 
+/// Push the menu's view onto the window, and the keyboard's if it is up.
+fn apply(ui: &Menu, view: &BootView, kb: Option<&keyboard::TextInput>, warning: &str) {
     let rows: Vec<BootRow> = view
         .rows
         .iter()

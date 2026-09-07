@@ -15,9 +15,13 @@ license.workspace = true
 description = "The Flipper One boot menu: choose a profile, kexec into it"
 
 [dependencies]
-# The workspace dependency carries no default features, so naming the two this
+# The workspace dependency carries no default features, so naming the three this
 # needs is the whole of it: `screens` is what is deliberately absent.
-flipper-ui = { workspace = true, features = ["device", "slint"] }
+#
+# `tui` is the serial console's half of the same menu. It costs nothing when there
+# is no terminal to draw on, which is every boot that is not being watched from a
+# debug probe: the screen is only opened once stdio turns out to be a tty.
+flipper-ui = { workspace = true, features = ["device", "slint", "tui"] }
 slint = { version = "1.17", default-features = false, features = ["compat-1-2", "renderer-software", "std", "unsafe-single-threaded"] }
 
 [build-dependencies]
