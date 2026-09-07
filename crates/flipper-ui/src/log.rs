@@ -47,11 +47,14 @@ fn sink() -> Option<&'static Mutex<Sink>> {
         if let Ok(f) = OpenOptions::new().write(true).open("/dev/kmsg") {
             return Some(Mutex::new(Sink::Node(f)));
         }
-        // No -n: sudo here is the same passwordless sudo the profile tools already rely on,
-        // and a prompt would hang a program that has no terminal. Failure is silence, as
-        // everywhere else in this module.
+        // -n, because sudo reads a password from /dev/tty rather than from the stdin
+        // it was handed. On the device this is the passwordless sudo the profile tools
+        // already rely on and the flag changes nothing; anywhere else the prompt takes
+        // the terminal, which now that a front end draws on one means taking it from a
+        // screen mid-frame. Failing fast is silence, which is what the rest of this
+        // module does with an error.
         Command::new("sudo")
-            .args(["sh", "-c", "cat > /dev/kmsg"])
+            .args(["-n", "sh", "-c", "cat > /dev/kmsg"])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
