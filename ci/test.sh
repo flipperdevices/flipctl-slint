@@ -23,6 +23,21 @@ echo "== the terminal front end (needs the tui feature) =="
 # way the drawing gets looked at off the device, so it must not break silently.
 cargo test --quiet -p flipper-ui --features tui --examples
 
+echo "== app bundles (needs the bundle feature) =="
+cargo test --quiet -p flipper-ui --features bundle --test app
+
+echo "== the app bundler =="
+if command -v python3 >/dev/null 2>&1; then
+    python3 -m unittest discover -q -s tools/appimage -p 'test_*.py'
+else
+    echo "bundler tests: skipped, no python3"
+fi
+if command -v shellcheck >/dev/null 2>&1; then
+    shellcheck tools/appimage/build.sh tools/appimage/AppRun.in && echo "shellcheck: clean"
+else
+    echo "shellcheck: skipped"
+fi
+
 echo "== formatting =="
 # rustfmt.toml is the argument about style; this is what keeps it true. A table that
 # is deliberately wider than the limit carries #[rustfmt::skip].
@@ -43,20 +58,25 @@ fi
 if cargo about --version >/dev/null 2>&1; then
     # Regenerate into a temporary file and compare: the point is that the
     # committed attribution still matches Cargo.lock, and --fail catches a
-    # dependency whose license is not in about.toml's accepted list.
-    tmp=$(mktemp)
-    cargo about generate --fail \
-        --manifest-path bin/flipctl/Cargo.toml \
-        --features device,slint,remote,wayland,gpu \
-        -c about.toml about.hbs -o "$tmp" >/dev/null 2>&1
-    if cmp -s "$tmp" THIRD-PARTY-LICENSES.md; then
-        echo "THIRD-PARTY-LICENSES.md: up to date"
-    else
-        echo "THIRD-PARTY-LICENSES.md is stale: run scripts/gen-third-party-licenses.sh" >&2
+    # dependency whose license is not in about.toml's accepted list. The same for
+    # each app, whose bundle carries its own file.
+    check_licenses() {
+        tmp=$(mktemp)
+        cargo about generate --fail --manifest-path "$1" $2 \
+            -c about.toml about.hbs -o "$tmp" >/dev/null 2>&1
+        if cmp -s "$tmp" "$3"; then
+            echo "$3: up to date"
+        else
+            echo "$3 is stale: run scripts/gen-third-party-licenses.sh" >&2
+            rm -f "$tmp"
+            exit 1
+        fi
         rm -f "$tmp"
-        exit 1
-    fi
-    rm -f "$tmp"
+    }
+    check_licenses bin/flipctl/Cargo.toml "--features device,slint,remote,wayland,gpu" THIRD-PARTY-LICENSES.md
+    for app in apps/*/Cargo.toml; do
+        check_licenses "$app" "" "$(dirname "$app")/THIRD-PARTY-LICENSES.md"
+    done
 else
     echo "third-party licenses: skipped, no cargo-about"
 fi
