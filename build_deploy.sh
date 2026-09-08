@@ -132,7 +132,23 @@ if [ "$CROSS" = yes ]; then
     HERE=$(cd "$(dirname "$0")" && pwd)
     XT="$HERE/target/cross"
     mkdir -p "$XT/home"
-    docker build -q -t flipctl-cross -f "$HERE/ci/cross.Dockerfile" "$HERE/ci" >/dev/null
+    # Which command builds the image: BuildKit is what docker means by a builder from
+    # 23 on, and the CLI reaches it through the buildx plugin. Without that plugin
+    # `docker build` falls back to the classic builder and says so on every run, and
+    # DOCKER_BUILDKIT=1 fails outright rather than helping. Installing docker-buildx
+    # retires the fallback; until then the fallback still builds this image.
+    if docker buildx version >/dev/null 2>&1; then
+        image=(docker buildx build --load)
+    else
+        image=(docker build)
+    fi
+    # Held rather than streamed: on a good build the classic builder's deprecation
+    # notice is the only thing said, and a bad one has to be read in full.
+    if ! said=$("${image[@]}" -q -t flipctl-cross \
+                    -f "$HERE/ci/cross.Dockerfile" "$HERE/ci" 2>&1 >/dev/null); then
+        printf '%s\n' "$said" >&2
+        exit 1
+    fi
     started=$SECONDS
     # As the invoking user, so nothing in the tree comes back owned by root. The
     # profile overrides are the device build's, so the two produce the same binary.
