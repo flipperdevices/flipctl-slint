@@ -717,7 +717,6 @@ impl BootMenu {
                     self.popup = Some(Popup::Config);
                     self.popup_index = 0;
                     self.kernel_pick = None;
-        self.video_pick = None;
                     self.video_pick = None;
                 }
                 FlipperKey::Escape | FlipperKey::Back | FlipperKey::Edit => {}
