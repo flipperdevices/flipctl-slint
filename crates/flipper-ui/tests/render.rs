@@ -27,6 +27,7 @@ fn item(label: &str, status: &str, icon: i32, frames: i32) -> ListItem {
         label: label.into(),
         status: status.into(),
         icon,
+        picture: Default::default(),
         frames,
         chevrons,
         value: value.as_str().into(),

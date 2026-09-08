@@ -58,16 +58,6 @@ sudo mv -f "$BIN.new" "$BIN"
 sudo mkdir -p "$SHARE/assets/remote"
 sudo cp -a "$DEST/crates/flipper-ui/assets/remote/." "$SHARE/assets/remote/"
 
-# Sources only, and owned by the user flipctl runs as: an app is built where it
-# sits, so a Rust app needs to write its target/ and a Python one its .venv. Apps
-# a machine has of its own are left alone.
-echo "installing $SHARE/apps"
-sudo tar cf - -C "$DEST" --exclude=target --exclude=.venv --exclude=__pycache__ \
-    apps | sudo tar xf - -C "$SHARE"
-for a in "$DEST"/apps/*/; do
-    sudo chown -R "$(id -un):$(id -gn)" "$SHARE/apps/$(basename "$a")"
-done
-
 echo "restarting flipctl"
 sudo systemctl restart flipctl.service || true
 

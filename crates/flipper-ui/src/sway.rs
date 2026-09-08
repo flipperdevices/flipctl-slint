@@ -94,6 +94,7 @@ pub struct Placement {
 
 const RUN_COMMAND: u32 = 0;
 const GET_WORKSPACES: u32 = 1;
+const GET_TREE: u32 = 4;
 
 impl Host {
     /// Start sway on the headless backend, with a configuration of our own.
@@ -270,19 +271,63 @@ impl Host {
     ///
     /// So the window is moved by name after the fact. Returns whether it matched: the
     /// app may not have drawn yet, and the caller asks again until it has.
+    ///
+    /// By the pid flipctl started first, and failing that by any window whose owner
+    /// descends from it. A bundle's window belongs to a grandchild: the AppImage
+    /// runtime is our child, it forks AppRun, and AppRun execs the program. sway's
+    /// `[pid=]` matches the owner alone, so the tree is read and each window's ancestry
+    /// walked instead.
     pub fn claim(&mut self, at: &Placement, pid: u32) -> io::Result<bool> {
         let reply = self.send(
             RUN_COMMAND,
             &format!("[pid={pid}] move container to workspace {}", at.workspace),
         )?;
-        Ok(!reply.contains("\"success\": false") && !reply.contains("\"success\":false"))
+        if succeeded(&reply) {
+            return Ok(true);
+        }
+        let mut moved = false;
+        for (id, owner) in self.windows()? {
+            if owner != pid && !crate::app::ancestors(owner).contains(&pid) {
+                continue;
+            }
+            let reply = self.send(
+                RUN_COMMAND,
+                &format!("[con_id={id}] move container to workspace {}", at.workspace),
+            )?;
+            moved |= succeeded(&reply);
+        }
+        Ok(moved)
+    }
+
+    /// Every window in the tree, as its container id and the pid that owns it.
+    fn windows(&mut self) -> io::Result<Vec<(i64, u32)>> {
+        #[derive(serde::Deserialize)]
+        struct Node {
+            id: i64,
+            pid: Option<u32>,
+            #[serde(default)]
+            nodes: Vec<Node>,
+            #[serde(default)]
+            floating_nodes: Vec<Node>,
+        }
+        fn collect(node: &Node, out: &mut Vec<(i64, u32)>) {
+            if let Some(pid) = node.pid {
+                out.push((node.id, pid));
+            }
+            for child in node.nodes.iter().chain(&node.floating_nodes) {
+                collect(child, out);
+            }
+        }
+        let reply = self.send(GET_TREE, "")?;
+        let root: Node = serde_json::from_str(&reply).map_err(io::Error::other)?;
+        let mut out = Vec::new();
+        collect(&root, &mut out);
+        Ok(out)
     }
 
     fn run(&mut self, command: &str) -> io::Result<()> {
         let reply = self.send(RUN_COMMAND, command)?;
-        // sway answers with a list of results, and a refusal is a message rather than
-        // an error on the socket.
-        if reply.contains("\"success\": false") || reply.contains("\"success\":false") {
+        if !succeeded(&reply) {
             return Err(io::Error::other(format!("sway refused: {command}")));
         }
         Ok(())
@@ -308,6 +353,12 @@ impl Host {
         self.ipc.read_exact(&mut body)?;
         Ok(String::from_utf8_lossy(&body).into_owned())
     }
+}
+
+/// Whether sway did what it was asked. It answers with a list of results, and a
+/// refusal is a message rather than an error on the socket.
+fn succeeded(reply: &str) -> bool {
+    !reply.contains("\"success\": false") && !reply.contains("\"success\":false")
 }
 
 impl Drop for Host {

@@ -14,8 +14,8 @@ goes on.
 
 **`cargo test` alone is a trap.** The rendering tests are gated on the `screens`
 feature and the browser view's on `remote`, so a bare run compiles neither and
-reports success while they are broken. That has happened. `ci/test.sh` runs all
-three passes.
+reports success while they are broken. That has happened. `ci/test.sh` runs every
+pass, the bundle tests (`--features bundle`) and the bundler's own included.
 
     cargo test -p flipper-ui --lib wifi                          unit tests, by name
     cargo test -p flipper-ui --features tui tui::                 the terminal front end
@@ -54,23 +54,30 @@ one to remember: trixie main has no LLVM 21 and rustc needs it. rustup works too
 and takes precedence when present, since `app::cargo()` looks in `$HOME/.cargo/bin`
 first.
 
-## Apps are built where they sit, including when installed
+## Apps are AppImages, read without being run
 
-`docs/apps.md` says an app is built in its own directory, and flipctl does that
-itself: `app::install` runs cargo for a Rust app whose binary is missing or stale,
-streaming the output to a log screen. Two things make that work from
-`/usr/share/flipctl/apps/<app>` rather than only from a checkout, and both are easy
-to undo by accident:
+An app is one file in `/home/user/Apps`, and `bundle.rs` reads its `app.toml` and icon
+straight out of the squashfs with `backhand`. Three things there are easy to undo by
+accident:
 
-- The deploy installs `crates/{flipctl-app,flipper-ui,flipper-tokens}` and
-  `third_party/flipctl-fonts` under `/usr/share/flipctl`, because an app's manifest
-  asks for `../../crates/flipctl-app` and `ui/fonts.slint` imports the TTFs from
-  `../../../third_party`. The installed layout mirrors the repository for exactly
-  those paths.
-- `flipper-ui` declares `version`, `edition` and `license` literally rather than
-  inheriting them from the workspace. Installed there is no workspace root above
-  it, and inheritance fails with "failed to find a workspace root" before cargo
-  reads a line of source.
+- **Never execute a bundle to learn what it is.** The folder is where a person drops
+  anything, and the scan runs in a unit with GPIO and USB open. `--appimage-extract`
+  would be the easy way and is the wrong one.
+- **The stamp is size plus mtime to the nanosecond.** squashfs pads to 4K, so two
+  bundles of one app differ in content and not in size; seconds were not enough.
+- **`app.toml` at the root is the marker, and `wayland` non-empty is the rule.** A
+  stock AppImage has neither and is skipped once, with a stamp so it is not reopened.
+
+`tools/appimage/build.sh` makes the bundles on the host, and nothing aarch64 runs
+there: cargo cross in `flipctl-cross`, staging in `flipctl-bundle`, appimagetool's
+mksquashfs, the aarch64 runtime prepended as a file. Both tools are pinned in
+`tools/appimage/tools.lock`. A framework app links `libc`, `libm` and `libgcc_s` and
+the build fails by name on anything more.
+
+A bundle started from a desktop hands itself to flipctl through `flipctl open` and the
+socket in `ipc.rs`; hosted, it gets `FLIPCTL_HOSTED=1`. Its window belongs to a
+grandchild of the process flipctl started (runtime, AppRun, program), which is why
+`sway::claim` walks `/proc/<pid>/stat` upward when `[pid=]` does not match.
 
 ## Architecture
 

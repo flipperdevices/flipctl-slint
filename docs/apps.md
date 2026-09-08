@@ -8,32 +8,85 @@ it draws with flipctl's own widgets.
 
 ## Where an app lives
 
-A directory with an `app.toml` in it, anywhere under `apps/`. A directory without one
-is a folder to look inside, nested as deeply as you like, so apps can be grouped:
+An app is delivered as one file, an AppImage, in the user's `Apps` folder:
 
-    apps/doom/app.toml              Doom, at the top of the list
-    apps/network/nmap/app.toml      inside the Network folder
+    /home/user/Apps/radio-aarch64.AppImage       Internet radio, at the top of the list
+    /home/user/Apps/Network/nmap-aarch64.AppImage inside the Network folder
 
-The Apps list browses those folders: a folder row shows how many apps are inside and
-Ok walks into it, Back comes back out, and the list opens at the top each time. An
-app's own directory ends the walk, so its `target` and `.venv` are never read as
-folders of apps.
+`/home` is the one subvolume every profile shares, so the folder survives a factory
+reset and serves every profile. A folder is a group: the Apps list shows how many
+apps are inside, Ok walks into it, Back comes back out, and the list opens at the top
+each time. Nothing is installed to run an app; the file is the whole of it.
+
+What makes a file ours is `app.toml` at the root of its squashfs. A stock AppImage
+dropped into the folder has none: it is not listed, and the log says so once
+(`bundles        Foo: not a flipctl app, skipped`). flipctl reads the manifest and the
+icon out of the image without running it, keeps them under
+`~/.cache/flipctl/bundles/<key>/`, and does not open an unchanged file again.
 
 ## The manifest
 
-`app.toml` beside the program:
+`app.toml`, in the source directory under `apps/` and copied into the bundle:
 
 | Field | What |
 |---|---|
 | `name` | What the Apps menu shows. |
-| `wayland` | The command, run with the app's own directory as the working directory. |
+| `wayland` | The command. In the source it is what the bundler turns into the bundle's entry point; in the bundle it is `./AppRun`, and flipctl only needs it non-empty. |
+| `icon` | A PNG beside the manifest, drawn on the app's row: 14px wide, the alpha is the shape, and a strip of 14px frames animates while the row is selected, like the menu's own icons. Without one the bundler puts in its own. |
 | `size` | `"320x200"` for a program that insists on drawing at its own size. The output is made that shape and the frame is scaled to the panel. |
-| `apt` | Debian packages the app needs. |
+| `apt` | Debian packages the app needs from the device. flipctl checks them with dpkg before the first launch and offers the install. |
 | `audio` | Links the PipeWire sockets into the app's runtime directory and pins the panel's sink. |
 | `status` | flipctl paints its own status strip over the app's frame, for a program that cannot draw one. An app on the framework draws the real bar itself and leaves this off. |
-| `pip` | Python packages, installed into the app's own venv. |
 | `rotate` | `"left"` or `"right"` for a portrait app. |
-| `env` | Extra environment, one `"KEY=value"` per entry. |
+| `env` | Extra environment, one `"KEY=value"` per entry. Applied last, so it overrides what the launch sets. |
+| `runtime` | Reserved: the runtime this app is run through, e.g. `"python"`. A bundle declaring the same word in `provides` is the launcher; none exists yet, and an app asking for one is refused with a sentence naming it. |
+| `provides` | Reserved: what a launcher bundle provides. |
+
+## How a bundle runs
+
+flipctl runs the file itself, from a writable directory of the app's own under
+`~/.local/share/flipctl/apps/<key>/`, with `FLIPCTL_HOSTED=1` in the environment
+alongside the Wayland display and the rest. The AppImage runtime mounts the squashfs
+over FUSE and runs `AppRun`, which puts `usr/bin` and `usr/lib/aarch64-linux-gnu`
+from the bundle ahead of the device's own and execs the program. A device without
+`fuse3` still works: flipctl notices there is no `fusermount3`, sets
+`APPIMAGE_EXTRACT_AND_RUN=1`, and the runtime unpacks the image into `/tmp` per launch
+instead, slower and said in the log.
+
+Started anywhere else, `AppRun` finds `FLIPCTL_HOSTED` unset and hands the file over:
+
+    flipctl open /home/user/Apps/radio-aarch64.AppImage
+
+connects to the running flipctl's socket at `$XDG_RUNTIME_DIR/flipctl.sock`, one line
+each way, and flipctl lists the bundle if it is new, starts it, or brings it to the
+front if it is already on the panel. So a double-click in the desktop's file manager
+puts the app on the panel rather than on the HDMI screen. The exit status says what
+happened: 0 on the panel, 1 refused (`not a flipctl app`, `cannot host apps`), 2
+nothing listening.
+
+A hosted app runs with the unit's groups and device classes: GPIO, SPI, I2C, USB and
+USB serial are open to it (`systemd/README.md` lists what the image ships for that).
+
+## Bundling
+
+    tools/appimage/build.sh apps/radio        target/appimage/radio-aarch64.AppImage
+    tools/appimage/build.sh --all
+    tools/appimage/build.sh --check target/appimage/radio-aarch64.AppImage
+    ./build_deploy.sh --cross --panel --apps  push what was built to ~/Apps
+
+The build runs on the x86_64 host and nothing aarch64 executes there: the program is
+cross-built in the `flipctl-cross` container, `tools/appimage/bundle.py` lays out the
+AppDir in the `flipctl-bundle` container, and appimagetool packs it with zstd behind
+the aarch64 runtime, both pinned by sha256 in `tools/appimage/tools.lock`. The
+program's link surface is checked on the way: a framework app needs `libc`, `libm`
+and `libgcc_s` and nothing else, and anything more fails the build by name.
+`SOURCE_DATE_EPOCH` is the commit's time, so two builds of one tree give one hash.
+
+Only a Rust app on the framework is bundled today. Its `apt` packages stay the
+device's: the radio's `mpv` is in the Desktop image, and bundling Debian's mpv would
+drag ffmpeg's whole dependency fan-out in (measured: 118 packages, 177 MB extracted)
+for a 5 MB app. Bundling a package closure, a Python interpreter or a program out of
+the archive are extensions of the same tooling, not written yet.
 
 ## The framework
 
@@ -85,31 +138,29 @@ Imported from `@flipctl`, the same components flipctl's own screens are built fr
 | `SoftBar`, `SoftButton` (`frame.slint`) | The five soft keys on their own. |
 | `StatusBar` (`statusbar.slint`) | The top row, if you are not using a body that draws it. |
 
-## The three examples
-
-`apps/uptime` is the smallest one: five rows in `MenuBody`, a timer that re-reads
-`/proc`, and Close and Refresh on the soft bar.
+## The two examples
 
 `apps/sysmon` is the fuller one: four pages, three of rows in `DetailBody` and one
 that paints two graphs into a `Surface` and shows them through `CanvasBody`, with
-the soft keys switching pages.
+the soft keys switching pages. It needs nothing from the device but `/proc` and `/sys`.
 
 `apps/radio` is the one that runs something: four `DropLine` rows over a child mpv,
-which it starts, asks questions of over a socket and kills with itself. It is also
-the one with tests that draw: `cargo test` renders the page headlessly and reads the
+which it starts, asks questions of over a socket and kills with itself. It is also the
+one with tests that draw: `cargo test` renders the page headlessly and reads the
 pixels back, and `RADIO_RENDER=1 cargo test` leaves the frames in `target/render` to
 look at.
 
 ## What it costs
 
-Slint links statically, so an app's binary is around 13MB against 300KB for one
-that only wrote JSON, and the first build on the device takes about twenty minutes.
-After that only the app's own crate rebuilds, in seconds.
+Slint links statically, so an app's binary is around 13MB stripped, about 5MB in the
+bundle's zstd squashfs, plus the runtime's 0.9MB. A cold cross build of an app takes a
+few minutes on a host; a warm one, seconds.
 
 ## Licensing
 
 An app that draws with the framework links `flipctl-app`, and through it Slint, so
 the app's binary is GPL-3.0-only while its own source stays MIT. That is the same
-combination flipctl itself ships, and `THIRD-PARTY-LICENSES.md` covers the crates.
-An app that is only a manifest naming a program from the archive links nothing of
-ours, so it carries neither.
+combination flipctl itself ships. Each app's `THIRD-PARTY-LICENSES.md`, generated by
+`scripts/gen-third-party-licenses.sh` beside flipctl's own, travels in the bundle
+under `usr/share/doc/<program>/`, with our license, the texts in `LICENSES/` and the
+three fonts' terms, since their glyphs are compiled into the binary.

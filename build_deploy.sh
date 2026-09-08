@@ -8,13 +8,14 @@
 #
 # The build tree is where the build happens and nothing else: what runs is the
 # installed /usr/bin/flipctl, restarted through flipctl.service, the same one the
-# image boots. The apps under /usr/share/flipctl/apps are left alone, since a
-# machine can have apps this checkout knows nothing about.
+# image boots. Apps are AppImages in ~/Apps on the device, built by
+# tools/appimage/build.sh and pushed with --apps; a deploy without it leaves them alone.
 #
 # Usage:
 #   ./build_deploy.sh                 headless, leaving the panel to its owner
 #   ./build_deploy.sh --panel         drive the real panel and its buttons
 #   ./build_deploy.sh --cross         build here for aarch64 in docker, not on the device
+#   ./build_deploy.sh --apps          also push target/appimage/*.AppImage to ~/Apps
 #   ./build_deploy.sh --no-run        build only, install nothing, restart nothing
 #   ./build_deploy.sh --status        report what is running, change nothing
 #
@@ -50,6 +51,9 @@ SHARE="/usr/share/flipctl"
 # rewriting it. Written fresh on every deploy, so no stale one survives, and
 # removing it leaves the machine running exactly what the image shipped.
 DROPIN="/etc/systemd/system/flipctl.service.d/50-deploy.conf"
+# What running a bundle needs from the machine beyond the unit, each installed from
+# systemd/ here until the image ships it. Listed once so --status can ask after them.
+DEVICE_FILES="/etc/udev/rules.d/70-flipctl-devices.rules /etc/sysusers.d/flipctl.conf /etc/modules-load.d/flipctl-devices.conf"
 # flipctl's own output is not in `journalctl -u flipctl`. PAMName=login puts the
 # process in a logind session scope rather than the service's cgroup, and journald
 # files a line under the cgroup that wrote it, so the unit view holds systemd's
@@ -59,11 +63,13 @@ APP_LOG="sudo journalctl _COMM=flipctl --no-pager -o cat -n"
 MODE=headless
 RUN=yes
 CROSS=no
+APPS=no
 for arg in "$@"; do
     case "$arg" in
         --panel)   MODE=panel ;;
         --headless) MODE=headless ;;
         --cross)   CROSS=yes ;;
+        --apps)    APPS=yes ;;
         --no-run)  RUN=no ;;
         --status)  MODE=status ;;
         -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
@@ -108,6 +114,11 @@ if [ "$MODE" = status ]; then
     run "systemctl is-active cog-seat1.service || true" | sed 's/^/cog-seat1: /'
     run "systemctl is-active fake-flipctl-node-server.service || true" \
         | sed 's/^/prototype: /'
+    # What the image has to ship for bundles (systemd/README.md), and whether it does.
+    run "dpkg-query -W -f='fuse3: \${db:Status-Status}\n' fuse3 2>/dev/null || echo 'fuse3: not installed'"
+    run "for f in $DEVICE_FILES; do [ -e \"\$f\" ] && echo \"\$f: present\" || echo \"\$f: absent\"; done"
+    run "systemctl show $UNIT -p SupplementaryGroups -p DeviceAllow"
+    run "ls ~/Apps 2>/dev/null | sed 's/^/app: /' || true"
     run "$APP_LOG 12 2>/dev/null || true"
     exit 0
 fi
@@ -230,7 +241,7 @@ else
     ARGS="--headless $ARGS"
 fi
 
-echo "== installing $BIN, $SHARE/assets and $SHARE/apps =="
+echo "== installing $BIN and $SHARE/assets =="
 # Into place by rename, never by writing over the file: the binary that is running
 # is that same path, and writing to it fails with ETXTBSY. A rename replaces the
 # directory entry, the running process keeps the inode it started with, and the
@@ -240,44 +251,49 @@ run "sudo install -m 755 $BUILT $BIN.new && \
      sudo mkdir -p $SHARE/assets/remote && \
      sudo cp -a ~/$DEST/crates/flipper-ui/assets/remote/. $SHARE/assets/remote/"
 
-# The apps this checkout carries, sources only: build output and virtualenvs are
-# per-machine and stale by the time they arrive. Copied in rather than synced, so
-# apps a machine has of its own are left where they are.
-#
-# Owned by the user flipctl runs as, because an app is built where it sits: a Rust
-# app compiles into its own target/ and a Python one gets a .venv beside its
-# app.py, and neither can happen in a root-owned directory.
-run "cd ~/$DEST && \
-     sudo tar cf - --exclude=target --exclude=.venv --exclude=__pycache__ apps \
-       | sudo tar xf - -C $SHARE && \
-     for a in apps/*/; do sudo chown -R $USER_:$USER_ '$SHARE'/\$a; done"
+# The bundles, when asked. Built by tools/appimage/build.sh, not here: a deploy is a
+# binary and a restart, and a bundle is a release artefact with a build of its own.
+if [ "$APPS" = yes ]; then
+    HERE=$(cd "$(dirname "$0")" && pwd)
+    found=no
+    for bundle in "$HERE"/target/appimage/*.AppImage; do
+        [ -e "$bundle" ] || continue
+        found=yes
+        name=$(basename "$bundle")
+        echo "== pushing $name to ~/Apps =="
+        run "mkdir -p ~/Apps && cat > ~/Apps/$name.new && chmod 755 ~/Apps/$name.new && mv -f ~/Apps/$name.new ~/Apps/$name" \
+            < "$bundle"
+    done
+    if [ "$found" = no ]; then
+        echo "--apps: nothing under target/appimage; run tools/appimage/build.sh first" >&2
+    fi
+fi
 
-# The framework, so an app that draws with it can be built on the device.
-#
-# An app's manifest asks for `../../crates/flipctl-app`, which resolves relative to
-# where the app sits: in a checkout that is the repository, and installed it is
-# $SHARE. Without these the build fails before it starts, with cargo unable to read
-# $SHARE/crates/flipctl-app/Cargo.toml -- which is what every framework app did,
-# both of the two docs/apps.md names as the examples to copy.
-#
-# The three crates the chain pulls in, and the fonts, which are the part that is
-# easy to miss: ui/fonts.slint imports the three TTFs as ../../../third_party, from
-# outside crates/ entirely. The layout under $SHARE therefore mirrors the
-# repository for exactly these paths.
-#
-# Root-owned and read-only, unlike the apps: a build writes only into the app's own
-# target/, since a build script writes to OUT_DIR there. tests/ is left behind
-# because nothing an app builds reads it; examples/ cannot be, even though nothing
-# reads that either, because flipper-ui's manifest declares three of them by name
-# and cargo refuses to parse a manifest whose declared target has no file. The
-# failure is at the first line of the build, before any of the app is looked at:
-# "can't find `gpu_probe` example at examples/gpu_probe.rs".
-echo "== installing $SHARE/crates and $SHARE/third_party, so apps can be built =="
-run "cd ~/$DEST && \
-     sudo tar cf - --exclude=target --exclude=tests \
-         crates/flipctl-app crates/flipper-ui crates/flipper-tokens \
-         third_party/flipctl-fonts \
-       | sudo tar xf - -C $SHARE"
+# What a bundle needs from the machine, until the image ships it (systemd/README.md
+# lists the same things as the image's obligation). The AppImage runtime mounts a
+# bundle through fuse3's setuid fusermount3; without it flipctl unpacks each launch
+# into /tmp and says so in its log, so this is a slowness, not a failure, and the
+# message here is what keeps the image requirement from being forgotten.
+if ! run "dpkg-query -W -f='\${db:Status-Status}' fuse3 2>/dev/null | grep -qx installed"; then
+    echo "== installing fuse3: an image requirement this image does not meet yet ==" >&2
+    run "sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && \
+         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends fuse3"
+fi
+# In this order: the group before the unit that names it restarts, since a unit
+# naming a missing group does not start; the drivers before the unit resolves its
+# device classes against /proc/devices.
+echo "== installing the device rules, group and modules =="
+SYSD="$(dirname "$0")/systemd"
+run "sudo mkdir -p /etc/sysusers.d /etc/udev/rules.d /etc/modules-load.d" </dev/null
+run "sudo tee /etc/sysusers.d/flipctl.conf >/dev/null && sudo systemd-sysusers /etc/sysusers.d/flipctl.conf" \
+    < "$SYSD/flipctl.sysusers.conf"
+run "sudo tee /etc/udev/rules.d/70-flipctl-devices.rules >/dev/null && \
+     sudo udevadm control --reload && \
+     sudo udevadm trigger -s gpio -s usb -s spidev -c change" \
+    < "$SYSD/70-flipctl-devices.rules"
+run "sudo tee /etc/modules-load.d/flipctl-devices.conf >/dev/null && \
+     sudo systemctl restart systemd-modules-load.service" \
+    < "$SYSD/flipctl-devices.conf"
 
 # The unit itself, where the machine has none. Stock profiles do not ship it -- it has
 # always been installed by hand -- so a deploy onto a freshly installed profile otherwise
@@ -290,17 +306,16 @@ if ! run "systemctl cat $UNIT.service >/dev/null 2>&1"; then
 fi
 
 echo "== restarting $UNIT.service ($MODE) =="
-# The kernel log goes in here too, not only in systemd/flipctl.service: a machine that came
-# with its own unit keeps it, so the deploy carries what flipctl needs rather than assuming
-# the shipped unit grants it. DeviceAllow is a list that adds to whatever the unit already
-# says, so this is safe on a unit that has it. flipctl writes the node through sudo, but the
-# cgroup's device filter applies to that child too, root or not, so without this line the
-# panel's own timing never reaches the boot log.
+# The unit's device and group lines go in here too, not only in systemd/flipctl.service:
+# a machine that came with its own unit keeps it, so the deploy carries what flipctl
+# needs rather than assuming the shipped unit grants it. Both settings are lists that
+# add to whatever the unit already says, so this is safe on a unit that has them, and
+# they are read from the unit here rather than written twice.
 run "sudo mkdir -p $(dirname "$DROPIN") && sudo tee $DROPIN >/dev/null" <<EOF
 [Service]
 ExecStart=
 ExecStart=$BIN $ARGS
-DeviceAllow=/dev/kmsg rw
+$(grep -E '^(DeviceAllow|SupplementaryGroups)=' "$SYSD/$UNIT.service")
 EOF
 # Not fatal here: a unit that fails to come up is reported below, with its log,
 # which is more use than the shell aborting on the restart's exit status.

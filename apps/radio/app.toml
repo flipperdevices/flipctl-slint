@@ -7,6 +7,9 @@
 # answers questions while it plays: it takes a JSON command socket, which is where
 # the output device and the station's own now-playing title come from.
 name = "Internet radio"
+# The strip the app draws itself, eight 14px frames: the row animates it while it is
+# selected, as the menu does with its own icons.
+icon = "assets/internet_radio_animated.png"
 wayland = "./target/release/radio-app"
 audio = true
 # wpctl and pw-cli are the volume: it is the speaker's own gain, reached through the

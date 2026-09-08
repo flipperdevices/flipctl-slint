@@ -67,8 +67,6 @@ SPDX-License-Identifier = "MIT"
 path = [
     "third_party/flipctl-fonts/HaxrCorp4090-FlipCTL/**",
     "crates/flipper-ui/src/font/title.rs",
-    "apps/qtdemo/HaxrCorp4090-FlipCTL.ttf",
-    "apps/qtdemo2/HaxrCorp4090-FlipCTL.ttf",
 ]
 precedence = "override"
 SPDX-FileCopyrightText = "2009 sahwar; 2026 Flipper Devices Inc. (FlipCTL adaptation)"
