@@ -1,0 +1,19 @@
+#!/bin/sh
+# The bundle's entry point, written by tools/appimage/bundle.py.
+#
+# FLIPCTL_HOSTED is set when flipctl runs this bundle on the panel. Unset, this came
+# from a desktop, and the panel is where it belongs: hand it to flipctl, which lists
+# it, starts it or brings it to the front and says which. flipctl is always running
+# on the device, so a refusal is reported rather than worked around here.
+set -eu
+APPDIR=${APPDIR:-$(cd "$(dirname "$0")" && pwd)}
+export APPDIR
+if [ -z "${FLIPCTL_HOSTED:-}" ]; then
+    exec flipctl open "${APPIMAGE:-$0}"
+fi
+# What the bundle carries goes ahead of the device's own. No cd: the image is
+# read-only, and the working directory flipctl gives is the writable one.
+export PATH="$APPDIR/usr/bin:$PATH"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="$APPDIR/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+exec @COMMAND@

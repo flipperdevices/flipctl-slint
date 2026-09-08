@@ -1,0 +1,8 @@
+# The two upstream pieces a bundle is made with, pinned: name, URL, sha256.
+# Fetched into target/appimage/tools by build.sh and checked on every run.
+#
+# runtime-aarch64 is the type-2 AppImage runtime that heads every bundle; it is what
+# a static-pie build of AppImage/type2-runtime produces, and appimagetool takes it
+# through --runtime-file. Replacing it with a build of our own is one line here.
+appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+runtime-aarch64 https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-aarch64 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
