@@ -11,7 +11,7 @@ device = ["flipper-ui/device"]
 remote = ["flipper-ui/remote"]
 slint = ["flipper-ui/screens", "dep:png", "dep:slint"]
 # Present through a compositor rather than to the card, and take its keys.
-wayland = ["flipper-ui/wayland"]
+wayland = ["flipper-ui/wayland", "flipper-ui/bundle"]
 # Let the GPU turn a hosted app's frames into panel frames.
 gpu = ["wayland", "flipper-ui/gpu"]
 

@@ -11,7 +11,11 @@ Conflicts=cog-seat1.service
 Type=simple
 User=user
 Group=user
-SupplementaryGroups=input video render
+# dialout for ttyUSB and ttyACM (the default udev rules), i2c for /dev/i2c-*, plugdev
+# for /dev/bus/usb, gpio for gpiochip and spidev (70-flipctl-devices.rules; the group
+# comes from flipctl.sysusers.conf). The cgroup filter below opens a class; these
+# open the nodes.
+SupplementaryGroups=input video render dialout i2c plugdev gpio
 
 # A real login session, so logind gives this process seat1's devices: the SPI panel
 # and the Flipper's buttons, both tagged ID_SEAT=seat1 by 72-seat-cog.rules.
@@ -35,6 +39,18 @@ DeviceAllow=/dev/tty0 rw
 # through sudo, as it does every privileged thing, but the cgroup's device filter applies to
 # that child as much as to us, so without this line the write fails however root it is.
 DeviceAllow=/dev/kmsg rw
+# An app is an AppImage, and its runtime mounts the bundle over FUSE through
+# fusermount3, a setuid child of ours and so inside this filter like everything else.
+DeviceAllow=/dev/fuse rw
+# Hardware a hosted app may drive, by class name from /proc/devices. Resolved when
+# the unit starts, and a class whose driver is not loaded yet is silently absent, so
+# flipctl-devices.conf loads usbserial, cdc-acm and spidev at boot.
+DeviceAllow=char-gpiochip rw
+DeviceAllow=char-usb_device rw
+DeviceAllow=char-i2c rw
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-ttyACM rw
+DeviceAllow=char-spidev rw
 
 # The installed layout, not a build tree: the binary is /usr/bin/flipctl and its
 # apps and assets are under /usr/share/flipctl. A deploy installs over those paths

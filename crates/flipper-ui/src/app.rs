@@ -1,18 +1,16 @@
 //! Running user applications.
 //!
-//! An app is a directory under `apps/` with an `app.toml` in it. It draws its own
-//! screen: flipctl runs a compositor, gives the app an output of its own and reads
-//! its frames, and nothing describes a screen to flipctl or asks it to lay one out.
-//! What an app takes from us is the look, through the widget library in
-//! crates/flipctl-app, and that is a dependency of the app rather than a protocol
-//! between us.
+//! An app is an AppImage in the user's `Apps` folder with an `app.toml` at its root
+//! (`bundle` reads them). It draws its own screen: flipctl runs a compositor, gives
+//! the app an output of its own and reads its frames, and nothing describes a screen
+//! to flipctl or asks it to lay one out. What an app takes from us is the look,
+//! through the widget library in crates/flipctl-app, and that is a dependency of the
+//! app rather than a protocol between us.
 //!
-//! The manifest names a command and what the app needs installed. It is read by
-//! scanning the file, never by running or building anything: an app whose packages
-//! are missing fails on import, and an app built from a crate has no binary at all
-//! until it is built, so anything that executes an app to ask what it needs cannot
-//! work. Scanning also means the list of apps is available without starting an
-//! interpreter or a compiler.
+//! The manifest names what the app needs installed and how it wants to be shown. It
+//! is read by scanning the file, never by running anything: a bundle is whatever a
+//! person dropped into the folder, and the list has to open before its packages
+//! exist. Scanning also means the list is available without starting anything.
 //!
 //! What used to be here was a protocol: an app wrote scenes as JSON lines and
 //! flipctl laid them out as rows, cards, logs or a blitted canvas. It is gone, with
@@ -22,12 +20,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// The file a Python app is started from.
-/// The manifest an app with no code of its own is declared in.
+/// The manifest, at the root of a bundle.
 pub const MANIFEST: &str = "app.toml";
-
-/// The per-app virtualenv, inside the app's own directory.
-pub const VENV: &str = ".venv";
 
 /// Which edge of the panel is the app's own top.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
@@ -44,23 +38,24 @@ pub enum Rotate {
 /// An app found on disk, before it runs.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct AppEntry {
-    /// The declared name, or the directory name when it says nothing.
+    /// The declared name, or the bundle's file name when it says nothing.
     pub name: String,
+    /// Where the manifest and the icon are: the bundle's cache directory, which is
+    /// also what names its working directory.
     pub dir: PathBuf,
-    /// The folders this app sits in under `apps/`, outermost first, empty at the
+    /// The `.AppImage` this was read from.
+    pub bundle: PathBuf,
+    /// The folders this app sits in under `Apps`, outermost first, empty at the
     /// top level. Apps are grouped by where they live rather than by a category in
-    /// the manifest: the directory is already the answer, and two apps cannot
+    /// the manifest: the folder is already the answer, and two apps cannot
     /// disagree about which folder they are in.
     pub group: Vec<String>,
-    /// A file in the app's own directory. Empty when absent.
+    /// A file in `dir`. Empty when absent.
     pub icon: String,
-    /// Debian packages the app needs.
+    /// Debian packages the app needs from the device.
     pub apt: Vec<String>,
-    /// Python packages, installed into the app's own venv. Python apps only.
-    pub pip: Vec<String>,
-    /// The binary cargo produces, from the crate's name. Rust apps only.
-    pub bin: String,
-    /// The command line to run as a Wayland client. Wayland apps only.
+    /// The command line inside the bundle. AppRun is what runs it; here it only has
+    /// to be non-empty, which is what says the manifest describes an app.
     pub wayland: String,
     /// The size the program insists on drawing, when it is not the panel's.
     ///
@@ -96,26 +91,42 @@ pub struct AppEntry {
     /// status bar belongs on the edge that is the app's top, not on the panel's.
     pub rotate: Rotate,
     /// Environment for the command, each entry `NAME=value`.
-    ///
-    /// What turns the console kind into something more general: the arrangement it
-    /// sets up is a VT with the panel handed over, and a program that draws into
-    /// the framebuffer rather than into the terminal wants the same thing plus a
-    /// variable or two. `QT_QPA_PLATFORM=linuxfb` is the case it was added for.
     pub env: Vec<String>,
+    /// The runtime this app is run through, e.g. `python`. Empty for a program of
+    /// its own. A launcher bundle declaring the same word in `provides` is what runs
+    /// it; the launchers themselves are not written yet, so today this only names
+    /// what is missing.
+    pub runtime: String,
+    /// The runtime this bundle provides. Only a launcher says anything here.
+    pub provides: String,
 }
 
 impl AppEntry {
     /// The program to run and the arguments to pass it.
     ///
-    /// Through a shell, because the manifest names a command line rather than a
-    /// program: "foot -e htop" is one field, not two.
+    /// Through a shell, because what runs is a command line: the bundle, quoted, or
+    /// the launcher with the bundle as its argument.
     pub fn command(&self) -> (PathBuf, Vec<PathBuf>) {
-        (PathBuf::from("/bin/sh"), vec![PathBuf::from("-c"), PathBuf::from(&self.wayland)])
+        (PathBuf::from("/bin/sh"), vec![PathBuf::from("-c"), PathBuf::from(self.launch_line(None))])
     }
 
-    /// Where cargo puts the binary, for an app that carries a crate.
-    pub fn binary(&self) -> PathBuf {
-        self.dir.join("target").join("release").join(&self.bin)
+    /// The command line the shell runs: the bundle, or `via` with the bundle as its
+    /// argument, each single-quoted so a space in a file name stays in the name.
+    pub fn launch_line(&self, via: Option<&AppEntry>) -> String {
+        match via {
+            Some(launcher) => format!("{} {}", quoted(&launcher.bundle), quoted(&self.bundle)),
+            None => quoted(&self.bundle),
+        }
+    }
+
+    /// A writable directory of the app's own, which is where it runs.
+    ///
+    /// The bundle itself is a read-only image, so a program that writes a config
+    /// beside itself needs somewhere else, and this is the same place every launch.
+    /// Named after the cache directory so the two say the same thing about one file.
+    pub fn work_dir(&self) -> PathBuf {
+        let key = self.dir.file_name().map(PathBuf::from).unwrap_or_default();
+        xdg_home("XDG_DATA_HOME", ".local/share").join("flipctl/apps").join(key)
     }
 
     pub fn icon_path(&self) -> Option<PathBuf> {
@@ -123,31 +134,46 @@ impl AppEntry {
     }
 }
 
-/// The body of a TOML table, e.g. everything under `[package]`.
-///
-/// Returned as text so the same key scanners work on it. A section ends at the
-/// next line that opens a table, which is all the structure this needs: the
-/// manifest is a handful of strings and arrays.
-fn toml_section<'a>(src: &'a str, header: &str) -> Option<&'a str> {
-    let at = src.find(&format!("[{header}]"))? + header.len() + 2;
-    let rest = &src[at..];
-    let end = rest
-        .lines()
-        .scan(0usize, |off, line| {
-            let start = *off;
-            *off += line.len() + 1;
-            Some((start, line))
-        })
-        .find(|(start, line)| *start > 0 && line.trim_start().starts_with('['))
-        .map_or(rest.len(), |(start, _)| start);
-    Some(&rest[..end])
+/// A path as one shell word.
+fn quoted(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
-/// A module-level string assignment, e.g. `APP_NAME = "Ping"`.
+/// The user's home, or the device's user when the environment does not say.
+pub(crate) fn home() -> PathBuf {
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/home/user"))
+}
+
+/// An XDG base directory: the variable, else its documented default under home.
+pub(crate) fn xdg_home(var: &str, fallback: &str) -> PathBuf {
+    std::env::var_os(var)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(fallback))
+}
+
+/// The launcher `entry` runs through, if it asks for one.
 ///
-/// Only column zero counts, so an assignment inside a function or a class is not
-/// mistaken for the manifest. Both quote styles are accepted, and a trailing
-/// comment is ignored.
+/// `Ok(None)` for a program of its own, the first bundle providing the runtime
+/// otherwise, and an error naming the runtime when nothing does: said up front in
+/// the install dialog, the way a missing package is.
+pub fn launcher_for<'a>(
+    apps: &'a [AppEntry],
+    entry: &AppEntry,
+) -> Result<Option<&'a AppEntry>, String> {
+    if entry.runtime.is_empty() {
+        return Ok(None);
+    }
+    apps.iter()
+        .find(|a| a.provides == entry.runtime)
+        .map(Some)
+        .ok_or_else(|| format!("needs the {} runtime, which is not installed", entry.runtime))
+}
+
+/// A module-level string assignment, e.g. `name = "Ping"`.
+///
+/// Only column zero counts, so an assignment inside a table is not mistaken for the
+/// manifest. Both quote styles are accepted, and a trailing comment is ignored.
 fn py_string(src: &str, key: &str) -> Option<String> {
     src.lines().filter(|l| !l.starts_with(char::is_whitespace)).find_map(|line| {
         let (k, v) = line.split_once('=')?;
@@ -178,7 +204,7 @@ fn py_bool(src: &str, key: &str) -> Option<bool> {
     })
 }
 
-/// A module-level list of strings, e.g. `APP_APT = ["a", "b"]`.
+/// A module-level list of strings, e.g. `apt = ["a", "b"]`.
 ///
 /// Written across as many lines as the author likes, with or without a trailing
 /// comma, because that is how a list of packages tends to grow.
@@ -218,106 +244,50 @@ fn py_list(src: &str, key: &str) -> Vec<String> {
     out
 }
 
-/// The crate an app is built from, by the name under `[package]`.
-///
-/// Only for deciding whether to offer a build and where the binary lands: what
-/// actually runs is the command line in the manifest.
-fn crate_name(dir: &Path) -> String {
-    std::fs::read_to_string(dir.join("Cargo.toml"))
-        .ok()
-        .as_deref()
-        .and_then(|src| toml_section(src, "package").and_then(|s| py_string(s, "name")))
-        .unwrap_or_default()
+/// A `size = "320x200"` field, as a pair.
+fn py_size(src: &str, key: &str) -> Option<(u32, u32)> {
+    let raw = py_string(src, key)?;
+    let (w, h) = raw.split_once(['x', 'X'])?;
+    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
 }
 
-/// Apps under `root`, at any depth, sorted by name so the menu order is stable.
+/// One app from the text of its manifest, or `None` when the text does not
+/// describe one: a manifest with no command is not an app.
 ///
-/// A directory with a manifest is an app; one without is a folder to look inside,
-/// which is what lets apps be grouped rather than listed as one long roll. An app
-/// stops the walk, so nothing goes rummaging through a `target` or a `.venv`.
-///
-/// Nested as deeply as anyone cares to nest it. The walk cannot run away, because a
-/// symlinked directory is not followed: that is the only way a directory tree loops,
-/// and depth was never the thing worth limiting.
-///
-/// A directory that is neither is skipped rather than reported: a half-installed
-/// app should not keep the menu from opening.
-pub fn discover(root: &Path) -> Vec<AppEntry> {
-    let mut apps = Vec::new();
-    walk(root, &[], &mut apps);
-    apps.sort_by(|a, b| (&a.group, &a.name).cmp(&(&b.group, &b.name)));
-    apps
-}
-
-fn walk(dir: &Path, group: &[String], out: &mut Vec<AppEntry>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        // `file_type` rather than `is_dir`: it reports the entry itself, so a symlink
-        // to a directory is not a directory here and the walk cannot be sent round a
-        // loop or off into the rest of the filesystem.
-        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
-        }
-        let dir = entry.path();
-        let Some(name) = dir.file_name().map(|n| n.to_string_lossy().to_string()) else {
-            continue;
-        };
-        // Nothing hidden, and nothing named as build output: an app's own crate
-        // has a target directory and it is not a folder of apps.
-        if name.starts_with('.') || name == "target" {
-            continue;
-        }
-        if let Some(app) = read_manifest(&dir, group) {
-            out.push(app);
-        } else {
-            let mut deeper = group.to_vec();
-            deeper.push(name);
-            walk(&dir, &deeper, out);
-        }
+/// `dir` is where the manifest and the icon can be found again, `bundle` the file
+/// they were read from, and `fallback` the name to show when the manifest gives
+/// none.
+pub fn parse_manifest(
+    src: &str,
+    fallback: String,
+    group: &[String],
+    dir: PathBuf,
+    bundle: PathBuf,
+) -> Option<AppEntry> {
+    let wayland = py_string(src, "wayland").unwrap_or_default();
+    if wayland.is_empty() {
+        return None;
     }
-}
-
-/// One app, from its manifest, or `None` if the directory has none.
-fn read_manifest(dir: &Path, group: &[String]) -> Option<AppEntry> {
-    let dir = dir.to_path_buf();
-    let fallback = dir.file_name()?.to_string_lossy().to_string();
-
-    // A manifest first: it is the only thing a console app has, and an
-    // app that carries one has said what it is.
-    if let Ok(src) = std::fs::read_to_string(dir.join(MANIFEST)) {
-        let wayland = py_string(&src, "wayland").unwrap_or_default();
-        if !wayland.is_empty() {
-            return Some(AppEntry {
-                name: py_string(&src, "name").unwrap_or(fallback),
-                icon: py_string(&src, "icon").unwrap_or_default(),
-                apt: py_list(&src, "apt"),
-                pip: py_list(&src, "pip"),
-                // The crate this app is built from, if it carries one: the
-                // name under [package], which is what cargo names the
-                // binary. Empty for an app that is a script or a program
-                // out of the archive.
-                bin: crate_name(&dir),
-                wayland,
-                size: py_size(&src, "size"),
-                audio: py_bool(&src, "audio").unwrap_or(false),
-                status: py_bool(&src, "status").unwrap_or(false),
-                rotate: match py_string(&src, "rotate").unwrap_or_default().as_str() {
-                    "left" => Rotate::Left,
-                    "right" => Rotate::Right,
-                    _ => Rotate::None,
-                },
-                env: py_list(&src, "env"),
-                group: group.to_vec(),
-                dir: dir.canonicalize().unwrap_or(dir),
-            });
-        }
-    }
-
-    // No manifest, no app: an app is a program that draws itself, and a directory of
-    // source with nothing declaring how to run it is not that.
-    None
+    Some(AppEntry {
+        name: py_string(src, "name").unwrap_or(fallback),
+        icon: py_string(src, "icon").unwrap_or_default(),
+        apt: py_list(src, "apt"),
+        wayland,
+        size: py_size(src, "size"),
+        audio: py_bool(src, "audio").unwrap_or(false),
+        status: py_bool(src, "status").unwrap_or(false),
+        rotate: match py_string(src, "rotate").unwrap_or_default().as_str() {
+            "left" => Rotate::Left,
+            "right" => Rotate::Right,
+            _ => Rotate::None,
+        },
+        env: py_list(src, "env"),
+        runtime: py_string(src, "runtime").unwrap_or_default(),
+        provides: py_string(src, "provides").unwrap_or_default(),
+        group: group.to_vec(),
+        dir,
+        bundle,
+    })
 }
 
 /// What an app still needs before it can run.
@@ -325,57 +295,20 @@ fn read_manifest(dir: &Path, group: &[String]) -> Option<AppEntry> {
 pub struct Missing {
     /// Debian packages that are not installed.
     pub apt: Vec<String>,
-    /// Python packages, when the app's venv does not already have exactly them.
-    pub pip: Vec<String>,
-    /// True when a Rust app has no binary yet, so it has to be built.
-    ///
-    /// Not a package to fetch but a compile, which is why it is a flag rather than
-    /// a list: cargo works out what to download from the crate's own manifest.
-    pub needs_build: bool,
-    /// True when a Rust app has to be built and there is no cargo to build it.
-    ///
-    /// Offered rather than merely reported, unlike `needs_uv`: rustup is a
-    /// download away and a device flashed from a stock image has no toolchain at
-    /// all, so an app that draws with the framework could not be built on the
-    /// machine it is installed on. Known up front so the question names it,
-    /// instead of apt running for a minute and the build then failing with
-    /// "cargo is not installed".
-    pub needs_cargo: bool,
-    /// True when Python packages are wanted but `uv` is not installed.
-    ///
-    /// Not something the user can be offered, because uv is not in the Debian
-    /// archive: it is installed with the image. Reported rather than attempted, so
-    /// the failure is stated up front instead of halfway through an install.
-    pub needs_uv: bool,
 }
 
 impl Missing {
     pub fn is_empty(&self) -> bool {
-        self.apt.is_empty() && self.pip.is_empty() && !self.needs_build
+        self.apt.is_empty()
     }
 
-    /// Everything to install with apt.
-    pub fn apt_all(&self) -> Vec<String> {
-        self.apt.clone()
-    }
-
-    /// One line for a log, e.g. "2 packages: curl, requests".
+    /// One line for a log, e.g. "2 packages: curl, mpv".
     pub fn summary(&self) -> String {
-        let apt = self.apt_all();
-        let n = apt.len() + self.pip.len();
-        let mut names = apt;
-        names.extend(self.pip.iter().cloned());
-        let build = if self.needs_cargo {
-            " and a build, which needs a Rust toolchain this machine has not got"
-        } else if self.needs_build {
-            " and a build"
-        } else {
-            ""
-        };
+        let n = self.apt.len();
         if n == 0 {
-            return build.trim_start().trim_start_matches("and ").to_string();
+            return String::new();
         }
-        format!("{n} package{}: {}{build}", if n == 1 { "" } else { "s" }, names.join(", "))
+        format!("{n} package{}: {}", if n == 1 { "" } else { "s" }, self.apt.join(", "))
     }
 }
 
@@ -436,206 +369,39 @@ pub fn stop_group(pid: u32) {
     }
 }
 
-/// A handle on the one step of an install that may be interrupted.
+/// The parents of `pid`, nearest first, up to init.
 ///
-/// apt is not that step. Stopped halfway it leaves packages half configured, so nothing
-/// here can reach it: the pid is registered only while the build runs, and `offered` says
-/// whether stopping is on the table at all. A cargo build is interruptible by nature -- it
-/// writes into target/ and picks up from wherever it reached -- which is why twenty minutes
-/// of compiling may be cut short and a minute of apt may not.
-#[derive(Clone, Default)]
-pub struct Stop {
-    /// The build's process group while it runs, nothing otherwise.
-    pid: std::sync::Arc<std::sync::Mutex<Option<u32>>>,
-    /// Whether the failure on the way back is one somebody asked for.
-    asked: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl Stop {
-    /// Whether something stoppable is running right now.
-    pub fn offered(&self) -> bool {
-        self.pid.lock().map(|p| p.is_some()).unwrap_or(false)
+/// Read from `/proc/<pid>/stat`, field four. A bundle's window belongs to a
+/// grandchild of the process flipctl started: the AppImage runtime forks AppRun,
+/// which execs the program. Walking up from the window's owner is how the two are
+/// matched, since the kernel here was built without `/proc/<pid>/task/*/children`.
+pub fn ancestors(pid: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut at = pid;
+    while at > 1 && out.len() < 64 {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{at}/stat")) else {
+            break;
+        };
+        // The command name is in parentheses and may hold spaces, so the fields are
+        // counted from the closing one.
+        let Some(after) = stat.rfind(')') else { break };
+        let Some(parent) =
+            stat[after + 1..].split_whitespace().nth(1).and_then(|p| p.parse::<u32>().ok())
+        else {
+            break;
+        };
+        out.push(parent);
+        at = parent;
     }
-
-    /// Stop the build. The install then fails the way any failed build does, and
-    /// `asked` distinguishes that from a build that broke on its own.
-    pub fn stop(&self) -> bool {
-        let pid = self.pid.lock().ok().and_then(|p| *p);
-        match pid {
-            Some(pid) => {
-                self.asked.store(true, std::sync::atomic::Ordering::Relaxed);
-                stop_group(pid);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Whether somebody asked for this to end.
-    pub fn asked(&self) -> bool {
-        self.asked.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    fn holding(&self, pid: Option<u32>) {
-        if let Ok(mut slot) = self.pid.lock() {
-            *slot = pid;
-        }
-    }
-}
-
-/// A `size = "320x200"` field, as a pair.
-fn py_size(src: &str, key: &str) -> Option<(u32, u32)> {
-    let raw = py_string(src, key)?;
-    let (w, h) = raw.split_once(['x', 'X'])?;
-    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
-}
-
-/// The uv binary, if it is installed.
-///
-/// uv rather than venv and pip: this image has neither pip nor `ensurepip`, so the
-/// stock interpreter cannot build a working virtualenv at all, and uv is one static
-/// binary that does it without either. It is also far faster at resolving, which
-/// matters on this board.
-///
-/// PATH is searched, plus the place a manual install puts it, because a service
-/// started by systemd does not necessarily inherit a login shell's PATH.
-/// Where cargo is, for building a Rust app.
-///
-/// Searched rather than assumed, because this runs as a systemd unit whose PATH is
-/// the unit's, not a login shell's: a rustup toolchain lives in a home directory
-/// that PATH knows nothing about, and `Command::new("cargo")` then fails with
-/// ENOENT, which reads as "the app is broken" rather than "the toolchain is not on
-/// the path".
-fn cargo() -> Option<PathBuf> {
-    if let Some(from_env) = std::env::var_os("CARGO").map(PathBuf::from) {
-        if from_env.exists() {
-            return Some(from_env);
-        }
-    }
-    let mut candidates =
-        vec![PathBuf::from("/usr/local/bin/cargo"), PathBuf::from("/usr/bin/cargo")];
-    if let Some(home) = std::env::var_os("HOME") {
-        candidates.insert(0, PathBuf::from(home).join(".cargo/bin/cargo"));
-    }
-    for path in candidates {
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    Command::new("cargo")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .ok()
-        .filter(|s| s.success())
-        .map(|_| PathBuf::from("cargo"))
-}
-
-/// The floor slint 1.17 sets, and with it everything that draws with the
-/// framework. `build-flipctl.sh` checks the same number before it starts.
-const CARGO_MSRV: u32 = 92;
-
-/// The minor version out of `cargo 1.94.1 (...)`.
-fn cargo_minor(version: &str) -> Option<u32> {
-    version.split_whitespace().nth(1)?.strip_prefix("1.")?.split('.').next()?.parse().ok()
-}
-
-/// What a program says its version is.
-fn version_of(program: &std::path::Path) -> Option<String> {
-    let out = Command::new(program)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-fn uv() -> Option<PathBuf> {
-    let candidates = [PathBuf::from("/usr/local/bin/uv"), PathBuf::from("/usr/bin/uv")];
-    for path in candidates {
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    Command::new("uv")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .ok()
-        .filter(|s| s.success())
-        .map(|_| PathBuf::from("uv"))
-}
-
-/// The most recent modification time among an app's sources.
-///
-/// Walks the crate but skips `target`, which is where the binary being compared
-/// against lives: including it would always look newer than itself.
-fn newest_source(dir: &Path) -> Option<std::time::SystemTime> {
-    let mut newest = None;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(at) = stack.pop() {
-        for entry in std::fs::read_dir(&at).ok()?.flatten() {
-            let path = entry.path();
-            if path.file_name().is_some_and(|n| n == "target" || n == ".git") {
-                continue;
-            }
-            let Ok(meta) = entry.metadata() else { continue };
-            if meta.is_dir() {
-                stack.push(path);
-            } else if let Ok(t) = meta.modified() {
-                newest = newest.max(Some(t));
-            }
-        }
-    }
-    newest
-}
-
-/// The file recording what was installed into an app's venv.
-fn venv_stamp(dir: &Path) -> PathBuf {
-    dir.join(VENV).join("flipctl-installed")
+    out
 }
 
 /// What `entry` still needs.
 ///
-/// Blocking: it runs dpkg-query and the interpreter, so callers put it on a
-/// thread rather than in a render loop.
+/// Blocking: it runs dpkg-query, so callers put it on a thread rather than in a
+/// render loop.
 pub fn missing(entry: &AppEntry) -> Missing {
-    let mut m = Missing { apt: missing_apt(&entry.apt), ..Default::default() };
-    if !entry.bin.is_empty() {
-        // Rebuild when the binary is absent or older than any source file. Cargo
-        // decides what actually needs recompiling; this only decides whether to
-        // ask, and asking after every edit is what a person expects.
-        m.needs_build = match entry.binary().metadata().and_then(|m| m.modified()) {
-            Err(_) => true,
-            Ok(built) => newest_source(&entry.dir).is_some_and(|src| src > built),
-        };
-        // Reported, not offered, exactly as `needs_uv` is: the image installs the
-        // toolchain, from backports because trixie's own cargo is too old, so a
-        // machine without one is a machine whose image predates that or has had it
-        // removed. Nothing here can fix that, and saying so up front beats a build
-        // that fails after apt has run for a minute.
-        m.needs_cargo = m.needs_build && cargo().is_none();
-    }
-    if entry.pip.is_empty() {
-        return m;
-    }
-    // The venv is satisfied when it exists and was built for exactly this list.
-    // A stamp rather than asking pip: `pip show` costs a fresh interpreter per
-    // package, and this runs every time an app is opened.
-    let want = {
-        let mut w = entry.pip.clone();
-        w.sort();
-        w.join("\n")
-    };
-    let have = std::fs::read_to_string(venv_stamp(&entry.dir)).unwrap_or_default();
-    if have.trim() != want {
-        m.pip = entry.pip.clone();
-        m.needs_uv = uv().is_none();
-    }
-    m
+    Missing { apt: missing_apt(&entry.apt) }
 }
 
 /// Install what an app needs, reporting progress as lines.
@@ -643,14 +409,8 @@ pub fn missing(entry: &AppEntry) -> Missing {
 /// Blocking and slow: apt reaches the network. `log` is called per output line so
 /// a caller can show it while it runs, which matters because this can take a
 /// minute and a frozen screen looks broken.
-pub fn install(
-    entry: &AppEntry,
-    missing: &Missing,
-    mut log: impl FnMut(String),
-    stop: &Stop,
-) -> Result<(), String> {
-    let apt = missing.apt_all();
-    if !apt.is_empty() {
+pub fn install(missing: &Missing, mut log: impl FnMut(String)) -> Result<(), String> {
+    if !missing.apt.is_empty() {
         // Always update first. A device flashed from a stock image has no package
         // lists at all, and one that has sat for a while has stale ones, so the
         // install fails with "unable to locate package" for a package that is in
@@ -662,109 +422,21 @@ pub fn install(
                 .env("DEBIAN_FRONTEND", "noninteractive"),
             &mut log,
         )?;
-        log(format!("apt: {}", apt.join(" ")));
+        log(format!("apt: {}", missing.apt.join(" ")));
         run_logged(
             Command::new("sudo")
                 .args(["apt-get", "install", "-y", "--no-install-recommends"])
-                .args(&apt)
+                .args(&missing.apt)
                 // Non-interactive: a package that stops to ask a question would
                 // hang here with nobody able to answer it.
                 .env("DEBIAN_FRONTEND", "noninteractive"),
             &mut log,
         )?;
     }
-
-    if missing.needs_build {
-        let Some(cargo) = cargo() else {
-            return Err("cargo is not installed, or not on this service's PATH".into());
-        };
-        // Refuse a toolchain too old to build with, here rather than deep in a
-        // registry download: trixie's own cargo is 1.85 and slint 1.17 needs 1.92,
-        // so a machine whose archive lacks the newer one would otherwise fail with
-        // that complaint repeated for every crate in the graph.
-        if let Some(minor) = version_of(&cargo).as_deref().and_then(cargo_minor) {
-            if minor < CARGO_MSRV {
-                return Err(format!(
-                    "cargo 1.{minor} is too old to build this app, which needs 1.{CARGO_MSRV}"
-                ));
-            }
-        }
-        log(format!("{} build --release", cargo.display()));
-        // Progress, because this is minutes of work with the log as the only thing
-        // on screen. Cargo names each crate as it starts it, so counting those
-        // lines and carrying the clock alongside turns a wall of scrolling text
-        // into something a person can read at a glance: how many crates are done
-        // and how long it has been. Cargo does not say how many there are in
-        // total, so no share of the work is claimed.
-        let started = std::time::Instant::now();
-        let mut crates = 0usize;
-        let mut build_log = |line: String| match line.trim_start().strip_prefix("Compiling ") {
-            Some(what) => {
-                crates += 1;
-                let secs = started.elapsed().as_secs();
-                log(format!("[{crates:3}] {}:{:02} {what}", secs / 60, secs % 60));
-            }
-            None => log(line),
-        };
-        // The one step a person may cut short, so it is the one that runs in its own
-        // process group: cargo starts a rustc per crate, and signalling only cargo would
-        // leave those compiling against a build nobody is waiting for.
-        run_logged_in(
-            Command::new(&cargo)
-                .args(["build", "--release"])
-                .current_dir(&entry.dir)
-                // Cargo colours and redraws its progress, which a line-oriented
-                // log cannot show.
-                .env("CARGO_TERM_COLOR", "never")
-                .env("CARGO_TERM_PROGRESS_WHEN", "never"),
-            &mut build_log,
-            Some(stop),
-        )?;
-        drop(build_log);
-        // Not the end of the job: an app can carry a crate and want Python packages
-        // too, and returning here left it with a binary and no venv.
-        log("built".into());
-    }
-
-    if missing.pip.is_empty() {
-        log("done".into());
-        return Ok(());
-    }
-
-    let Some(uv) = uv() else {
-        return Err("uv is not installed".into());
-    };
-    let venv = entry.dir.join(VENV);
-    let python = venv.join("bin").join("python3");
-    if !python.exists() {
-        log("creating venv".into());
-        run_logged(
-            Command::new(&uv)
-                .arg("venv")
-                .arg(&venv)
-                // The system interpreter, not one uv downloads: an app runs
-                // against the same Python the rest of the device has.
-                .args(["--python", "python3"]),
-            &mut log,
-        )?;
-    }
-
-    log(format!("uv pip: {}", missing.pip.join(" ")));
-    run_logged(
-        Command::new(&uv).args(["pip", "install", "--python"]).arg(&python).args(&missing.pip),
-        &mut log,
-    )?;
-
-    // Record what the venv now holds, so the next launch does not ask again.
-    let mut want = entry.pip.clone();
-    want.sort();
-    std::fs::write(venv_stamp(&entry.dir), want.join("\n"))
-        .map_err(|e| format!("cannot record the install: {e}"))?;
     log("done".into());
     Ok(())
 }
 
-/// Run a command, passing each output line to `log`, and fail on a non-zero exit.
 /// Read one of a child's pipes on a thread, a line at a time, onto a shared channel.
 ///
 /// Generic because stdout and stderr are different types and this is the same job
@@ -785,21 +457,8 @@ fn pump<R: std::io::Read + Send + 'static>(
     });
 }
 
+/// Run a command, passing each output line to `log`, and fail on a non-zero exit.
 fn run_logged(cmd: &mut Command, log: &mut impl FnMut(String)) -> Result<(), String> {
-    run_logged_in(cmd, log, None)
-}
-
-/// `run_logged`, and with a `Stop` the child is put in its own process group and its pid
-/// registered there for the length of the run, so somebody watching the log can end it.
-fn run_logged_in(
-    cmd: &mut Command,
-    log: &mut impl FnMut(String),
-    stop: Option<&Stop>,
-) -> Result<(), String> {
-    use std::os::unix::process::CommandExt;
-    if stop.is_some() {
-        cmd.process_group(0);
-    }
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -810,27 +469,10 @@ fn run_logged_in(
         // with no other context, which says nothing about what to install.
         .map_err(|e| format!("cannot start {}: {e}", cmd.get_program().to_string_lossy()))?;
 
-    // Registered while it runs, and cleared however this returns. A pid left behind would
-    // offer a Stop for something that had already finished, and the next process handed
-    // that number would get the signal meant for it.
-    if let Some(stop) = stop {
-        stop.holding(Some(child.id()));
-    }
-    struct Clear<'a>(Option<&'a Stop>);
-    impl Drop for Clear<'_> {
-        fn drop(&mut self) {
-            if let Some(stop) = self.0 {
-                stop.holding(None);
-            }
-        }
-    }
-    let _clear = Clear(stop);
-
     // Both pipes, on threads of their own, onto one channel. stderr is where the
-    // interesting output is: apt and pip report their problems there and cargo
-    // names every crate it compiles there, so collecting it to print at the end
-    // left the screen still for the length of a build. A reader per pipe also
-    // means neither can fill and block the other.
+    // interesting output is: apt reports its problems there, so collecting it to
+    // print at the end left the screen still for the length of an install. A reader
+    // per pipe also means neither can fill and block the other.
     let (tx, lines) = std::sync::mpsc::channel::<(bool, String)>();
     pump(child.stdout.take(), false, &tx);
     pump(child.stderr.take(), true, &tx);
@@ -853,11 +495,10 @@ fn run_logged_in(
         log(line);
     }
     let status = child.wait().map_err(|e| e.to_string())?;
-    let stderr = tail;
     if status.success() {
         Ok(())
     } else {
-        Err(stderr
+        Err(tail
             .iter()
             .rev()
             .find(|l| !l.trim().is_empty())
@@ -867,7 +508,7 @@ fn run_logged_in(
 }
 
 #[cfg(test)]
-mod summary_tests {
+mod tests {
     use super::*;
 
     /// A program that is not there says which one, since the log screen is all
@@ -880,38 +521,65 @@ mod summary_tests {
         assert!(err.starts_with("cannot start definitely-not-a-program:"), "{err}");
     }
 
-    /// The version gate, which is what turns "the archive did not have it" into a
-    /// sentence rather than a build that dies in a registry download.
     #[test]
-    fn a_cargo_version_is_read_and_compared() {
-        assert_eq!(cargo_minor("cargo 1.94.1 (29ea6fb6a 2026-03-24)"), Some(94));
-        assert_eq!(cargo_minor("cargo 1.85.0+dfsg3-1"), Some(85));
-        assert!(cargo_minor("cargo 1.85.0").unwrap() < CARGO_MSRV);
-        assert!(cargo_minor("cargo 1.94.1").unwrap() >= CARGO_MSRV);
-        // Something that is not a version reports nothing rather than 0, which
-        // would read as "far too old" and refuse a toolchain that works.
-        assert_eq!(cargo_minor("cargo"), None);
-        assert_eq!(cargo_minor("nonsense"), None);
+    fn the_summary_counts_packages() {
+        let mut m = Missing::default();
+        assert!(m.is_empty());
+        assert_eq!(m.summary(), "");
+        m.apt = vec!["libfoo".into()];
+        assert_eq!(m.summary(), "1 package: libfoo");
+        m.apt.push("libbar".into());
+        assert_eq!(m.summary(), "2 packages: libfoo, libbar");
     }
 
+    /// The window's owner is a grandchild of what flipctl started, so the chain
+    /// upward has to be readable. This process's parent is the first link.
     #[test]
-    fn the_question_names_a_toolchain_when_there_is_none() {
-        let mut m = Missing::default();
-        m.needs_build = true;
-        assert_eq!(m.summary(), "a build");
-        m.needs_cargo = true;
-        assert_eq!(m.summary(), "a build, which needs a Rust toolchain this machine has not got");
-        // Alongside an app's own packages, which are still offered: only the
-        // toolchain is beyond our reach.
-        m.apt = vec!["libfoo".into()];
+    fn ancestors_walk_up_to_init() {
+        let mine = std::process::id();
+        let up = ancestors(mine);
+        let parent = unsafe { libc::getppid() } as u32;
+        assert_eq!(up.first(), Some(&parent), "{up:?}");
+        assert!(up.last().is_some_and(|p| *p <= 1 || up.len() == 64), "{up:?}");
+        assert!(ancestors(1).is_empty());
+    }
+
+    /// A launcher is found by what it provides, and its absence is a sentence.
+    #[test]
+    fn a_runtime_names_its_launcher_or_its_absence() {
+        let python =
+            AppEntry { name: "Python".into(), provides: "python".into(), ..Default::default() };
+        let script =
+            AppEntry { name: "Script".into(), runtime: "python".into(), ..Default::default() };
+        let plain = AppEntry::default();
+        let apps = vec![python.clone(), script.clone()];
+        assert_eq!(launcher_for(&apps, &plain), Ok(None));
+        assert_eq!(launcher_for(&apps, &script).unwrap().map(|l| &l.name), Some(&python.name));
         assert_eq!(
-            m.summary(),
-            "1 package: libfoo and a build, which needs a Rust toolchain this machine has not got"
+            launcher_for(&[script.clone()], &script),
+            Err("needs the python runtime, which is not installed".into())
         );
-        let mut m = Missing::default();
-        m.apt = vec!["libfoo".into(), "libbar".into()];
-        assert_eq!(m.summary(), "2 packages: libfoo, libbar");
-        // Nothing wanted at all is still nothing.
-        assert!(Missing::default().is_empty());
+    }
+
+    /// A space in a file name stays inside one shell word, with or without a launcher.
+    #[test]
+    fn the_launch_line_quotes_the_bundle() {
+        let app = AppEntry {
+            bundle: PathBuf::from("/home/user/Apps/My Radio.AppImage"),
+            ..Default::default()
+        };
+        assert_eq!(app.launch_line(None), "'/home/user/Apps/My Radio.AppImage'");
+        let via = AppEntry {
+            bundle: PathBuf::from("/home/user/Apps/python.AppImage"),
+            ..Default::default()
+        };
+        assert_eq!(
+            app.launch_line(Some(&via)),
+            "'/home/user/Apps/python.AppImage' '/home/user/Apps/My Radio.AppImage'"
+        );
+        let (program, args) = app.command();
+        assert_eq!(program, Path::new("/bin/sh"));
+        assert_eq!(args[0], Path::new("-c"));
+        assert_eq!(args[1], Path::new("'/home/user/Apps/My Radio.AppImage'"));
     }
 }

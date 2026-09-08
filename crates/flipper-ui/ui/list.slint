@@ -13,6 +13,10 @@ export struct ListItem {
     status: string,
     // 0 none, else 1-based index into the icon table below.
     icon: int,
+    // An icon of the row's own, loaded at runtime: an app's, read out of its bundle.
+    // Takes the place of `icon` when set. Same shape as the table's: 14px wide, the
+    // alpha is the shape, and a strip of 14px frames animates.
+    picture: image,
     // Frames in the icon's animated strip, 1 for a static icon.
     frames: int,
     // 0 plain status, 1 an ON/OFF toggle, 2 an adjustable value. The prototype
@@ -144,6 +148,7 @@ component MenuLine inherits Rectangle {
     in property <bool> selected;
     in property <bool> pressed;
     in property <int> icon;
+    in property <image> picture;
     in property <int> frames: 1;
     // Advances every icon_frame_ms while a row is active. Driven from the render
     // loop rather than animation-tick() so the loop knows to repaint.
@@ -172,7 +177,9 @@ component MenuLine inherits Rectangle {
         ? Math.mod(root.tick + 1, root.frames)
         : 0;
 
-    if root.icon > 0: Image {
+    property <bool> has_picture: root.picture.width > 0;
+
+    if root.icon > 0 || root.has_picture: Image {
         x: FlipperTheme.icon_pad;
         y: FlipperTheme.icon_pad;
         width: 14px;
@@ -181,7 +188,8 @@ component MenuLine inherits Rectangle {
         source-clip-y: root.frame * 14;
         source-clip-width: 14;
         source-clip-height: 14;
-        source: root.icon == 1 ? @image-url("../assets/icons/desktop_computer.png")
+        source: root.has_picture ? root.picture
+            : root.icon == 1 ? @image-url("../assets/icons/desktop_computer.png")
             : root.icon == 2 ? @image-url("../assets/icons/flipper_os.png")
             : root.icon == 3 ? @image-url("../assets/icons/apps_animated.png")
             : root.icon == 4 ? @image-url("../assets/icons/files_animated.png")
@@ -351,6 +359,7 @@ export component MenuBody inherits Rectangle {
             label: item.label;
             status: item.status;
             icon: item.icon;
+            picture: item.picture;
             frames: item.frames;
             tick: root.tick;
             selected: i == root.selected;

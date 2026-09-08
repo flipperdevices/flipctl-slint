@@ -21,6 +21,12 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // Hand a bundle to the flipctl that owns the panel. What a bundle's AppRun does
+    // when a desktop starts it, so it is in every build.
+    if args.first().map(String::as_str) == Some("open") {
+        return open_bundle(args.get(1).map(String::as_str));
+    }
+
     let result = if has("--panel") || has("--headless") || has("--wayland") {
         let frames = value("--frames").and_then(|v| v.parse::<u64>().ok());
         // Set before anything opens a device: the GPU path reads it when it loads
@@ -67,12 +73,49 @@ fn main() -> ExitCode {
     }
 }
 
+/// `flipctl open FILE`: the desktop side of the hand-off.
+///
+/// Exit 0 when the app is on the panel, 1 when flipctl refused, 2 when nothing is
+/// listening, so AppRun can tell the three apart.
+fn open_bundle(path: Option<&str>) -> ExitCode {
+    use flipper_ui::ipc::{send, Reply, Request};
+    let Some(path) = path else {
+        eprintln!("usage: flipctl open FILE");
+        return ExitCode::from(1);
+    };
+    let path = match std::fs::canonicalize(path) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("flipctl: {path}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    match send(&Request::Open(path)) {
+        Reply::Ok(what) => {
+            eprintln!("ok {what}");
+            ExitCode::SUCCESS
+        }
+        Reply::Refused(why) => {
+            eprintln!("flipctl: {why}");
+            ExitCode::from(1)
+        }
+        Reply::NotRunning => {
+            eprintln!("flipctl: not running");
+            ExitCode::from(2)
+        }
+    }
+}
+
 /// The app list and an app form supply their own soft labels; the list has none.
 #[cfg(feature = "slint")]
 const EMPTY_BUTTONS: [String; 0] = [];
 
 const USAGE: &str = "\
 usage: flipctl [--panel [--kms-device PATH]] [--png PATH]
+       flipctl open FILE
+
+  open FILE      put an AppImage on the panel through the running flipctl, which
+                 is what a bundle's AppRun does when a desktop starts it
 
   --panel        drive the real 256x144 SPI panel and its buttons
   --wayland      present to the compositor that owns the panel, and take its keys
@@ -162,7 +205,7 @@ mod demo {
     /// since a status provider reads that.
     /// Whether an app can be hosted at all: a compositor to run it in, and the code
     /// to drive one.
-    fn can_host_apps() -> bool {
+    pub fn can_host_apps() -> bool {
         #[cfg(feature = "wayland")]
         {
             flipper_ui::sway::available()
@@ -201,6 +244,7 @@ mod demo {
                     label: r.label.into(),
                     status: status.as_str().into(),
                     icon: r.icon,
+                    picture: Default::default(),
                     frames: r.frames,
                     chevrons,
                     value: value.as_str().into(),
@@ -1546,6 +1590,7 @@ struct WlApp {
 #[cfg(all(feature = "device", feature = "slint", feature = "wayland"))]
 fn start_hosted(
     entry: &flipper_ui::app::AppEntry,
+    apps: &[flipper_ui::app::AppEntry],
     host: &mut Option<flipper_ui::sway::Host>,
     running: &mut Vec<WlApp>,
 ) -> Option<String> {
@@ -1554,6 +1599,20 @@ fn start_hosted(
     if running.iter().any(|a| a.name == entry.name) {
         eprintln!("app            front is {} (already running)", entry.name);
         return Some(entry.name.clone());
+    }
+    // An app run through a runtime needs the bundle that provides it.
+    let via = match flipper_ui::app::launcher_for(apps, entry) {
+        Ok(via) => via,
+        Err(e) => {
+            eprintln!("app            {} {e}", entry.name);
+            return None;
+        }
+    };
+    // Somewhere writable to run in: the bundle itself is a read-only image.
+    let work = entry.work_dir();
+    if let Err(e) = std::fs::create_dir_all(&work) {
+        eprintln!("app            {}: cannot make {}: {e}", entry.name, work.display());
+        return None;
     }
 
     // The compositor starts with the first app rather than with flipctl: a device that
@@ -1586,15 +1645,18 @@ fn start_hosted(
     let (dir, display) = host.display();
     let (dir, display) = (dir.to_path_buf(), display.to_string());
 
+    // The manifest's own environment last, so it can override what the launch adds.
+    let mut env = flipper_ui::bundle::launch_env();
+    env.extend(entry.env.iter().cloned());
     match flipper_ui::wl::Session::attach(
         &dir,
         &display,
         &place.output,
-        &entry.wayland,
-        &entry.dir,
+        &entry.launch_line(via),
+        &work,
         w,
         h,
-        &entry.env,
+        &env,
         entry.audio,
     ) {
         Ok(session) => {
@@ -1890,19 +1952,6 @@ fn apply_text_input(
     screen.set_kb_discard(input.discard.map_or(-1, |at| at as i32));
 }
 
-/// What starting an install is called, given what the app still needs.
-///
-/// A Rust app that only wants compiling is a build, because calling that "0 packages"
-/// says nothing. Shared by the dialog that asks and by the log that offers it again, so
-/// the same act cannot be called two different things on two screens.
-fn install_verb(m: &flipper_ui::app::Missing) -> &'static str {
-    if m.apt_all().is_empty() && m.pip.is_empty() && m.needs_build {
-        "Build"
-    } else {
-        "Install"
-    }
-}
-
 /// The package names, wrapped to lines that fit the dialog.
 ///
 /// Measured against the frame's inner width with the real advance table, because a
@@ -1910,16 +1959,13 @@ fn install_verb(m: &flipper_ui::app::Missing) -> &'static str {
 /// At most three lines, so the dialog cannot grow past its frame; anything beyond
 /// that is summarised.
 #[cfg(feature = "slint")]
-fn dialog_wrap(apt: &[String], pip: &[String]) -> Vec<String> {
+fn dialog_wrap(apt: &[String]) -> Vec<String> {
     use flipper_ui::font::TITLE;
     use flipper_ui::theme::metric::{MODAL_W, PAD_LEFT};
 
     const MAX_LINES: usize = 3;
     let budget = (MODAL_W - 2 * PAD_LEFT) as u16;
-    // pip packages are marked, because "requests" from pip and from apt are not
-    // the same thing and the user is being asked to approve one of them.
-    let names: Vec<String> =
-        apt.iter().cloned().chain(pip.iter().map(|p| format!("{p} (pip)"))).collect();
+    let names: Vec<String> = apt.to_vec();
 
     let mut lines: Vec<String> = Vec::new();
     for name in &names {
@@ -1983,13 +2029,26 @@ fn app_rows(apps: &[flipper_ui::AppEntry], path: &[String]) -> Vec<AppRow> {
 
 /// What each row reads as: a folder says how many apps are inside it.
 #[cfg(feature = "slint")]
-fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow]) -> Vec<(String, String)> {
+struct AppLabel {
+    label: String,
+    status: String,
+    /// The app's own icon, a PNG kept beside its manifest. None for a folder or an
+    /// app without one.
+    icon: Option<std::path::PathBuf>,
+}
+
+#[cfg(feature = "slint")]
+fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow]) -> Vec<AppLabel> {
     rows.iter()
         .map(|row| match row {
-            AppRow::Folder(name, count) => (name.clone(), count.to_string()),
-            AppRow::App(at) => {
-                (apps.get(*at).map_or_else(String::new, |a| a.name.clone()), String::new())
+            AppRow::Folder(name, count) => {
+                AppLabel { label: name.clone(), status: count.to_string(), icon: None }
             }
+            AppRow::App(at) => AppLabel {
+                label: apps.get(*at).map_or_else(String::new, |a| a.name.clone()),
+                status: String::new(),
+                icon: apps.get(*at).and_then(|a| a.icon_path()),
+            },
         })
         .collect()
 }
@@ -2003,11 +2062,42 @@ fn app_trail(path: &[String]) -> String {
     path.iter().map(|folder| format!("> {folder}")).collect::<Vec<_>>().join(" ")
 }
 
+/// A row's icon from an app's PNG, the shape the menu's own icons have: 14px wide,
+/// the alpha is the shape, and a strip of 14px frames animates while the row is
+/// selected. Decoded here rather than by Slint, whose image decoders this build
+/// leaves out; a 14px icon is nothing to decode on every visit to the list.
+#[cfg(feature = "slint")]
+fn load_icon(path: &std::path::Path) -> Option<(slint::Image, i32)> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    decoder.set_transformations(
+        png::Transformations::normalize_to_color8() | png::Transformations::ALPHA,
+    );
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let pixels = &buf[..info.buffer_size()];
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => pixels.to_vec(),
+        png::ColorType::GrayscaleAlpha => {
+            pixels.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect()
+        }
+        _ => return None,
+    };
+    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+        &rgba,
+        info.width,
+        info.height,
+    );
+    let frames = if info.width > 0 { (info.height / info.width).max(1) } else { 1 };
+    Some((slint::Image::from_rgba8(buffer), frames as i32))
+}
+
 /// Show the list of apps on the shared list body.
 #[cfg(feature = "slint")]
 fn apply_app_list(
     screen: &flipper_ui::ui::Root,
-    rows: &[(String, String)],
+    rows: &[AppLabel],
     selected: i32,
     buttons: &[String],
     // First visible row: the list owns every row, so it scrolls here.
@@ -2017,17 +2107,20 @@ fn apply_app_list(
 ) {
     let items: Vec<flipper_ui::ui::ListItem> = rows
         .iter()
-        .map(|(label, status)| flipper_ui::ui::ListItem {
-            label: label.as_str().into(),
-            status: status.as_str().into(),
-            // Apps have no icons yet. The column stays reserved so a manifest can
-            // name one later without the labels shifting.
-            icon: 0,
-            frames: 1,
-            chevrons: 0,
-            value: Default::default(),
-            at_start: false,
-            at_end: false,
+        .map(|row| {
+            let (picture, frames) =
+                row.icon.as_deref().and_then(load_icon).unwrap_or((Default::default(), 1));
+            flipper_ui::ui::ListItem {
+                label: row.label.as_str().into(),
+                status: row.status.as_str().into(),
+                icon: 0,
+                picture,
+                frames,
+                chevrons: 0,
+                value: Default::default(),
+                at_start: false,
+                at_end: false,
+            }
         })
         .collect();
     screen.set_app_breadcrumb(app_trail(path).as_str().into());
@@ -2483,13 +2576,21 @@ fn panel(
     let mut sensor_poll = Instant::now();
     let mut link_poll = Instant::now();
 
-    // Apps live next to the binary's workspace root, so a deployed tree finds
-    // them without configuration.
-    // Re-read whenever the Apps screen opens, so an app copied onto the device
-    // shows up without restarting this. Discovery is a directory listing and a
-    // manifest scan per app, which is nothing next to opening a menu.
-    let apps_dir = std::path::PathBuf::from("apps");
-    let mut apps = flipper_ui::app::discover(&apps_dir);
+    // The socket a desktop hands a bundle to. Not fatal without it: the panel is the
+    // product and the hand-off a convenience.
+    let mut ipc = match flipper_ui::ipc::Listener::bind() {
+        Ok(listener) => Some(listener),
+        Err(e) => {
+            eprintln!("ipc            not listening: {e}");
+            None
+        }
+    };
+
+    // The bundles in the user's Apps folder. Re-read whenever the Apps screen opens,
+    // so a file copied onto the device shows up without restarting this. Discovery
+    // is a directory listing and a stat per bundle, which is nothing next to opening
+    // a menu: a bundle is opened only the first time it is seen.
+    let mut apps = flipper_ui::bundle::discover(&flipper_ui::bundle::root());
     eprintln!(
         "apps           {} found: {:?}",
         apps.len(),
@@ -2598,13 +2699,11 @@ fn panel(
         Checking(i32, std::sync::mpsc::Receiver<flipper_ui::app::Missing>),
         /// The dialog is up, waiting for an answer.
         Asking(i32, flipper_ui::app::Missing),
-        /// Installing, with output arriving, a result at the end, and a handle on the
-        /// one step that may be cut short.
+        /// Installing, with output arriving and a result at the end.
         Installing(
             i32,
             std::sync::mpsc::Receiver<String>,
             std::sync::mpsc::Receiver<Result<(), String>>,
-            flipper_ui::app::Stop,
         ),
         /// Finished, with the log left on screen.
         Done(i32, Result<(), String>),
@@ -2615,19 +2714,15 @@ fn panel(
     // Stick to the tail while output arrives, until the user scrolls back. Same
     // behaviour as an app's own log: watch it live, or read what went past.
     let mut deps_follow = true;
-    // Whether the user has walked away from the install's log. The build keeps running and
-    // its lines keep arriving; this only says the panel is showing something else, which is
-    // what makes a twenty-minute compile survivable. The app's card in the deck brings it
-    // back, and so does its row.
+    // Whether the user has walked away from the install's log. apt keeps running and
+    // its lines keep arriving; this only says the panel is showing something else, which
+    // is what makes a long install survivable. The app's card in the deck brings it back,
+    // and so does its row.
     let mut deps_detached = false;
-    // Whether the build that just ended was ended on purpose. A stopped build fails like
-    // any other, and saying "Failed" for something the user asked to stop reads as a bug
-    // in the app rather than an answer to a keypress.
-    let mut deps_stopped = false;
-    // What the install was asked to do, kept so it can be asked again. A build that was
-    // stopped, or that failed, is the case: the answer has not changed, and making the
-    // user walk back out to the list and in again to say the same thing is a worse
-    // answer than a key on the screen they are already looking at.
+    // What the install was asked to do, kept so it can be asked again. An install that
+    // failed is the case: the answer has not changed, and making the user walk back out
+    // to the list and in again to say the same thing is a worse answer than a key on the
+    // screen they are already looking at.
     let mut deps_missing: Option<flipper_ui::app::Missing> = None;
 
     // The boot menu, while it is open. All of it -- the profiles, the cursor, the
@@ -2662,25 +2757,17 @@ fn panel(
     // Install and the log's Retry come through here, so a retry cannot drift from a
     // first attempt.
     macro_rules! start_install {
-        ($idx:expr, $entry:expr, $missing:expr) => {{
+        ($idx:expr, $missing:expr) => {{
             let (log_tx, log_rx) = std::sync::mpsc::channel();
             let (done_tx, done_rx) = std::sync::mpsc::channel();
-            let stop = flipper_ui::app::Stop::default();
-            let theirs = stop.clone();
-            let entry = $entry;
             let m = $missing;
             let mine = m.clone();
             std::thread::Builder::new()
                 .name("dep-install".into())
                 .spawn(move || {
-                    let r = flipper_ui::app::install(
-                        &entry,
-                        &m,
-                        |line| {
-                            let _ = log_tx.send(line);
-                        },
-                        &theirs,
-                    );
+                    let r = flipper_ui::app::install(&m, |line| {
+                        let _ = log_tx.send(line);
+                    });
                     let _ = done_tx.send(r);
                 })
                 .ok();
@@ -2688,9 +2775,8 @@ fn panel(
             deps_offset = 0;
             deps_follow = true;
             deps_detached = false;
-            deps_stopped = false;
             deps_missing = Some(mine);
-            deps = Some(Deps::Installing($idx, log_rx, done_rx, stop));
+            deps = Some(Deps::Installing($idx, log_rx, done_rx));
         }};
     }
 
@@ -2720,6 +2806,34 @@ fn panel(
                 None => None,
             }
         };
+    }
+
+    // Set the app at this index going: check what it needs, on a thread, and put its
+    // card in the deck. Ok on its row and a desktop handing its bundle over both come
+    // through here, so the two cannot drift.
+    macro_rules! begin_app {
+        ($at:expr) => {{
+            let at: i32 = $at;
+            if let Some(entry) = apps.get(at as usize).cloned() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let for_check = entry.clone();
+                std::thread::Builder::new()
+                    .name("dep-check".into())
+                    .spawn(move || {
+                        let _ = tx.send(flipper_ui::app::missing(&for_check));
+                    })
+                    .ok();
+                let front = front_card(pending_front!(), open_screen(screen.get_screen(), &stack));
+                stash_front(&mut recents, front, &frame);
+                // In the stack from the moment it is started, not from the moment it
+                // succeeds: an app waiting on an install is something the user set
+                // going, and its card is how they get back to the question.
+                recents.open(&entry.name, flipper_ui::switcher::Kind::App);
+                deps = Some(Deps::Checking(at, rx));
+                deps_log.clear();
+                deps_offset = 0;
+            }
+        }};
     }
 
     // The Wi-Fi page: where the cursor is, what is polling for it, and whichever
@@ -3056,6 +3170,88 @@ fn panel(
     };
 
     loop {
+        // A desktop handing a bundle over: list it, start it or front it, and answer.
+        // The reply says what was accepted, not what came of it: the outcome shows on
+        // the panel as it does for a launch from the list.
+        while let Some(req) = ipc.as_mut().and_then(|l| l.poll()) {
+            let path = match req.request.clone() {
+                flipper_ui::ipc::Request::Ping => {
+                    req.ok("flipctl");
+                    continue;
+                }
+                flipper_ui::ipc::Request::Open(path) => path,
+            };
+            if !demo::can_host_apps() {
+                req.err("cannot host apps");
+                continue;
+            }
+            // A file copied a second ago is listed too.
+            apps = flipper_ui::bundle::discover(&flipper_ui::bundle::root());
+            let at = match apps.iter().position(|a| a.bundle == path) {
+                Some(at) => at,
+                None => match flipper_ui::bundle::read(&path, &[]) {
+                    Ok(entry) => {
+                        apps.push(entry);
+                        apps.len() - 1
+                    }
+                    Err(flipper_ui::bundle::Skip::Stock) => {
+                        req.err("not a flipctl app");
+                        continue;
+                    }
+                    Err(flipper_ui::bundle::Skip::NotAppImage) => {
+                        req.err("not an AppImage");
+                        continue;
+                    }
+                    Err(flipper_ui::bundle::Skip::Unreadable(_)) => {
+                        req.err("not found");
+                        continue;
+                    }
+                },
+            };
+            let name = apps[at].name.clone();
+            // Already on the panel: to the front, as its card would bring it.
+            #[cfg(feature = "wayland")]
+            if wl_apps.iter().any(|a| a.name == name) {
+                switcher = None;
+                wl_front = Some(name.clone());
+                wl_since = Instant::now();
+                wl_drawn = false;
+                wl_fresh = true;
+                screen.set_screen(Screen::Apps);
+                launched_from = Screen::Apps;
+                recents.open(&name, flipper_ui::switcher::Kind::App);
+                eprintln!("app            front is {name} (opened from a desktop)");
+                req.ok(&format!("front {name}"));
+                continue;
+            }
+            // Its install is under way: the answer is already on the panel.
+            if deps.is_some() && pending_app!() == Some(name.as_str()) {
+                deps_detached = false;
+                req.ok(&format!("queued {name}"));
+                continue;
+            }
+            // The list open on the app's own folder, with it selected, so an install
+            // question lands where a press on its row would have put it.
+            switcher = None;
+            app_path = apps[at].group.clone();
+            let rows = app_rows(&apps, &app_path);
+            app_selected =
+                rows.iter().position(|r| matches!(r, AppRow::App(i) if *i == at)).unwrap_or(0)
+                    as i32;
+            app_scroll = 0;
+            apply_app_list(
+                &screen,
+                &app_labels(&apps, &rows),
+                app_selected,
+                &EMPTY_BUTTONS,
+                app_scroll,
+            );
+            screen.set_screen(Screen::Apps);
+            eprintln!("app            {name} opened from a desktop");
+            begin_app!(at as i32);
+            req.ok(&format!("starting {name}"));
+        }
+
         #[cfg(feature = "remote")]
         if let Some(view) = web.as_mut() {
             // A browser opening mid-idle needs the screen as it stands; nothing
@@ -3713,13 +3909,13 @@ fn panel(
             if let Some(stage) = deps.as_ref().filter(|_| !deps_detached) {
                 match stage {
                     Deps::Checking(..) => continue,
-                    Deps::Installing(_, _, _, stop) => {
+                    Deps::Installing(..) => {
                         // Scroll, or leave. What must not happen is cancelling: an apt run
                         // stopped halfway leaves packages half configured. Leaving is not
                         // cancelling -- the install has its own thread and keeps sending
-                        // lines into deps_log -- and a build that takes twenty minutes
-                        // cannot hold the panel for twenty minutes. Back is labelled on
-                        // this screen, so it has to do something.
+                        // lines into deps_log -- and a slow install cannot hold the panel
+                        // for its whole length. Back is labelled on this screen, so it has
+                        // to do something.
                         match event.key {
                             FlipperKey::Down => deps_offset += 1,
                             FlipperKey::Up => {
@@ -3730,8 +3926,8 @@ fn panel(
                                 // The card is what leads back here, so it gets the log as
                                 // it looked when it was put aside. Without this the tile
                                 // carries whatever it was last given -- nothing at all for
-                                // a build started from the row, since the app has no output
-                                // to draw one from and never will until it is built.
+                                // an install started from the row, since the app has no
+                                // output to draw one from yet.
                                 stash_front(
                                     &mut recents,
                                     pending_app!().map(str::to_string),
@@ -3740,19 +3936,6 @@ fn panel(
                                 deps_detached = true;
                                 screen.set_screen(Screen::Apps);
                                 eprintln!("app            left the install log; it keeps going");
-                            }
-                            // Under the rightmost label, and only there: apt never
-                            // registers with the handle, so while packages are going in
-                            // this offers nothing and says so rather than half-doing it.
-                            FlipperKey::Run => {
-                                if stop.stop() {
-                                    deps_stopped = true;
-                                    eprintln!("app            stopping the build");
-                                } else {
-                                    eprintln!(
-                                        "app            nothing to stop: apt is not                                          interruptible"
-                                    );
-                                }
                             }
                             _ => {}
                         }
@@ -3764,16 +3947,17 @@ fn panel(
                         match event.key {
                             FlipperKey::Down => deps_offset += 1,
                             FlipperKey::Up => deps_offset = (deps_offset - 1).max(0),
-                            // A stopped or failed install, started again from here under
-                            // the same word the dialog used: the key that offered Stop
-                            // while it ran. Without it the way back to a build is out to
-                            // the list and in again, answering a question already
-                            // answered.
+                            // A failed install, started again from here under the same
+                            // word the dialog used. Without it the way back is out to the
+                            // list and in again, answering a question already answered.
                             FlipperKey::Run if !ok => {
                                 match (apps.get(idx as usize).cloned(), deps_missing.clone()) {
                                     (Some(entry), Some(m)) => {
-                                        eprintln!("app            building {} again", entry.name);
-                                        start_install!(idx, entry, m);
+                                        eprintln!(
+                                            "app            installing for {} again",
+                                            entry.name
+                                        );
+                                        start_install!(idx, m);
                                     }
                                     // Nothing kept to repeat, so ask from the top rather
                                     // than guess at what was needed.
@@ -3805,7 +3989,8 @@ fn panel(
                                         launched_from = Screen::Apps;
                                         #[cfg(feature = "wayland")]
                                         {
-                                            wl_front = start_hosted(entry, &mut host, &mut wl_apps);
+                                            wl_front =
+                                                start_hosted(entry, &apps, &mut host, &mut wl_apps);
                                             wl_since = Instant::now();
                                             wl_drawn = false;
                                             wl_fresh = true;
@@ -4397,11 +4582,7 @@ fn panel(
                     if d.act == DialogAct::InstallDeps {
                         match (slot, deps.take()) {
                             // Install: run it, streaming output to the log.
-                            (Some(4), Some(Deps::Asking(idx, m))) => {
-                                if let Some(entry) = apps.get(idx as usize).cloned() {
-                                    start_install!(idx, entry, m);
-                                }
-                            }
+                            (Some(4), Some(Deps::Asking(idx, m))) => start_install!(idx, m),
                             // Cancel, or a dialog with nothing behind it. The app
                             // never started, so its card goes: a card that leads
                             // back to a question nobody is asking any more is a
@@ -4597,27 +4778,7 @@ fn panel(
                         eprintln!("app            back to the install log");
                         continue;
                     }
-                    if let Some(entry) = apps.get(at as usize).cloned() {
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        let for_check = entry.clone();
-                        std::thread::Builder::new()
-                            .name("dep-check".into())
-                            .spawn(move || {
-                                let _ = tx.send(flipper_ui::app::missing(&for_check));
-                            })
-                            .ok();
-                        let front =
-                            front_card(pending_front!(), open_screen(screen.get_screen(), &stack));
-                        stash_front(&mut recents, front, &frame);
-                        // In the stack from the moment it is started, not from the
-                        // moment it succeeds: an app waiting to be built is
-                        // something the user set going, and its card is how they
-                        // get back to the question.
-                        recents.open(&entry.name, flipper_ui::switcher::Kind::App);
-                        deps = Some(Deps::Checking(at, rx));
-                        deps_log.clear();
-                        deps_offset = 0;
-                    }
+                    begin_app!(at);
                 } else if key == FlipperKey::View && screen.get_screen() == Screen::Idle {
                     screen.set_screen(Screen::Menu);
                     eprintln!("screen         menu");
@@ -4644,9 +4805,9 @@ fn panel(
                             eprintln!("menu           {}", next.title);
                         }
                         demo::Act::Apps => {
-                            // Read the directory again: an app copied onto the
+                            // Read the folder again: a bundle copied onto the
                             // device between two visits belongs in this list.
-                            apps = flipper_ui::app::discover(&apps_dir);
+                            apps = flipper_ui::bundle::discover(&flipper_ui::bundle::root());
                             // Opened at the top, whatever folder was last looked in:
                             // the list is entered from the menu, and arriving deep
                             // inside it with no sign of where would read as a bug.
@@ -5046,7 +5207,7 @@ fn panel(
                             launched_from = Screen::Apps;
                             #[cfg(feature = "wayland")]
                             {
-                                wl_front = start_hosted(entry, &mut host, &mut wl_apps);
+                                wl_front = start_hosted(entry, &apps, &mut host, &mut wl_apps);
                                 wl_since = Instant::now();
                                 wl_drawn = false;
                                 wl_fresh = true;
@@ -5069,27 +5230,19 @@ fn panel(
                         m.summary()
                     );
                     // Name what is being agreed to: consenting to an install
-                    // without being told what is not consent. A Rust app that only
-                    // needs compiling is asked about as a build, because calling
-                    // that "0 packages" says nothing.
-                    let apt = m.apt_all();
-                    let count = apt.len() + m.pip.len();
-                    let mut lines = Vec::new();
-                    let right = install_verb(&m);
-                    if count == 0 && m.needs_build {
-                        lines.push("Build this app?".to_string());
-                        lines.push("20 minutes the first time,".to_string());
-                        lines.push("a couple of minutes after.".to_string());
-                    } else {
-                        lines.push(format!(
-                            "Install {count} package{}{}?",
-                            if count == 1 { "" } else { "s" },
-                            if m.needs_build { " and build" } else { "" }
-                        ));
-                        lines.extend(dialog_wrap(&apt, &m.pip));
-                    }
-                    dialog =
-                        Some(Dialog { lines, left: "Cancel", right, act: DialogAct::InstallDeps });
+                    // without being told what is not consent.
+                    let count = m.apt.len();
+                    let mut lines = vec![format!(
+                        "Install {count} package{}?",
+                        if count == 1 { "" } else { "s" }
+                    )];
+                    lines.extend(dialog_wrap(&m.apt));
+                    dialog = Some(Dialog {
+                        lines,
+                        left: "Cancel",
+                        right: "Install",
+                        act: DialogAct::InstallDeps,
+                    });
                     deps = Some(Deps::Asking(idx, m));
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -5097,7 +5250,7 @@ fn panel(
                 }
                 Err(_) => {}
             },
-            Some(Deps::Installing(idx, log_rx, done_rx, stop)) => {
+            Some(Deps::Installing(idx, log_rx, done_rx)) => {
                 while let Ok(line) = log_rx.try_recv() {
                     deps_log.extend(wrap_log(&line));
                 }
@@ -5134,7 +5287,7 @@ fn panel(
                         deps = Some(Deps::Done(idx, result));
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        deps = Some(Deps::Installing(idx, log_rx, done_rx, stop));
+                        deps = Some(Deps::Installing(idx, log_rx, done_rx));
                     }
                     Err(_) => deps = Some(Deps::Done(idx, Err("install thread died".into()))),
                 }
@@ -5170,13 +5323,9 @@ fn panel(
                 .map(|l| slint::SharedString::from(l.as_str()))
                 .collect();
             let done = matches!(deps, Some(Deps::Done(_, Ok(()))));
-            // Only a build offers a Stop, so the label appears when one is running and
-            // goes away for the apt and pip steps around it.
-            let stoppable = matches!(&deps, Some(Deps::Installing(_, _, _, s)) if s.offered());
             screen.set_app_title(
                 match &deps {
                     Some(Deps::Done(_, Ok(()))) => "Ready",
-                    Some(Deps::Done(_, Err(_))) if deps_stopped => "Stopped",
                     Some(Deps::Done(_, Err(_))) => "Failed",
                     _ => "Working",
                 }
@@ -5185,17 +5334,13 @@ fn panel(
             screen.set_app_lines(slint::ModelRc::new(slint::VecModel::from(window)));
             screen.set_app_log_total(total);
             screen.set_app_log_offset(deps_offset);
-            // A stopped or failed install offers the same key it was started with, and
-            // the same word: back to Build, not on to something called Retry.
-            let again = matches!(&deps, Some(Deps::Done(_, Err(_))))
-                .then(|| deps_missing.as_ref().map(install_verb))
-                .flatten();
+            // A failed install offers the same key it was started with, and the same
+            // word: Install again, not something called Retry.
+            let again = matches!(&deps, Some(Deps::Done(_, Err(_)))) && deps_missing.is_some();
             screen.set_app_buttons(demo::labels(&if done {
                 ["Back", "", "", "", "Run"]
-            } else if stoppable {
-                ["Back", "", "", "", "Stop"]
-            } else if let Some(verb) = again {
-                ["Back", "", "", "", verb]
+            } else if again {
+                ["Back", "", "", "", "Install"]
             } else {
                 ["Back", "", "", "", ""]
             }));

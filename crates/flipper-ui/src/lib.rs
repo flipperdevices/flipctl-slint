@@ -6,6 +6,7 @@
 pub mod app;
 pub mod boot;
 pub mod boot_menu;
+pub mod bundle;
 pub mod dropdown;
 #[cfg(feature = "device")]
 pub mod evdev;
@@ -14,6 +15,7 @@ pub mod font;
 pub mod gpu;
 #[cfg(feature = "device")]
 pub mod haptic;
+pub mod ipc;
 pub mod key;
 pub mod keyboard;
 #[cfg(feature = "device")]

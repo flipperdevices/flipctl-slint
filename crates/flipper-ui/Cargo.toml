@@ -1,10 +1,8 @@
 [package]
 name = "flipper-ui"
 # Literal rather than inherited from the workspace, as its two sibling crates
-# already are. A deploy installs this crate under /usr/share/flipctl/crates for a
-# hosted app to build against, and there is no workspace root above it there:
-# `edition.workspace = true` then fails with "failed to find a workspace root"
-# before cargo reads a line of source.
+# already are: an app's build takes this crate by path from outside the workspace,
+# where `edition.workspace = true` fails with "failed to find a workspace root".
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -51,6 +49,11 @@ slint = ["dep:slint", "dep:i-slint-common"]
 # the installer draw one screen each and would otherwise pay for a second component
 # set and a second glyph atlas beside their own.
 screens = ["slint", "dep:slint-build"]
+# Reading an AppImage's manifest and icon out of its squashfs without running it:
+# ~/Apps is where a person drops any bundle, and the scan must not execute one to
+# find out what it is. Off by default; flipctl's `wayland` feature takes it, and the
+# boot menu and the installer never do.
+bundle = ["dep:backhand"]
 # The terminal drawing side, for a serial console. The parallel of `slint`: the
 # view models are shared, this is a second way to put one on a screen. Pure Rust,
 # so an image needs no ncurses and no terminfo, and nothing here is linked unless
@@ -102,6 +105,14 @@ optional = true
 version = "1.17"
 default-features = false
 features = ["compat-1-2", "renderer-software", "std", "unsafe-single-threaded"]
+optional = true
+
+# zstd alone: the bundles are packed with it, and the default set brings xz, lz4,
+# rayon and tracing, none of them wanted in the panel binary.
+[dependencies.backhand]
+version = "0.25"
+default-features = false
+features = ["zstd"]
 optional = true
 
 [build-dependencies]

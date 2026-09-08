@@ -647,6 +647,9 @@ impl Session {
             .env("SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR", "0")
             .env("GDK_BACKEND", "wayland")
             .env("CLUTTER_BACKEND", "wayland")
+            // Hosted, as opposed to started from a desktop: a bundle's AppRun runs
+            // its program when this is set and hands the file to flipctl when not.
+            .env("FLIPCTL_HOSTED", "1")
             .env_remove("SWAYSOCK")
             .env_remove("WAYLAND_SOCKET")
             .stdin(Stdio::null());
@@ -1106,11 +1109,7 @@ pub(crate) fn memfd(name: &str, bytes: &[u8]) -> io::Result<OwnedFd> {
     Ok(fd)
 }
 
-fn runtime_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })))
-}
+use crate::ipc::runtime_dir;
 
 /// An empty 0700 directory under the user's runtime dir, for one app's socket.
 pub(crate) fn private_runtime_dir() -> io::Result<PathBuf> {

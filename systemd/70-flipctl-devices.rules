@@ -1,0 +1,6 @@
+# The hardware a hosted app may drive, opened to the groups flipctl.service runs
+# with. The unit's DeviceAllow lines open the same classes in its cgroup filter;
+# these open the nodes themselves. The gpio group is made by flipctl.sysusers.conf.
+SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", GROUP="gpio", MODE="0660"
+SUBSYSTEM=="spidev", KERNEL=="spidev*", GROUP="gpio", MODE="0660"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", GROUP="plugdev", MODE="0664"
