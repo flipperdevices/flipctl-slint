@@ -2565,7 +2565,8 @@ fn panel(
     // The text-input screen, open only while something is being named. It carries
     // the name it will rename, because the list can be re-read while it is up.
     let mut kb: Option<flipper_ui::keyboard::TextInput> = None;
-    // Whether the boot has been acknowledged with the motor.
+    // Whether what the menu has committed to -- a boot, or the reboot a factory
+    // reset of the running profile ends with -- has been acknowledged with the motor.
     let mut buzzed_boot = false;
     // What the keyboard is collecting. A profile's new name is checked as it is
     // typed, and the line under the field says why it is refused; a passphrase is
@@ -4967,10 +4968,18 @@ fn panel(
                 }
                 // The same acknowledgement the standalone menu gives, because it
                 // is the same menu and the same commitment: from here the machine
-                // is on its way to another kernel. Once, not once a frame.
-                if !menu.view().booting.is_empty() && !buzzed_boot {
-                    buzzed_boot = true;
-                    if let Some(buzz) = buzz.as_mut() {
+                // is on its way to another kernel. A factory reset of the running
+                // profile ends the same way, by a reboot rather than a boot, and
+                // the standalone menu has no running profile to reset.
+                //
+                // On the edge, once, not once a frame: a reboot the system manager
+                // refuses puts the machine back in the menu, and the next thing it
+                // commits to has its own acknowledgement.
+                let view = menu.view();
+                let committing = !view.booting.is_empty() || view.going_down;
+                if committing != buzzed_boot {
+                    buzzed_boot = committing;
+                    if let Some(buzz) = buzz.as_mut().filter(|_| committing) {
                         // A step above the per-key tick and below the hardest thing
                         // the motor can do: the difference between saying "that is
                         // happening now" and startling someone.

@@ -233,6 +233,9 @@ pub struct View {
     pub spin_frame: i32,
     /// Non-empty while a profile is being booted, which takes the whole panel.
     pub booting: String,
+    /// The machine has been asked to reboot. The same commitment a boot is, and told
+    /// apart from it only because this one keeps the list on screen behind its popup.
+    pub going_down: bool,
     pub popup_open: bool,
     pub popup_title: String,
     pub popup_icon: i32,
@@ -437,6 +440,9 @@ pub struct BootMenu {
     measured: HashMap<(String, String), Space>,
     /// What the running measurement will be filed under.
     space_key: Option<(String, String)>,
+    /// A reboot this menu asked for, holding the answer only a refused one gives.
+    /// While it is here the machine is on its way down and the popup says so.
+    rebooting: Option<Receiver<String>>,
     /// Where the spinners count their frames from.
     spin_at: Instant,
     /// How many rows the list can show at once, from the caller's own metrics.
@@ -484,6 +490,7 @@ impl BootMenu {
             space_done: false,
             measured: HashMap::new(),
             space_key: None,
+            rebooting: None,
             spin_at: Instant::now(),
             visible: visible.max(1),
         }
@@ -1325,6 +1332,10 @@ impl BootMenu {
                     crate::logline!("boot action    {what} done, rebooting={rebooting}");
                     acted = true;
                     self.popup = if rebooting {
+                        // The popup only says the machine is going down; this is what
+                        // sends it. The running root is the copy the reset moved
+                        // aside, so the fresh profile is reachable no other way.
+                        self.rebooting = Some(crate::system::reboot());
                         Some(Popup::Busy("Rebooting".into(), None))
                     } else {
                         restart_read = true;
@@ -1343,6 +1354,23 @@ impl BootMenu {
                     self.popup = Some(Popup::Said("action stopped".into()));
                     moved = true;
                 }
+            }
+        }
+        // A refused reboot leaves the machine where it stood, and a popup saying it is
+        // going down is then the one thing on screen that is not true. The list is read
+        // again with it: the reset itself worked, so the fresh profile is there to be
+        // booted by hand. Nothing is drawn while the answer is only "not yet".
+        if let Some(rx) = self.rebooting.as_ref() {
+            match rx.try_recv() {
+                Ok(reason) => {
+                    crate::logline!("boot action    reboot refused: {reason}");
+                    self.rebooting = None;
+                    self.popup = Some(Popup::Said("Reboot refused".into()));
+                    restart_read = true;
+                    moved = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(_) => self.rebooting = None,
             }
         }
         if acted {
@@ -1625,7 +1653,14 @@ impl BootMenu {
                 message.push(boot::display_name(&profile.name));
                 button = "OK = yes    Back = no".into();
             }
-            Some(Popup::Busy(what, _)) => message.push(format!("{what} {spin}")),
+            // A spinner is a frame a second, and with nothing left to wait for those
+            // frames are committed to the panel while the machine is going down: the
+            // boot takeover leaves it alone for the same reason. So the word stands on
+            // its own and the last frame is the one already drawn.
+            Some(Popup::Busy(what, rx)) => message.push(match rx {
+                Some(_) => format!("{what} {spin}"),
+                None => what.clone(),
+            }),
             Some(Popup::Said(msg)) => {
                 message.push(msg.clone());
                 button = "Press any key".into();
@@ -1708,6 +1743,7 @@ impl BootMenu {
             loading: self.pending.is_some(),
             spin_frame: (frame % SPIN_FRAMES as u128) as i32,
             booting: self.booting.as_ref().map(|(l, _)| l.clone()).unwrap_or_default(),
+            going_down: self.rebooting.is_some(),
             popup_open: self.popup.is_some(),
             popup_title: boot::display_name(&profile.name).trim_matches(['[', ']']).to_string(),
             popup_icon,

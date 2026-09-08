@@ -9,6 +9,7 @@
 //! helper that spawns them.
 
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 /// Start a command and do not wait for it.
@@ -37,7 +38,12 @@ pub fn spawn_detached(args: &[&str]) {
 ///
 /// A refusal is logged rather than dropped. It went to /dev/null before, which is
 /// why a Reboot row that never rebooted looked like a dead key.
-pub fn spawn_transient(script: &str) {
+///
+/// It is also sent to the receiver, for a caller with something on screen that a
+/// refusal makes untrue. Only a refusal is sent: a unit that was queued says nothing
+/// and closes the channel, so nothing has to guess at a timeout.
+pub fn spawn_transient(script: &str) -> Receiver<String> {
+    let (tx, rx) = mpsc::channel();
     let mut args = vec!["systemd-run", "--collect", "--no-block", "sh", "-c", script];
     if unsafe { libc::geteuid() } != 0 {
         args.insert(0, "sudo");
@@ -52,7 +58,8 @@ pub fn spawn_transient(script: &str) {
         Ok(child) => child,
         Err(e) => {
             crate::logline!("transient      cannot run {}: {e}", args[0]);
-            return;
+            let _ = tx.send(format!("cannot run {}", args[0]));
+            return rx;
         }
     };
     // --no-block means this returns as soon as the unit is queued, so waiting for it
@@ -63,18 +70,27 @@ pub fn spawn_transient(script: &str) {
             use std::io::Read;
             let _ = err.read_to_string(&mut said);
         }
-        match child.wait() {
-            Ok(status) if status.success() => {}
-            Ok(status) => crate::logline!(
-                "transient      refused ({status}): {}",
-                said.lines().next().unwrap_or("no reason given")
-            ),
-            Err(e) => crate::logline!("transient      {e}"),
-        }
+        let reason = match child.wait() {
+            Ok(status) if status.success() => return,
+            Ok(status) => {
+                let said = said.lines().next().unwrap_or("no reason given").to_string();
+                crate::logline!("transient      refused ({status}): {said}");
+                said
+            }
+            Err(e) => {
+                crate::logline!("transient      {e}");
+                e.to_string()
+            }
+        };
+        let _ = tx.send(reason);
     });
+    rx
 }
 
 /// Reboot, the way the prototype's `/api/system/reboot` does it.
-pub fn reboot() {
-    spawn_transient("systemctl reboot");
+///
+/// The receiver is `spawn_transient`'s: a reason if the machine is staying up after
+/// all, and otherwise nothing.
+pub fn reboot() -> Receiver<String> {
+    spawn_transient("systemctl reboot")
 }

@@ -966,6 +966,7 @@ mod tests {
             loading: false,
             spin_frame: 0,
             booting: String::new(),
+            going_down: false,
             popup_open: false,
             popup_title: String::new(),
             popup_icon: 0,
