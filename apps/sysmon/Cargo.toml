@@ -1,0 +1,27 @@
+# Its own workspace, so this crate is independent of whatever it happens to sit
+# inside. Without it cargo refuses to build: a crate under a workspace directory
+# is assumed to be a member of it.
+[workspace]
+
+[package]
+name = "sysmon-app"
+version = "0.1.0"
+edition = "2021"
+# The source. The binary is a combined work: it links flipctl-app, and so Slint,
+# which makes the built app GPL-3.0-only like flipctl itself.
+license = "MIT"
+publish = false
+
+# Everything read here comes out of /proc and /sys. What is not free is the
+# drawing: flipctl-app is the framework, and through it the widgets, the panel's
+# fonts and the Slint software renderer.
+[dependencies]
+flipctl-app = { path = "../../crates/flipctl-app" }
+slint = { version = "1.17", default-features = false, features = ["compat-1-2", "backend-winit-wayland", "renderer-software", "std"] }
+
+[build-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
+
+[profile.release]
+opt-level = "z"
+strip = true
