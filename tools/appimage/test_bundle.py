@@ -5,7 +5,9 @@ one its scanner reads, that the AppDir has the shape appimagetool and flipctl ea
 expect, and that AppRun renders into a script a shell accepts.
 """
 
+import ast
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -25,7 +27,52 @@ class Manifests(unittest.TestCase):
             with self.subTest(manifest=manifest.relative_to(REPO)):
                 data = bundle.load_manifest(manifest.parent)
                 self.assertTrue(data.get("wayland"), "an app names a command")
-                self.assertEqual(bundle.kind_of(manifest.parent, data), "rust")
+                # A crate is built; a directory with an AppRun of its own is staged as
+                # it stands, which is what a runtime bundle is.
+                self.assertIn(bundle.kind_of(manifest.parent, data), ("rust", "staged"))
+
+    def test_a_runtime_bundle_is_staged_not_built(self):
+        python = REPO / "apps/python-runtime"
+        data = bundle.load_manifest(python)
+        self.assertEqual(bundle.kind_of(python, data), "staged")
+        self.assertTrue(data.get("provides"), "a launcher says what it runs")
+        self.assertTrue((python / "AppRun").is_file())
+        self.assertTrue((python / "flipctl/__init__.py").is_file())
+
+    def test_the_python_font_table_matches_the_rust_one(self):
+        """The client measures text to wrap it, and it must measure what is drawn.
+
+        Its advance table is a copy of the generated Rust font, so it can drift. A
+        wrong table wraps a line one word early or one word late, which nobody would
+        notice until a traceback is unreadable on the panel.
+        """
+        rust = (REPO / "crates/flipper-ui/src/font/title.rs").read_text()
+        advances = "".join(re.findall(r"advance:\s*(\d+)", rust))
+        client = (REPO / "apps/python-runtime/flipctl/__init__.py").read_text()
+        found = re.search(r'_ADVANCES = "(\d+)"', client)
+        self.assertIsNotNone(found, "the client carries an advance table")
+        self.assertEqual(found.group(1), advances)
+        self.assertEqual(len(advances), 95, "ASCII 32..126, one digit each")
+
+    def test_a_script_app_is_an_app_that_parses(self):
+        """A script app has to be both, and neither is checked anywhere else.
+
+        `apps/*.py` is deployed into ~/Apps as it stands: a missing block makes it
+        invisible to the scanner and a syntax error makes it a traceback on the panel.
+        Both are cheaper to catch here than on the device.
+        """
+        scripts = sorted(REPO.glob("apps/*.py"))
+        self.assertTrue(scripts, "the tree has a script app")
+        for path in scripts:
+            with self.subTest(script=path.name):
+                text = path.read_text()
+                ast.parse(text)
+                head = text[:8192].splitlines()
+                self.assertIn("# /// flipctl", head, "the block is what makes it an app")
+                self.assertTrue(
+                    any(line.startswith("# name = ") for line in head),
+                    "the block names the app",
+                )
 
     def test_the_derived_manifest_is_what_the_scanner_reads(self):
         derived = bundle.derive_manifest(

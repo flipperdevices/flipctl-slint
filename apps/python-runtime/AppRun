@@ -1,0 +1,51 @@
+#!/bin/sh
+# The Python runtime: its own screen with no argument, a script with one.
+#
+# What the bundle carries is the drawing stack (the Slint binding and the widget
+# sources), the `flipctl` package a script imports, and uv. The interpreter is the
+# device's own, which is why the manifest names python3 in `apt`.
+set -eu
+APPDIR=${APPDIR:-$(cd "$(dirname "$0")" && pwd)}
+export APPDIR
+export FLIPCTL_UI="$APPDIR/usr/share/flipctl-ui"
+export PATH="$APPDIR/usr/bin:$PATH"
+# The renderer our Rust apps compile in, chosen here at run time: the panel is two
+# colours and a vector rasteriser would put grey between them.
+export SLINT_BACKEND=winit-software
+carried="$APPDIR/usr/lib/python"
+
+[ $# -eq 0 ] && exec env PYTHONPATH="$carried${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 "$carried/launcher.py"
+
+script=$1
+shift
+
+# A script says what it needs in the block PEP 723 defines, and uv is what reads it:
+# this image's python3 has no ensurepip, so the stock interpreter cannot build a
+# working virtualenv at all.
+#
+# Installed into the app's own directory rather than run through `uv run`, which
+# builds an environment of its own that the packages this bundle carries are not in.
+# One interpreter, one path, and what the script asked for on the end of it. The
+# working directory is the app's, which flipctl makes and keeps.
+deps=""
+if grep -qE '^#[[:space:]]*dependencies[[:space:]]*=[[:space:]]*\[[[:space:]]*[^][:space:]]' \
+        "$script" 2>/dev/null; then
+    deps="$PWD/deps"
+    echo "flipctl: resolving what $(basename "$script") asks for" >&2
+    uv export --script "$script" --no-hashes --quiet > "$PWD/deps.txt"
+    uv pip install --target "$deps" --requirement "$PWD/deps.txt" --quiet
+    deps="$deps:"
+fi
+
+# What it says as it dies is kept, so the runtime's own screen can show it after the
+# app is gone. Not `exec`: the log is written here and read back on failure, so the
+# journal keeps what it always did and the panel gains somewhere to read it.
+log="$PWD/last-error.log"
+: > "$log"
+set +e
+env PYTHONPATH="$deps$carried${PYTHONPATH:+:$PYTHONPATH}" python3 "$script" "$@" 2> "$log"
+status=$?
+set -e
+[ "$status" -eq 0 ] || cat "$log" >&2
+exit "$status"

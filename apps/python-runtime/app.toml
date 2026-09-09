@@ -1,0 +1,13 @@
+# The Python runtime, as an app.
+#
+# `provides` is the word a script asks for, which for a script named `*.py` is its own
+# extension. A launcher for another language is this same shape with another word in
+# it, and flipctl needs to know nothing about either.
+name = "Python Runtime"
+provides = "py"
+wayland = "./AppRun"
+icon = "python.png"
+# The interpreter is the device's own. It is in the Desktop image already, and this is
+# what offers to install it anywhere it is not: what the bundle carries is the drawing
+# stack and uv, not a second Python.
+apt = ["python3"]
