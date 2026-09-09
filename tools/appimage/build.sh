@@ -8,7 +8,7 @@
 # and build_deploy.sh --apps pushes it to ~/Apps on the device.
 #
 # Usage:
-#   tools/appimage/build.sh apps/radio      one app
+#   tools/appimage/build.sh apps/radio      one app, as radio-flipctl-aarch64.AppImage
 #   tools/appimage/build.sh --all           every app under apps/
 #   tools/appimage/build.sh --check FILE    list a bundle's squashfs and assert its shape
 #
@@ -63,6 +63,12 @@ fetch_tools() {
         fi
         chmod 755 "$TOOLS/$name"
     done < "$TOOLDIR/tools.lock"
+    # uv arrives as a tarball with the binary a directory down, and a bundle wants the
+    # binary. Taken out once, beside the tarball the lock checked.
+    if [ -f "$TOOLS/uv" ] && [ ! -x "$TOOLS/uv.bin" ]; then
+        tar -xzOf "$TOOLS/uv" --wildcards "*/uv" > "$TOOLS/uv.bin"
+        chmod 755 "$TOOLS/uv.bin"
+    fi
 }
 
 # The program, cross-built, and its link surface checked: a framework app needs libc,
@@ -101,26 +107,36 @@ in_bundle() {
 
 build_app() {
     local dir=$1
-    local app bin version
+    local app bin version staged
     app=$(basename "$dir")
     [ -f "$HERE/apps/$app/app.toml" ] || { echo "no manifest at apps/$app/app.toml" >&2; exit 1; }
-    bin=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["name"])' \
-          "$HERE/apps/$app/Cargo.toml")
     version=$(git -C "$HERE" describe --always --dirty)
     mkdir -p "$OUT/tmp"
 
-    cross_build "$app" "$bin"
+    # A crate is built and its binary staged. An app with an AppRun of its own is
+    # staged as it stands: that is a runtime bundle, which carries files and pinned
+    # tools rather than anything compiled here.
+    staged=()
+    if [ -f "$HERE/apps/$app/Cargo.toml" ]; then
+        bin=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["name"])' \
+              "$HERE/apps/$app/Cargo.toml")
+        cross_build "$app" "$bin"
+        staged=(--binary "/src/target/cross/apps/$TARGET/release/$bin")
+    fi
     echo "== staging $app =="
     in_bundle python3 tools/appimage/bundle.py stage "apps/$app" "/out/$app/AppDir" \
-        --binary "/src/target/cross/apps/$TARGET/release/$bin" --version "$version" --repo /src
-    echo "== packing $app-aarch64.AppImage =="
-    rm -f "$OUT/$app-aarch64.AppImage"
+        "${staged[@]}" --version "$version" --repo /src
+    # The name carries flipctl and the architecture: a folder holds AppImages from
+    # anywhere, and a person looking at it should be able to tell which are for the
+    # panel. What decides that for flipctl is still the manifest inside.
+    echo "== packing $app-flipctl-aarch64.AppImage =="
+    rm -f "$OUT/$app-flipctl-aarch64.AppImage"
     in_bundle /out/tools/appimagetool --appimage-extract-and-run -n --comp zstd \
         --mksquashfs-opt -Xcompression-level --mksquashfs-opt 19 \
         --runtime-file /out/tools/runtime-aarch64 \
-        "/out/$app/AppDir" "/out/$app-aarch64.AppImage" 2>&1 | grep -v "^$" | sed 's/^/  /'
-    (cd "$OUT" && sha256sum "$app-aarch64.AppImage" > "$app-aarch64.AppImage.sha256")
-    echo "== $(du -h "$OUT/$app-aarch64.AppImage" | cut -f1) $OUT/$app-aarch64.AppImage =="
+        "/out/$app/AppDir" "/out/$app-flipctl-aarch64.AppImage" 2>&1 | grep -v "^$" | sed 's/^/  /'
+    (cd "$OUT" && sha256sum "$app-flipctl-aarch64.AppImage" > "$app-flipctl-aarch64.AppImage.sha256")
+    echo "== $(du -h "$OUT/$app-flipctl-aarch64.AppImage" | cut -f1) $OUT/$app-flipctl-aarch64.AppImage =="
 }
 
 # The squashfs sits right after the runtime, so its offset is the runtime's size.
@@ -145,7 +161,6 @@ case "$1" in
     -h|--help) usage ;;
     --all)
         for dir in "$HERE"/apps/*/; do
-            [ -f "$dir/Cargo.toml" ] || { echo "== skipping $(basename "$dir"): not a Rust app, not bundled yet =="; continue; }
             build_app "$dir"
         done
         ;;

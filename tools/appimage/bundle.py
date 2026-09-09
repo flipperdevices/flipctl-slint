@@ -17,6 +17,7 @@ import shutil
 import stat
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -43,12 +44,17 @@ def crate_name(app_dir: Path) -> str | None:
 
 
 def kind_of(app_dir: Path, manifest: dict) -> str:
-    """rust, python or debian: what kind of program the manifest launches."""
+    """What kind of app this is, by what the directory holds.
+
+    A crate is built and its binary staged; a directory with an AppRun of its own is
+    staged as it stands, which is what a runtime bundle is: files, a pinned wheel and
+    a pinned uv, with no compiling anywhere.
+    """
     if crate_name(app_dir):
         return "rust"
-    if manifest.get("wayland", "").startswith("python3 "):
-        return "python"
-    return "debian"
+    if (app_dir / "AppRun").is_file():
+        return "staged"
+    return "unknown"
 
 
 def toml_string(value: str) -> str:
@@ -139,23 +145,77 @@ def copy_licenses(repo: Path, app_dir: Path, doc: Path, program: str) -> None:
             shutil.copy2(terms, target / terms.name)
 
 
-def stage(app_dir: Path, appdir: Path, binary: Path, version: str, repo: Path) -> None:
-    manifest = load_manifest(app_dir)
-    kind = kind_of(app_dir, manifest)
-    if kind != "rust":
-        sys.exit(f"{app_dir}: a {kind} app is not bundled yet; only a Rust app is")
-    program = crate_name(app_dir)
-    app_id = app_dir.name
-    if appdir.exists():
-        shutil.rmtree(appdir)
+def stage_staged(app_dir: Path, appdir: Path, tools: Path) -> None:
+    """A runtime bundle: its own AppRun, its own Python, and the pieces it carries.
+
+    The Slint binding and the widget sources are what make a script able to draw, and
+    uv is what reads the dependencies a script declares. Both are pinned in
+    tools.lock and fetched by build.sh, so this only copies.
+    """
+    lib = appdir / "usr" / "lib" / "python"
+    lib.mkdir(parents=True)
     (appdir / "usr" / "bin").mkdir(parents=True)
 
-    shutil.copy2(binary, appdir / "usr" / "bin" / program)
-    os.chmod(appdir / "usr" / "bin" / program, 0o755)
+    shutil.copy2(app_dir / "AppRun", appdir / "AppRun")
+    os.chmod(appdir / "AppRun", 0o755)
+    for name in ("launcher.py",):
+        shutil.copy2(app_dir / name, lib / name)
+    shutil.copytree(app_dir / "flipctl", lib / "flipctl")
 
-    apprun = appdir / "AppRun"
-    apprun.write_text(render_apprun(f'"$APPDIR/usr/bin/{program}" "$@"'))
-    os.chmod(apprun, 0o755)
+    wheel = tools / "slint-wheel"
+    with zipfile.ZipFile(wheel) as z:
+        z.extractall(lib)
+    # The wheel ships the extension without the bit that says it may be executed, and
+    # a shared object still has to be loadable from a read-only squashfs.
+    for so in lib.rglob("*.so*"):
+        os.chmod(so, 0o755)
+
+    shutil.copy2(tools / "uv.bin", appdir / "usr" / "bin" / "uv")
+    os.chmod(appdir / "usr" / "bin" / "uv", 0o755)
+
+
+def stage_ui(repo: Path, appdir: Path) -> None:
+    """The widget library as a script's compiler sees it.
+
+    The same `.slint` files flipctl and every Rust app compile, the theme generated
+    from tokens.toml, and the three fonts at the relative path `fonts.slint` imports
+    them by. Laid out as they are in the repository, because those imports are
+    relative and a flatter tree would not resolve.
+    """
+    ui = appdir / "usr" / "share" / "flipctl-ui"
+    shutil.copytree(repo / "crates/flipper-ui/ui", ui / "crates/flipper-ui/ui")
+    shutil.copytree(repo / "crates/flipctl-app/ui", ui / "crates/flipctl-app/ui")
+    shutil.copytree(
+        repo / "third_party/flipctl-fonts",
+        ui / "third_party/flipctl-fonts",
+        ignore=shutil.ignore_patterns("*.glyphs"),
+    )
+    theme = next((repo / "target").rglob("build/flipper-ui-*/out/theme.slint"), None)
+    if theme is None:
+        sys.exit("no generated theme.slint under target/; build flipper-ui first")
+    shutil.copy2(theme, ui / "theme.slint")
+
+
+def stage(app_dir: Path, appdir: Path, binary: Path | None, version: str, repo: Path) -> None:
+    manifest = load_manifest(app_dir)
+    kind = kind_of(app_dir, manifest)
+    if kind == "unknown":
+        sys.exit(f"{app_dir}: neither a crate nor an AppRun, so there is nothing to bundle")
+    app_id = app_dir.name
+    program = crate_name(app_dir) or app_id
+    if appdir.exists():
+        shutil.rmtree(appdir)
+
+    if kind == "rust":
+        (appdir / "usr" / "bin").mkdir(parents=True)
+        shutil.copy2(binary, appdir / "usr" / "bin" / program)
+        os.chmod(appdir / "usr" / "bin" / program, 0o755)
+        apprun = appdir / "AppRun"
+        apprun.write_text(render_apprun(f'"$APPDIR/usr/bin/{program}" "$@"'))
+        os.chmod(apprun, 0o755)
+    else:
+        stage_staged(app_dir, appdir, repo / "target/appimage/tools")
+        stage_ui(repo, appdir)
 
     icon_name = f"{app_id}.png"
     source_icon = app_dir / manifest["icon"] if manifest.get("icon") else HERE / "flipctl.png"
@@ -168,6 +228,17 @@ def stage(app_dir: Path, appdir: Path, binary: Path, version: str, repo: Path) -
         desktop_entry(app_id, manifest.get("name", app_id), version)
     )
     copy_licenses(repo, app_dir, appdir / "usr" / "share" / "doc" / program, program)
+    if kind == "staged":
+        # What the bundle carries, beside our own terms: the binding is Slint's, under
+        # the same tri-license the Rust one is taken under, and uv is Apache-2.0/MIT.
+        for name in ("slint-1.17.1b2.dist-info", "uv"):
+            src = appdir / "usr/lib/python" / name
+            if src.is_dir():
+                shutil.copytree(
+                    src, appdir / "usr/share/doc" / program / name,
+                    ignore=shutil.ignore_patterns("RECORD", "WHEEL", "*.py"),
+                    dirs_exist_ok=True,
+                )
     check_appdir(appdir)
 
 
@@ -189,6 +260,8 @@ def check_appdir(appdir: Path) -> None:
         problems.append("no icon at the root")
     if (appdir / "Cargo.toml").exists():
         problems.append("Cargo.toml travelled; flipctl would take the bundle for a crate")
+    if list(appdir.rglob("__pycache__")) or list(appdir.rglob("*.pyc")):
+        problems.append("bytecode travelled; it is this host's, not the device's")
     for path in appdir.rglob("*"):
         if path.is_symlink() and os.readlink(path).startswith("/"):
             problems.append(f"absolute symlink: {path.relative_to(appdir)}")
@@ -202,7 +275,7 @@ def main(argv: list[str]) -> None:
     st = sub.add_parser("stage", help="lay out an AppDir from an app directory")
     st.add_argument("app_dir", type=Path)
     st.add_argument("appdir", type=Path)
-    st.add_argument("--binary", type=Path, required=True, help="the cross-built program")
+    st.add_argument("--binary", type=Path, help="the cross-built program, for a crate")
     st.add_argument("--version", required=True, help="what X-AppImage-Version says")
     st.add_argument("--repo", type=Path, default=HERE.parent.parent, help="the repository root, for the licenses")
     args = parser.parse_args(argv)

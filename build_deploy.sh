@@ -16,6 +16,7 @@
 #   ./build_deploy.sh --panel         drive the real panel and its buttons
 #   ./build_deploy.sh --cross         build here for aarch64 in docker, not on the device
 #   ./build_deploy.sh --apps          also push target/appimage/*.AppImage to ~/Apps
+#                                     (on its own: push them and build nothing)
 #   ./build_deploy.sh --no-run        build only, install nothing, restart nothing
 #   ./build_deploy.sh --status        report what is running, change nothing
 #
@@ -64,13 +65,18 @@ MODE=headless
 RUN=yes
 CROSS=no
 APPS=no
+# Whether anything was asked for beyond the bundles. `--apps` on its own means the
+# bundles and nothing else: no source copy, no build, no restart. Without this a bare
+# --apps falls into the device build below, which is minutes of compiling for a file
+# copy nobody asked to compile for.
+BUILD=no
 for arg in "$@"; do
     case "$arg" in
-        --panel)   MODE=panel ;;
-        --headless) MODE=headless ;;
-        --cross)   CROSS=yes ;;
+        --panel)   MODE=panel; BUILD=yes ;;
+        --headless) MODE=headless; BUILD=yes ;;
+        --cross)   CROSS=yes; BUILD=yes ;;
         --apps)    APPS=yes ;;
-        --no-run)  RUN=no ;;
+        --no-run)  RUN=no; BUILD=yes ;;
         --status)  MODE=status ;;
         -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
@@ -104,6 +110,34 @@ guard='test -e /sys/firmware/devicetree/base/model &&
 if ! run "$guard"; then
     echo "refusing: $HOST does not report itself as a Flipper One" >&2
     exit 1
+fi
+
+# The bundles. Built by tools/appimage/build.sh, not here: a deploy is a binary and a
+# restart, and a bundle is a release artefact with a build of its own.
+push_apps() {
+    local here found app name
+    here=$(cd "$(dirname "$0")" && pwd)
+    found=no
+    # Both kinds of app, because ~/Apps holds both: the bundles just built, and the
+    # script apps in apps/, which are the file itself and need no build at all.
+    for app in "$here"/target/appimage/*.AppImage "$here"/apps/*.py; do
+        [ -e "$app" ] || continue
+        found=yes
+        name=$(basename "$app")
+        echo "== pushing $name to ~/Apps =="
+        run "mkdir -p ~/Apps && cat > ~/Apps/$name.new && chmod 755 ~/Apps/$name.new && mv -f ~/Apps/$name.new ~/Apps/$name" \
+            < "$app"
+    done
+    if [ "$found" = no ]; then
+        echo "--apps: nothing under target/appimage; run tools/appimage/build.sh first" >&2
+    fi
+}
+
+# Bundles alone: push them and stop. flipctl is not rebuilt, reinstalled or
+# restarted, because none of that is needed to put a file in a folder.
+if [ "$APPS" = yes ] && [ "$BUILD" = no ]; then
+    push_apps
+    exit 0
 fi
 
 if [ "$MODE" = status ]; then
@@ -251,22 +285,8 @@ run "sudo install -m 755 $BUILT $BIN.new && \
      sudo mkdir -p $SHARE/assets/remote && \
      sudo cp -a ~/$DEST/crates/flipper-ui/assets/remote/. $SHARE/assets/remote/"
 
-# The bundles, when asked. Built by tools/appimage/build.sh, not here: a deploy is a
-# binary and a restart, and a bundle is a release artefact with a build of its own.
 if [ "$APPS" = yes ]; then
-    HERE=$(cd "$(dirname "$0")" && pwd)
-    found=no
-    for bundle in "$HERE"/target/appimage/*.AppImage; do
-        [ -e "$bundle" ] || continue
-        found=yes
-        name=$(basename "$bundle")
-        echo "== pushing $name to ~/Apps =="
-        run "mkdir -p ~/Apps && cat > ~/Apps/$name.new && chmod 755 ~/Apps/$name.new && mv -f ~/Apps/$name.new ~/Apps/$name" \
-            < "$bundle"
-    done
-    if [ "$found" = no ]; then
-        echo "--apps: nothing under target/appimage; run tools/appimage/build.sh first" >&2
-    fi
+    push_apps
 fi
 
 # What a bundle needs from the machine, until the image ships it (systemd/README.md
