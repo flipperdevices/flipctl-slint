@@ -1852,6 +1852,15 @@ fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow]) -> Vec<(String, St
         .collect()
 }
 
+/// The trail above the app list: the folders walked into, outermost first.
+///
+/// Empty at the top, because Apps is where the list starts and a row saying so
+/// tells nobody anything. A folder entered names itself, the way a submenu does.
+#[cfg(feature = "slint")]
+fn app_trail(path: &[String]) -> String {
+    path.iter().map(|folder| format!("> {folder}")).collect::<Vec<_>>().join(" ")
+}
+
 /// Show the list of apps on the shared list body.
 #[cfg(feature = "slint")]
 fn apply_app_list(
@@ -1861,6 +1870,8 @@ fn apply_app_list(
     buttons: &[String],
     // First visible row: the list owns every row, so it scrolls here.
     scroll: i32,
+    // The folders walked into, for the trail above the list.
+    path: &[String],
 ) {
     let items: Vec<flipper_ui::ui::ListItem> = rows
         .iter()
@@ -1877,6 +1888,7 @@ fn apply_app_list(
             at_end: false,
         })
         .collect();
+    screen.set_app_breadcrumb(app_trail(path).as_str().into());
     screen.set_app_total(items.len() as i32);
     screen.set_app_bar_total(items.len() as i32);
     screen.set_app_bar_offset(scroll);
@@ -4023,6 +4035,7 @@ fn panel(
                     app_selected,
                     &EMPTY_BUTTONS,
                     app_scroll,
+                    &app_path,
                 );
                 continue;
             }
@@ -4375,6 +4388,7 @@ fn panel(
                             app_selected,
                             &EMPTY_BUTTONS,
                             app_scroll,
+                            &app_path,
                         );
                         continue;
                     }
@@ -4460,6 +4474,7 @@ fn panel(
                                 app_selected,
                                 &EMPTY_BUTTONS,
                                 app_scroll,
+                                &app_path,
                             );
                             screen.set_screen(Screen::Apps);
                             // `pressed` is shared by both lists, so a flash still

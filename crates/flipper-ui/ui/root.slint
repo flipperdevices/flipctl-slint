@@ -63,6 +63,10 @@ export component Root inherits Window {
 
     // The app list, and the log of an install.
     in property <[ListItem]> app_items;
+    // The Apps list keeps its own trail: `breadcrumb` belongs to the menus, which
+    // rewrite it whenever the status moves, and a shared one is wiped a second after
+    // the list is entered.
+    in property <string> app_breadcrumb;
     in property <int> app_selected;
     in property <int> app_total;
     in property <int> app_bar_total;
@@ -243,6 +247,9 @@ export component Root inherits Window {
         real_frame: true;
         buttons: root.app_buttons;
         pressed_slot: root.app_pressed_slot;
+        // Where you are, the same way a submenu says it. Apps itself is the top of
+        // the list and says nothing; a folder walked into names itself.
+        breadcrumb: root.app_breadcrumb;
     }
 
     if root.screen == Screen.app_log: LogBody {
