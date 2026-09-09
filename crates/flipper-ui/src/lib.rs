@@ -33,6 +33,7 @@ pub mod platform;
 pub mod remote;
 pub mod route_watch;
 pub mod scale;
+pub mod script;
 #[cfg(feature = "slint")]
 pub mod slint_render;
 pub mod status;

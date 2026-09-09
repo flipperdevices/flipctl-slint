@@ -13,9 +13,11 @@
 //! `/home` is shared by every profile, so the folder survives a factory reset, which
 //! is the reason the apps moved there.
 
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-use crate::app;
+use crate::app::{self, AppEntry};
+use crate::script;
 
 /// The extension, matched without regard to case.
 pub const EXT: &str = "AppImage";
@@ -30,10 +32,93 @@ pub fn root() -> PathBuf {
 pub enum Skip {
     /// Not an AppImage at all, whatever it is called.
     NotAppImage,
-    /// An AppImage with no `app.toml` at its root: somebody else's.
-    Stock,
+    /// A file with no manifest of ours: a stock AppImage, or somebody's script.
+    NotOurs,
     /// Could not be read; the text says why.
     Unreadable(String),
+}
+
+/// Apps under `root`, at any depth, sorted by folder then name.
+///
+/// A folder is a group, and its name is what the list shows on the way in. Hidden
+/// entries are skipped and a symlinked directory is not followed, which is the only
+/// way a walk of a directory tree loops.
+///
+/// Bundles are read first and the scripts after them, because a launcher is a bundle
+/// and may declare a comment marker the scripts it runs are written behind.
+///
+/// The walk itself is plain file handling and stays out of the `bundle` feature, so a
+/// build without a squashfs reader still finds the scripts.
+pub fn discover(root: &Path) -> Vec<AppEntry> {
+    let mut files = Vec::new();
+    walk(root, root, &[], &mut files);
+
+    let mut apps = Vec::new();
+    for (path, key, group) in &files {
+        if is_bundle(path) {
+            if let Ok(app) = read_keyed(path, key, group) {
+                apps.push(app);
+            }
+        }
+    }
+    let markers = script::markers(&apps);
+    for (path, key, group) in &files {
+        if is_bundle(path) {
+            continue;
+        }
+        if let Ok(app) = script::read(path, key, group, &markers) {
+            apps.push(app);
+        }
+    }
+    apps.sort_by(|a, b| (&a.group, &a.name).cmp(&(&b.group, &b.name)));
+    apps
+}
+
+/// Every file under `root`, with what it is filed under and the folders it sits in.
+fn walk(dir: &Path, root: &Path, group: &[String], out: &mut Vec<(PathBuf, String, Vec<String>)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(kind) = entry.file_type() else { continue };
+        let path = entry.path();
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        if kind.is_dir() {
+            let mut deeper = group.to_vec();
+            deeper.push(name);
+            walk(&path, root, &deeper, out);
+        } else if kind.is_file() {
+            let key = key(root, &path);
+            out.push((path, key, group.to_vec()));
+        }
+    }
+}
+
+/// Whether this is a file the squashfs reader reads.
+pub fn is_bundle(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(EXT))
+}
+
+/// What an app is filed under: its path below the folder with the separators turned
+/// into dashes and the extension dropped, or its stem when it is elsewhere.
+pub fn key(root: &Path, path: &Path) -> String {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let Ok(rel) = path.strip_prefix(root) else {
+        return stem;
+    };
+    let mut parts: Vec<String> = rel
+        .parent()
+        .into_iter()
+        .flat_map(|p| p.components())
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    parts.push(stem);
+    parts.join("-")
 }
 
 #[cfg(feature = "bundle")]
@@ -45,70 +130,12 @@ mod imp {
 
     use backhand::{FilesystemReader, InnerNode};
 
-    use super::{Skip, EXT};
+    use super::Skip;
     use crate::app::{self, AppEntry, MANIFEST};
-
-    /// Bundles under `root`, at any depth, sorted by folder then name.
-    ///
-    /// A folder is a group, and its name is what the list shows on the way in. Hidden
-    /// entries are skipped and a symlinked directory is not followed, which is the only
-    /// way a walk of a directory tree loops.
-    pub fn discover(root: &Path) -> Vec<AppEntry> {
-        let mut apps = Vec::new();
-        walk(root, root, &[], &mut apps);
-        apps.sort_by(|a, b| (&a.group, &a.name).cmp(&(&b.group, &b.name)));
-        apps
-    }
-
-    fn walk(dir: &Path, root: &Path, group: &[String], out: &mut Vec<AppEntry>) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else { continue };
-            let path = entry.path();
-            let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
-                continue;
-            };
-            if name.starts_with('.') {
-                continue;
-            }
-            if kind.is_dir() {
-                let mut deeper = group.to_vec();
-                deeper.push(name);
-                walk(&path, root, &deeper, out);
-            } else if kind.is_file() && is_bundle_name(&path) {
-                if let Ok(app) = read_keyed(&path, &key(root, &path), group) {
-                    out.push(app);
-                }
-            }
-        }
-    }
-
-    fn is_bundle_name(path: &Path) -> bool {
-        path.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(EXT))
-    }
 
     /// One bundle, wherever it sits: the hand-off from a desktop names any file.
     pub fn read(path: &Path, group: &[String]) -> Result<AppEntry, Skip> {
-        read_keyed(path, &key(&super::root(), path), group)
-    }
-
-    /// What a bundle is filed under: its path below the folder with the separators
-    /// turned into dashes and the extension dropped, or its stem when it is elsewhere.
-    fn key(root: &Path, path: &Path) -> String {
-        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        let Ok(rel) = path.strip_prefix(root) else {
-            return stem;
-        };
-        let mut parts: Vec<String> = rel
-            .parent()
-            .into_iter()
-            .flat_map(|p| p.components())
-            .map(|c| c.as_os_str().to_string_lossy().to_string())
-            .collect();
-        parts.push(stem);
-        parts.join("-")
+        read_keyed(path, &super::key(&super::root(), path), group)
     }
 
     /// Where what was read out of a bundle is kept.
@@ -176,7 +203,7 @@ mod imp {
         }
     }
 
-    fn read_keyed(path: &Path, key: &str, group: &[String]) -> Result<AppEntry, Skip> {
+    pub fn read_keyed(path: &Path, key: &str, group: &[String]) -> Result<AppEntry, Skip> {
         let meta = fs::metadata(path).map_err(|e| Skip::Unreadable(e.to_string()))?;
         if !meta.is_file() {
             return Err(Skip::NotAppImage);
@@ -185,12 +212,12 @@ mod imp {
         let now = Stamp::of(&meta, Kind::App);
         if let Some(have) = Stamp::read(&dir).filter(|have| have.same_file(&now)) {
             match have.kind {
-                Kind::Stock => return Err(Skip::Stock),
+                Kind::Stock => return Err(Skip::NotOurs),
                 Kind::Bogus => return Err(Skip::NotAppImage),
                 Kind::App => {
                     if let Some(mut cached) = fs::read_to_string(dir.join(MANIFEST))
                         .ok()
-                        .and_then(|src| parse(&src, path, group, &dir))
+                        .and_then(|src| parse(&src, path, group, &dir, key))
                     {
                         // The icon the manifest names is only real if the copy is still
                         // there.
@@ -202,13 +229,13 @@ mod imp {
                 }
             }
         }
-        let opened = open(path, group, &dir);
+        let opened = open(path, group, &dir, key);
         match &opened {
             Ok(app) => {
                 Stamp::of(&meta, Kind::App).write(&dir);
                 crate::logline!("bundles        {key}: {}", app.name);
             }
-            Err(Skip::Stock) => {
+            Err(Skip::NotOurs) => {
                 Stamp::of(&meta, Kind::Stock).write(&dir);
                 crate::logline!("bundles        {key}: not a flipctl app, skipped");
             }
@@ -223,14 +250,21 @@ mod imp {
         opened
     }
 
-    fn parse(src: &str, path: &Path, group: &[String], dir: &Path) -> Option<AppEntry> {
+    fn parse(src: &str, path: &Path, group: &[String], dir: &Path, key: &str) -> Option<AppEntry> {
         let fallback =
             path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        app::parse_manifest(src, fallback, group, dir.to_path_buf(), path.to_path_buf())
+        app::parse_manifest(
+            src,
+            fallback,
+            group,
+            dir.to_path_buf(),
+            path.to_path_buf(),
+            key.to_string(),
+        )
     }
 
     /// Open the file, find the squashfs, and take the manifest and the icon out of it.
-    fn open(path: &Path, group: &[String], dir: &Path) -> Result<AppEntry, Skip> {
+    fn open(path: &Path, group: &[String], dir: &Path, key: &str) -> Result<AppEntry, Skip> {
         let unreadable = |e: &dyn std::fmt::Display| Skip::Unreadable(e.to_string());
         let mut file = File::open(path).map_err(|e| unreadable(&e))?;
         let mut header = [0u8; 64];
@@ -241,11 +275,11 @@ mod imp {
         let squashfs = FilesystemReader::from_reader_with_offset(BufReader::new(file), offset)
             .map_err(|e| unreadable(&e))?;
 
-        let manifest = root_file(&squashfs, MANIFEST).ok_or(Skip::Stock)?;
+        let manifest = root_file(&squashfs, MANIFEST).ok_or(Skip::NotOurs)?;
         let src = String::from_utf8_lossy(&manifest).into_owned();
         fs::create_dir_all(dir).map_err(|e| unreadable(&e))?;
         fs::write(dir.join(MANIFEST), &src).map_err(|e| unreadable(&e))?;
-        let mut app = parse(&src, path, group, dir).ok_or(Skip::Stock)?;
+        let mut app = parse(&src, path, group, dir, key).ok_or(Skip::NotOurs)?;
 
         // The icon the manifest names, else the one the AppImage convention puts at
         // the root, which is usually a link to the real file.
@@ -357,14 +391,6 @@ mod imp {
         use super::*;
         use std::io::Cursor;
 
-        #[test]
-        fn a_key_is_the_path_below_the_folder() {
-            let root = Path::new("/home/user/Apps");
-            assert_eq!(key(root, &root.join("radio-aarch64.AppImage")), "radio-aarch64");
-            assert_eq!(key(root, &root.join("net/nmap.AppImage")), "net-nmap");
-            assert_eq!(key(root, Path::new("/tmp/other.AppImage")), "other");
-        }
-
         /// Sections may sit past the section header table, and a NOBITS section
         /// occupies nothing, so the end is the furthest byte a real section reaches.
         #[test]
@@ -411,11 +437,11 @@ mod imp {
     use super::Skip;
     use crate::app::AppEntry;
 
-    pub fn discover(_root: &Path) -> Vec<AppEntry> {
-        Vec::new()
+    pub fn read(_path: &Path, _group: &[String]) -> Result<AppEntry, Skip> {
+        Err(Skip::Unreadable("built without the bundle feature".into()))
     }
 
-    pub fn read(_path: &Path, _group: &[String]) -> Result<AppEntry, Skip> {
+    pub fn read_keyed(_path: &Path, _key: &str, _group: &[String]) -> Result<AppEntry, Skip> {
         Err(Skip::Unreadable("built without the bundle feature".into()))
     }
 
@@ -428,4 +454,30 @@ mod imp {
     }
 }
 
-pub use imp::{can_mount, discover, launch_env, read};
+pub use imp::{can_mount, launch_env, read, read_keyed};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_is_the_path_below_the_folder() {
+        let root = Path::new("/home/user/Apps");
+        assert_eq!(
+            key(root, &root.join("radio-flipctl-aarch64.AppImage")),
+            "radio-flipctl-aarch64"
+        );
+        assert_eq!(key(root, &root.join("net/nmap.AppImage")), "net-nmap");
+        assert_eq!(key(root, &root.join("stations.py")), "stations");
+        assert_eq!(key(root, Path::new("/tmp/other.AppImage")), "other");
+    }
+
+    /// A folder holds both kinds, and only the bundles are read as squashfs. What a
+    /// script is at all is the launchers' business, not this module's.
+    #[test]
+    fn a_folder_holds_both_kinds() {
+        assert!(is_bundle(Path::new("/home/user/Apps/radio.AppImage")));
+        assert!(!is_bundle(Path::new("/home/user/Apps/stations.py")));
+        assert_eq!(crate::script::markers(&[]), ["#", "//", "--"]);
+    }
+}

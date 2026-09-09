@@ -91,7 +91,7 @@ runtime = "python"
 #[test]
 fn a_bundle_is_read_without_being_run() {
     let root = apps_folder("read");
-    let file = root.join("radio-aarch64.AppImage");
+    let file = root.join("radio-flipctl-aarch64.AppImage");
     bundle_with(&file, &[("app.toml", RADIO.as_bytes()), ("radio.png", b"png")], None);
 
     let apps = bundle::discover(&root);
@@ -110,7 +110,7 @@ fn a_bundle_is_read_without_being_run() {
     assert!(a.dir.is_absolute());
     assert!(a.dir.join(app::MANIFEST).is_file(), "the manifest is kept at {}", a.dir.display());
     assert_eq!(std::fs::read(a.icon_path().expect("an icon")).unwrap(), b"png");
-    assert!(a.work_dir().ends_with("flipctl/apps/radio-aarch64"));
+    assert!(a.work_dir().ends_with("flipctl/apps/radio-flipctl-aarch64"));
     let (program, args) = a.command();
     assert_eq!(program, Path::new("/bin/sh"));
     assert_eq!(args[1].to_str().unwrap(), format!("'{}'", file.display()));
@@ -149,7 +149,7 @@ fn stock_and_bogus_files_are_skipped_once() {
 
     let apps = bundle::discover(&root);
     assert_eq!(apps.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Good"]);
-    assert_eq!(bundle::read(&root.join("Stock.AppImage"), &[]), Err(bundle::Skip::Stock));
+    assert_eq!(bundle::read(&root.join("Stock.AppImage"), &[]), Err(bundle::Skip::NotOurs));
     assert_eq!(
         bundle::read(&root.join("not-really.AppImage"), &[]),
         Err(bundle::Skip::NotAppImage)
@@ -181,6 +181,114 @@ fn an_unchanged_bundle_is_not_reopened() {
     bundle_with(&file, &[("app.toml", longer)], None);
     let third = bundle::discover(&root);
     assert_eq!(third[0].name, "Second");
+}
+
+const STATIONS: &str = r#"#!/usr/bin/env python3
+# /// script
+# dependencies = ["httpx"]
+# ///
+# /// flipctl
+# name = "Stations"
+# icon = "stations.png"
+# audio = true
+# ///
+import flipctl
+"#;
+
+/// A script is an app too: one file in the same folder, listed beside the bundles
+/// with the runtime it needs filled in for it.
+#[test]
+fn a_script_is_listed_beside_a_bundle() {
+    let root = apps_folder("scripts");
+    std::fs::write(root.join("stations.py"), STATIONS).unwrap();
+    std::fs::write(root.join("stations.png"), b"png").unwrap();
+    std::fs::write(root.join("notes.py"), "x = 1\n").unwrap();
+    bundle_with(
+        &root.join("radio.AppImage"),
+        &[("app.toml", b"name = \"Internet radio\"\nwayland = \"./AppRun\"\n")],
+        None,
+    );
+
+    let apps = bundle::discover(&root);
+    assert_eq!(
+        apps.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+        ["Internet radio", "Stations"],
+        "the script without a block of ours is not listed"
+    );
+    let script = &apps[1];
+    assert_eq!(script.bundle, root.join("stations.py"));
+    assert_eq!(script.key, "stations");
+    assert_eq!(script.runtime, "py", "defaulted from the extension");
+    assert!(script.audio);
+    assert_eq!(script.wayland, "stations.py", "non-empty, so it is an app");
+    assert_eq!(script.icon_path(), Some(root.join("stations.png")));
+    assert!(script.work_dir().ends_with("flipctl/apps/stations"));
+    // What runs it is the launcher, with the script as its argument.
+    let launcher = app::AppEntry {
+        bundle: root.join("python-runtime-flipctl-aarch64.AppImage"),
+        provides: "python".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        script.launch_line(Some(&launcher)),
+        format!("'{}' '{}'", launcher.bundle.display(), script.bundle.display())
+    );
+}
+
+/// A block of its own beats the defaults, and a script may name a launcher that is
+/// not Python.
+#[test]
+fn a_script_block_overrides_the_defaults() {
+    let root = apps_folder("script-override");
+    std::fs::write(
+        root.join("thing.py"),
+        "# /// flipctl\n# name = \"Thing\"\n# runtime = \"pypy\"\n# rotate = \"left\"\n# ///\n",
+    )
+    .unwrap();
+    let apps = bundle::discover(&root);
+    assert_eq!(apps.len(), 1);
+    assert_eq!(apps[0].runtime, "pypy", "the block beats the extension");
+    assert_eq!(apps[0].rotate, app::Rotate::Left);
+    assert_eq!(apps[0].name, "Thing");
+}
+
+/// A language flipctl has never heard of needs no flipctl change at all: the block in
+/// the file is what makes it an app, its extension is what it asks for, and a launcher
+/// answers by providing that word. Nothing about JavaScript is compiled in.
+#[test]
+fn a_launcher_teaches_flipctl_a_new_language() {
+    let root = apps_folder("js");
+    let clock =
+        "#!/usr/bin/env node\n// /// flipctl\n// name = \"Clock\"\n// ///\nconsole.log(1)\n";
+    std::fs::write(root.join("clock.js"), clock).unwrap();
+
+    // The block is what makes it an app, so it is listed before any launcher exists,
+    // tagged with what it asks for and refused by name until something provides it.
+    let alone = bundle::discover(&root);
+    assert_eq!(alone.len(), 1);
+    assert_eq!(alone[0].runtime, "js", "the extension, since the block names none");
+    assert_eq!(alone[0].tag(), "js");
+    assert_eq!(
+        app::launcher_for(&alone, &alone[0]),
+        Err("needs the js runtime, which is not installed".into())
+    );
+
+    bundle_with(
+        &root.join("js-flipctl-aarch64.AppImage"),
+        &[("app.toml", b"name = \"JavaScript\"\nwayland = \"./AppRun\"\nprovides = \"js\"\n")],
+        None,
+    );
+
+    let apps = bundle::discover(&root);
+    assert_eq!(apps.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Clock", "JavaScript"]);
+    let script = &apps[0];
+    assert_eq!(script.runtime, "js");
+    assert_eq!(script.bundle, root.join("clock.js"));
+    // And it is runnable: the launcher that taught the extension also provides it.
+    assert_eq!(
+        app::launcher_for(&apps, script).unwrap().map(|l| l.name.as_str()),
+        Some("JavaScript")
+    );
 }
 
 /// Bundles are found in folders at any depth, a folder is a group, and the list is

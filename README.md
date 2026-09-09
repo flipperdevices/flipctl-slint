@@ -41,7 +41,8 @@ So, in the terms the rest of the org states this in:
 | `crates/flipper-ui/build.rs` | Generates the Rust and Slint themes from it, and compiles the components. |
 | `crates/flipper-ui/ui/` | `root.slint` (the one window), `idle.slint`, `list.slint`, `statusbar.slint`, `frame.slint`. |
 | `crates/flipper-ui/src/app.rs` | An app's manifest, what it needs installed, and how it is launched. |
-| `crates/flipper-ui/src/bundle.rs` | The AppImages in `~/Apps`: read without being run, remembered by stamp. |
+| `crates/flipper-ui/src/bundle.rs` | The `~/Apps` walk, and the AppImages in it: read without being run, remembered by stamp. |
+| `crates/flipper-ui/src/script.rs` | A script as an app: the manifest in its head, and the runtime it is run through. |
 | `crates/flipper-ui/src/ipc.rs` | The socket a desktop hands a bundle to, behind `flipctl open`. |
 | `crates/flipper-ui/src/status.rs` | Live battery, temperatures, power, hostname, profile and addresses, from sysfs and procfs. |
 | `crates/flipper-ui/src/kms.rs` | DRM/KMS panel sink. |
