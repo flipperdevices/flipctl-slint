@@ -39,17 +39,10 @@ fn main() -> std::io::Result<()> {
     let mut args = std::env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "sleep 60".into());
     let dir = args.next().unwrap_or_else(|| ".".into());
-    let keys: Vec<FlipperKey> = args
-        .next()
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(named)
-        .collect();
+    let keys: Vec<FlipperKey> =
+        args.next().unwrap_or_default().split(',').filter_map(named).collect();
 
-    let (w, h) = (
-        u32::from(flipper_ui::PANEL_W),
-        u32::from(flipper_ui::PANEL_H),
-    );
+    let (w, h) = (u32::from(flipper_ui::PANEL_W), u32::from(flipper_ui::PANEL_H));
     println!("hosting {command:?} in {dir} on a {w}x{h} output");
 
     let began = Instant::now();

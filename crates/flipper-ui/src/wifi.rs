@@ -150,11 +150,7 @@ fn field_lines(text: &str) -> Vec<(String, String)> {
 }
 
 fn field(fields: &[(String, String)], key: &str) -> String {
-    fields
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.clone())
-        .unwrap_or_default()
+    fields.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).unwrap_or_default()
 }
 
 fn is_yes(value: &str) -> bool {
@@ -163,11 +159,7 @@ fn is_yes(value: &str) -> bool {
 
 /// Every value whose key starts with `prefix`, in output order.
 fn addresses(fields: &[(String, String)], prefix: &str) -> Vec<String> {
-    fields
-        .iter()
-        .filter(|(k, _)| k.starts_with(prefix))
-        .map(|(_, v)| v.clone())
-        .collect()
+    fields.iter().filter(|(k, _)| k.starts_with(prefix)).map(|(_, v)| v.clone()).collect()
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────
@@ -184,10 +176,7 @@ fn parse_scan(text: &str) -> Vec<Network> {
         if ssid.is_empty() {
             continue;
         }
-        let signal = fields
-            .get(1)
-            .and_then(|s| s.trim().parse::<i32>().ok())
-            .unwrap_or(0);
+        let signal = fields.get(1).and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(0);
         let security = fields.get(2).cloned().unwrap_or_default();
         match nets.iter_mut().find(|n| n.ssid == ssid) {
             // Same network on a stronger BSSID: promote it, and take that BSSID's
@@ -232,9 +221,7 @@ pub fn saved() -> Vec<Saved> {
                 ssid: if ssid.is_empty() { name.clone() } else { ssid },
                 security: field(&fields, "802-11-wireless-security.key-mgmt"),
                 autoconnect: is_yes(&field(&fields, "connection.autoconnect")),
-                last_connected: field(&fields, "connection.timestamp")
-                    .parse()
-                    .unwrap_or(0),
+                last_connected: field(&fields, "connection.timestamp").parse().unwrap_or(0),
                 name,
             }
         })
@@ -318,9 +305,9 @@ impl ScanSource {
                     rescanned.store(1, Ordering::Relaxed);
                 }
             }
-            let Some(text) = output(&[
-                "nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list",
-            ]) else {
+            let Some(text) =
+                output(&["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"])
+            else {
                 return last.lock().unwrap().clone();
             };
             let networks = parse_scan(&text);
@@ -371,11 +358,7 @@ fn run(args: &[&str]) -> Result<(), String> {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    Err(if stderr.is_empty() {
-        format!("nmcli exited {}", out.status)
-    } else {
-        stderr
-    })
+    Err(if stderr.is_empty() { format!("nmcli exited {}", out.status) } else { stderr })
 }
 
 /// Join a network, creating a profile for it if there is none.
@@ -418,7 +401,6 @@ pub fn set_autoconnect(name: &str, on: bool) {
     ]);
 }
 
-
 // ── What the page and its modals measure for themselves ────────────────────
 //
 // Pure geometry, and the string measuring the geometry needs. It lives here
@@ -457,9 +439,7 @@ pub fn security_label(sec: &str) -> String {
     }
     let s = sec.to_ascii_uppercase();
     let enterprise = s.contains("802.1X");
-    let version = ["WPA3", "WPA2", "WPA1", "WPA"]
-        .into_iter()
-        .find(|v| s.contains(v));
+    let version = ["WPA3", "WPA2", "WPA1", "WPA"].into_iter().find(|v| s.contains(v));
     if let Some(v) = version {
         return if enterprise { format!("{v}-E") } else { v.to_string() };
     }
@@ -473,7 +453,6 @@ pub fn security_label(sec: &str) -> String {
     // as open, which is the one reading that would be actively misleading.
     "*".into()
 }
-
 
 /// The tab a modal hangs from. Its own width is what stops the saved-networks
 /// modal shrinking below its title.
@@ -541,20 +520,10 @@ fn place(frame_w: i32, frame_h: i32, frame_x: i32, pad_b: i32) -> Layout {
 pub fn visible_layout(ready: bool, count: i32) -> Layout {
     let max_inner = MAX_FRAME_H - metric::WIFI_MODAL_PAD_T - metric::WIFI_MODAL_PAD_B;
     let cap = 1.max((max_inner + 1) / metric::WIFI_ROW_PITCH);
-    let rows = if !ready || count == 0 {
-        count::WIFI_MIN_ROWS
-    } else {
-        count.min(cap)
-    };
+    let rows = if !ready || count == 0 { count::WIFI_MIN_ROWS } else { count.min(cap) };
     let content = rows * metric::WIFI_ROW_H + (rows - 1).max(0);
-    let frame_h =
-        (content + metric::WIFI_MODAL_PAD_T + metric::WIFI_MODAL_PAD_B).min(MAX_FRAME_H);
-    place(
-        metric::WIFI_MODAL_W,
-        frame_h,
-        metric::WIFI_MODAL_PAD,
-        metric::WIFI_MODAL_PAD_B,
-    )
+    let frame_h = (content + metric::WIFI_MODAL_PAD_T + metric::WIFI_MODAL_PAD_B).min(MAX_FRAME_H);
+    place(metric::WIFI_MODAL_W, frame_h, metric::WIFI_MODAL_PAD, metric::WIFI_MODAL_PAD_B)
 }
 
 /// The saved-networks modal, which is only as wide as its longest name.
@@ -593,14 +562,8 @@ pub fn saved_layout(names: &[String]) -> Layout {
 pub fn detail_layout(content_h: i32) -> Layout {
     let frame_h =
         (content_h + metric::WIFI_MODAL_PAD_T + metric::WIFI_MODAL_PAD_B).min(MAX_FRAME_H);
-    place(
-        metric::WIFI_MODAL_W,
-        frame_h,
-        metric::WIFI_MODAL_PAD,
-        metric::WIFI_MODAL_PAD_B,
-    )
+    place(metric::WIFI_MODAL_W, frame_h, metric::WIFI_MODAL_PAD, metric::WIFI_MODAL_PAD_B)
 }
-
 
 /// Scroll a row-indexed list so the selected row is inside the viewport.
 pub fn keep_row_visible(selected: i32, scroll: i32, visible: i32, total: i32) -> i32 {
@@ -633,7 +596,6 @@ pub fn saved_content_h(count: i32) -> i32 {
 pub fn one_line(text: &str, budget: i32) -> String {
     fit(text.lines().next().unwrap_or_default().trim(), budget)
 }
-
 
 /// Scroll so a row at `y` of height `h` is inside the viewport.
 pub fn ensure_visible(y: i32, h: i32, inner_h: i32, content_h: i32, scroll: i32) -> i32 {
@@ -731,15 +693,7 @@ pub struct DetailRow {
 }
 
 fn page_row(kind: i32, y: i32, text: &str, value: &str, chevron: bool, act: Act) -> Row {
-    Row {
-        kind,
-        y,
-        text: text.into(),
-        value: value.into(),
-        text_x: 0,
-        chevron,
-        act,
-    }
+    Row { kind, y, text: text.into(), value: value.into(), text_x: 0, chevron, act }
 }
 
 /// What the connected row narrates before the name itself.
@@ -783,14 +737,7 @@ pub fn page_rows(net: &crate::net::Net) -> Vec<Row> {
     y += metric::WIFI_DIVIDER_H;
     rows.push(page_row(0, y, "Saved networks", "", true, Act::Saved));
     y += metric::WIFI_ROW_H;
-    rows.push(page_row(
-        0,
-        y,
-        "Connect to Hidden Network",
-        "",
-        true,
-        Act::Hidden,
-    ));
+    rows.push(page_row(0, y, "Connect to Hidden Network", "", true, Act::Hidden));
     rows
 }
 
@@ -839,24 +786,11 @@ pub fn saved_rows(names: &[String], row_w: i32) -> Vec<NetRow> {
 
 /// The name to show for a saved profile, which is its SSID where they differ.
 pub fn saved_names(saved: &[Saved]) -> Vec<String> {
-    saved
-        .iter()
-        .map(|s| {
-            if s.ssid.is_empty() {
-                s.name.clone()
-            } else {
-                s.ssid.clone()
-            }
-        })
-        .collect()
+    saved.iter().map(|s| if s.ssid.is_empty() { s.name.clone() } else { s.ssid.clone() }).collect()
 }
 
 fn drow(kind: i32, h: i32) -> DetailRow {
-    DetailRow {
-        kind,
-        h,
-        ..DetailRow::default()
-    }
+    DetailRow { kind, h, ..DetailRow::default() }
 }
 
 /// nmcli's method names, as the prototype relabels them.
@@ -915,12 +849,7 @@ fn family_lines(label: &str, f: &Family) -> Vec<DetailRow> {
     if !f.gateway.is_empty() {
         out.push(card_kv("Gateway:", &f.gateway));
     }
-    let dns: Vec<String> = f
-        .dns
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect();
+    let dns: Vec<String> = f.dns.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     card_list(&mut out, "DNS:", &dns);
     out
 }
@@ -1004,10 +933,7 @@ pub fn detail_rows(
     rows.push(drow(0, metric::WIFI_SECTION_H));
 
     let cards: Vec<Vec<DetailRow>> = match details.filter(|d| d.known) {
-        Some(d) => vec![
-            family_lines("IPv4", &d.ipv4),
-            family_lines("IPv6", &d.ipv6),
-        ],
+        Some(d) => vec![family_lines("IPv4", &d.ipv4), family_lines("IPv6", &d.ipv6)],
         // Nothing to show yet, or a profile that has gone. One card either
         // way, so the section is never an empty hole.
         None => {
@@ -1081,7 +1007,6 @@ fn action(text: &str, act: DetailAct) -> DetailRow {
     row
 }
 
-
 /// The profile to join `ssid` with, if this device already has one.
 ///
 /// Looked up by both the on-air name and the profile's own name, as the
@@ -1090,10 +1015,7 @@ fn action(text: &str, act: DetailAct) -> DetailRow {
 /// profile's name is what reuses its passphrase, which is what lets a network the
 /// device already knows be joined from the list without being asked again.
 pub fn saved_match(saved: &[Saved], ssid: &str) -> Option<String> {
-    saved
-        .iter()
-        .find(|s| s.ssid == ssid || s.name == ssid)
-        .map(|s| s.name.clone())
+    saved.iter().find(|s| s.ssid == ssid || s.name == ssid).map(|s| s.name.clone())
 }
 
 /// Which rows the selector can land on.
@@ -1199,10 +1121,7 @@ mod tests {
     #[test]
     fn the_visible_list_never_reserves_the_gutter_it_does_not_need() {
         let four = visible_layout(true, 4);
-        assert_eq!(
-            four.row_w(false) - four.row_w(true),
-            metric::WIFI_MODAL_GUTTER
-        );
+        assert_eq!(four.row_w(false) - four.row_w(true), metric::WIFI_MODAL_GUTTER);
         assert_eq!(four.row_w(false), metric::WIFI_MODAL_W - 6);
     }
 
@@ -1260,23 +1179,15 @@ mod tests {
 
     #[test]
     fn the_connected_row_comes_and_goes_with_the_connection() {
-        let on = Net {
-            wifi_enabled: true,
-            wifi_connected: false,
-            ..Net::default()
-        };
+        let on = Net { wifi_enabled: true, wifi_connected: false, ..Net::default() };
         let acts: Vec<Act> = page_rows(&on).iter().map(|r| r.act).collect();
         assert_eq!(
             acts,
             [Act::Radio, Act::Divider, Act::Visible, Act::Divider, Act::Saved, Act::Hidden]
         );
 
-        let joined = Net {
-            wifi_enabled: true,
-            wifi_connected: true,
-            ssid: "Home".into(),
-            ..Net::default()
-        };
+        let joined =
+            Net { wifi_enabled: true, wifi_connected: true, ssid: "Home".into(), ..Net::default() };
         let rows = page_rows(&joined);
         let connected = &rows[2];
         assert_eq!(connected.act, Act::Connected);
@@ -1329,11 +1240,7 @@ mod tests {
 
         // A card is as tall as its lines plus its own padding.
         let card = view.rows.iter().position(|r| r.kind == 7).unwrap();
-        let lines: i32 = view.rows[card + 1..]
-            .iter()
-            .take_while(|r| r.in_card)
-            .map(|r| r.h)
-            .sum();
+        let lines: i32 = view.rows[card + 1..].iter().take_while(|r| r.in_card).map(|r| r.h).sum();
         assert_eq!(view.rows[card].h, lines + 2 * metric::WIFI_CARD_PAD);
         assert!(lines > 0, "the card must hold its own lines");
     }
@@ -1429,24 +1336,13 @@ mod tests {
     #[test]
     fn a_known_network_is_matched_by_either_of_its_names() {
         let saved = vec![
-            Saved {
-                name: "Home".into(),
-                ssid: "Home".into(),
-                ..Saved::default()
-            },
-            Saved {
-                name: "office-profile".into(),
-                ssid: "Office WiFi".into(),
-                ..Saved::default()
-            },
+            Saved { name: "Home".into(), ssid: "Home".into(), ..Saved::default() },
+            Saved { name: "office-profile".into(), ssid: "Office WiFi".into(), ..Saved::default() },
         ];
         assert_eq!(saved_match(&saved, "Home").as_deref(), Some("Home"));
         // Matched on the air name, joined by the profile's own: that is what
         // reuses the stored passphrase.
-        assert_eq!(
-            saved_match(&saved, "Office WiFi").as_deref(),
-            Some("office-profile")
-        );
+        assert_eq!(saved_match(&saved, "Office WiFi").as_deref(), Some("office-profile"));
         assert_eq!(saved_match(&saved, "Cafe"), None);
     }
 
@@ -1458,11 +1354,7 @@ mod tests {
                 signal: 70,
                 security: "WPA2".into(),
             },
-            Network {
-                ssid: "Open".into(),
-                signal: 20,
-                security: String::new(),
-            },
+            Network { ssid: "Open".into(), signal: 20, security: String::new() },
         ];
         // A narrow row, so the long name genuinely has to be cut.
         let row_w = 120;
@@ -1513,10 +1405,7 @@ mod tests {
             "ipv4.method:auto\nIP4.ADDRESS[1]:10.0.0.2/24\nIP4.ADDRESS[2]:10.0.0.3/24\n",
         );
         assert_eq!(field(&fields, "ipv4.method"), "auto");
-        assert_eq!(
-            addresses(&fields, "IP4.ADDRESS"),
-            ["10.0.0.2/24", "10.0.0.3/24"]
-        );
+        assert_eq!(addresses(&fields, "IP4.ADDRESS"), ["10.0.0.2/24", "10.0.0.3/24"]);
     }
 
     #[test]

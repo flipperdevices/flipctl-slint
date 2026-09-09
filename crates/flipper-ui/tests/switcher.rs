@@ -63,10 +63,7 @@ fn the_deck_gives_the_focused_card_the_middle_half() {
         State { x: 12, y: 1, w: 252, h: 80, r_tl: 4, r_tr: 4, r_bl: 4, r_br: 4 },
         "a card above is as tall as the focused card and hides under it"
     );
-    assert_eq!(
-        f(0),
-        State { x: 2, y: 25, w: 258, h: 80, r_tl: 4, r_tr: 4, r_bl: 4, r_br: 4 }
-    );
+    assert_eq!(f(0), State { x: 2, y: 25, w: 258, h: 80, r_tl: 4, r_tr: 4, r_bl: 4, r_br: 4 });
     assert_eq!(
         f(-1),
         State { x: 12, y: 105, w: 252, h: 25, r_tl: 4, r_tr: 4, r_bl: 4, r_br: 4 },
@@ -86,7 +83,10 @@ fn more_cards_tighten_the_strips_to_a_floor() {
     // The floor wins here, so the focused card gives up a few rows rather than
     // the deepest strip losing its name.
     assert_eq!(two.strip, 20, "three strips share what the focus leaves");
-    assert_eq!(two.focused(), State { x: 2, y: 20, w: 258, h: 70, r_tl: 4, r_tr: 4, r_bl: 4, r_br: 4 });
+    assert_eq!(
+        two.focused(),
+        State { x: 2, y: 20, w: 258, h: 70, r_tl: 4, r_tr: 4, r_bl: 4, r_br: 4 }
+    );
     let below = two.slot(-1).expect("a strip below");
     let deepest = two.slot(-2).expect("the deepest strip");
     assert_eq!(below.y, 90);
@@ -193,10 +193,7 @@ fn navigation_is_bounded_and_tugs_at_the_ends() {
     assert_eq!(s.phase(), Phase::Bouncing);
     part_way();
     let bounced = s.placed().iter().find(|p| p.name == "Ping").unwrap().state.y;
-    assert!(
-        bounced != switcher::slot(0).unwrap().y,
-        "the tug should move the card off its slot"
-    );
+    assert!(bounced != switcher::slot(0).unwrap().y, "the tug should move the card off its slot");
     finish(&mut s);
     assert_eq!(s.focused, 0, "and it springs back with the focus unchanged");
     // placed() is furthest-first, so the focused card is looked up by name rather
@@ -311,18 +308,12 @@ fn a_screen_is_a_card_of_its_own_kind() {
     // Launching says it is a screen, so the caller navigates rather than hunting
     // for a process that was never started.
     s.key(Ok);
-    assert_eq!(
-        finish(&mut s),
-        Some(Action::Launch("Settings".into(), Kind::Screen))
-    );
+    assert_eq!(finish(&mut s), Some(Action::Launch("Settings".into(), Kind::Screen)));
 
     // And killing one is a stack removal, not a signal.
     let mut s = Switcher::open(&r, false);
     finish(&mut s);
-    assert_eq!(
-        s.key(Escape),
-        Some(Action::Kill("Settings".into(), Kind::Screen))
-    );
+    assert_eq!(s.key(Escape), Some(Action::Kill("Settings".into(), Kind::Screen)));
 }
 
 /// Opening while looking at the top card focuses the one below it, which is what

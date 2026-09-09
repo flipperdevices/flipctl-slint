@@ -61,6 +61,9 @@ def main():
         f"    glyphs: &{const}_GLYPHS,",
         "};",
         "",
+        # One glyph a line is the point of the table, and rustfmt would wrap
+        # every row of it.
+        "#[rustfmt::skip]",
         f"const {const}_GLYPHS: [Glyph; {LAST - FIRST + 1}] = [",
     ]
     for code in range(FIRST, LAST + 1):

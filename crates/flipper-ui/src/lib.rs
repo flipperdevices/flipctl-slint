@@ -7,46 +7,46 @@ pub mod app;
 pub mod boot;
 pub mod boot_menu;
 pub mod dropdown;
+#[cfg(feature = "device")]
+pub mod evdev;
 pub mod font;
+#[cfg(feature = "gpu")]
+pub mod gpu;
+#[cfg(feature = "device")]
+pub mod haptic;
 pub mod key;
 pub mod keyboard;
+#[cfg(feature = "device")]
+pub mod kms;
 pub mod layout;
 pub mod log;
 pub mod net;
 pub mod netlink;
-pub mod route_watch;
 pub mod nl80211;
 pub mod old_flipctl_loader;
-pub mod status;
-pub mod switcher;
-pub mod system;
-pub mod sysinfo;
-pub mod watch;
-pub mod wifi;
 pub mod paint;
 pub mod pixel;
 pub mod platform;
-#[cfg(feature = "device")]
-pub mod evdev;
-#[cfg(feature = "device")]
-pub mod kms;
-#[cfg(feature = "device")]
-pub mod haptic;
 #[cfg(feature = "remote")]
 pub mod remote;
+pub mod route_watch;
 pub mod scale;
-#[cfg(feature = "gpu")]
-pub mod gpu;
+#[cfg(feature = "slint")]
+pub mod slint_render;
+pub mod status;
 #[cfg(feature = "wayland")]
 pub mod sway;
+pub mod switcher;
+pub mod sysinfo;
+pub mod system;
+#[cfg(feature = "tui")]
+pub mod tui;
+pub mod watch;
+pub mod wifi;
 #[cfg(feature = "wayland")]
 pub mod wl;
 #[cfg(feature = "wayland")]
 pub mod wl_sink;
-#[cfg(feature = "slint")]
-pub mod slint_render;
-#[cfg(feature = "tui")]
-pub mod tui;
 
 /// The compiled .slint components.
 ///
@@ -69,7 +69,7 @@ pub use app::{AppEntry, Rotate};
 pub use font::BitmapFont;
 pub use key::{FlipperKey, KeyEvent};
 pub use paint::Surface;
-pub use status::{Ethernet, Status, StatusSource};
-pub use platform::{Frame, FrameSink, InputSource};
 pub use pixel::{Gray8, Rect};
+pub use platform::{Frame, FrameSink, InputSource};
+pub use status::{Ethernet, Status, StatusSource};
 pub use theme::{PANEL_H, PANEL_W};

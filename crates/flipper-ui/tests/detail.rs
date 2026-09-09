@@ -50,17 +50,9 @@ fn bar_column(frame: &[flipper_ui::pixel::Gray8], index: usize) -> i32 {
     x as i32
 }
 
-
 fn row(kind: i32, label: &str, value: &str, percent: i32) -> DetailRow {
-    DetailRow {
-        kind,
-        label: label.into(),
-        value: value.into(),
-        percent,
-        dim: false,
-    }
+    DetailRow { kind, label: label.into(), value: value.into(), percent, dim: false }
 }
-
 
 // The rendered fitted column belongs to a hosted app: `fit_gauges` is set on the body
 // by the app that wants it, and flipctl's own window never asks for it. What is
@@ -79,20 +71,14 @@ fn a_sized_gauge_column_clears_its_label() {
     // the label to a fixed width, which is the app's call to make. A first-party
     // screen never moves, which is what the fixed column is for.
     let full = flipper_ui::font::ROW.text_width("100%");
-    assert_eq!(
-        flipper_ui::layout::gauge_col_fit(full),
-        i32::from(full) + metric::GAUGE_LABEL_GAP
-    );
+    assert_eq!(flipper_ui::layout::gauge_col_fit(full), i32::from(full) + metric::GAUGE_LABEL_GAP);
 
     // No label, no column: the bar starts at the margin.
     assert_eq!(flipper_ui::layout::gauge_col_fit(0), 0);
 
     // A word does not fit, and pushes the bar right by its own width plus the gap.
     let word = flipper_ui::font::ROW.text_width("Download");
-    assert_eq!(
-        flipper_ui::layout::gauge_col_fit(word),
-        i32::from(word) + metric::GAUGE_LABEL_GAP
-    );
+    assert_eq!(flipper_ui::layout::gauge_col_fit(word), i32::from(word) + metric::GAUGE_LABEL_GAP);
     assert!(
         i32::from(word) + metric::GAUGE_LABEL_GAP > metric::GAUGE_COL,
         "the test is pointless if the word fits the fixed column"
@@ -109,11 +95,8 @@ fn a_first_party_gauge_sits_in_the_approved_column() {
 
     // The battery screen's shape: a status row, its gauge, a divider.
     for label in ["0%", "100%"] {
-        let rows = vec![
-            row(0, "Discharging", "3h left", 0),
-            row(2, label, "", 61),
-            row(1, "", "", 0),
-        ];
+        let rows =
+            vec![row(0, "Discharging", "3h left", 0), row(2, label, "", 61), row(1, "", "", 0)];
         screen.set_screen(Screen::Detail);
         screen.set_breadcrumb("> Battery info".into());
         screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
@@ -138,10 +121,8 @@ fn a_dim_gauge_draws_in_the_dim_tone() {
     let window = FlipperSlintPlatform::install();
     let screen = Root::new().expect("create Root");
 
-    let rows = vec![
-        row(2, "Download", "", 60),
-        DetailRow { dim: true, ..row(2, "Verify", "", 60) },
-    ];
+    let rows =
+        vec![row(2, "Download", "", 60), DetailRow { dim: true, ..row(2, "Verify", "", 60) }];
     screen.set_screen(Screen::Detail);
     screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
     screen.set_detail_offset(0);
@@ -163,9 +144,5 @@ fn a_dim_gauge_draws_in_the_dim_tone() {
     };
 
     assert_eq!(tone(0), 0x00, "an ordinary gauge is ink");
-    assert_eq!(
-        tone(1),
-        theme::color::STATUS_DIM.0,
-        "a dim gauge is the dim tone"
-    );
+    assert_eq!(tone(1), theme::color::STATUS_DIM.0, "a dim gauge is the dim tone");
 }

@@ -148,10 +148,7 @@ fn ask_the_terminal() -> Option<(u16, u16)> {
     // put it back. A terminal clamps the move to its own last cell, which is the whole
     // trick: the answer is its size.
     let mut out = std::io::stdout();
-    let asked = out
-        .write_all(b"\x1b7\x1b[999;999H\x1b[6n\x1b8")
-        .and_then(|()| out.flush())
-        .is_ok();
+    let asked = out.write_all(b"\x1b7\x1b[999;999H\x1b[6n\x1b8").and_then(|()| out.flush()).is_ok();
 
     let mut reply = Vec::new();
     if asked {
@@ -280,9 +277,8 @@ impl Terminal {
         let (tx, rx) = unbounded::<TerminalEvent>();
         let (ready_tx, ready_rx) = bounded::<CbSink>(1);
         let keys = tx.clone();
-        let thread = std::thread::Builder::new()
-            .name("tui".into())
-            .spawn(move || run(keys, ready_tx))?;
+        let thread =
+            std::thread::Builder::new().name("tui".into()).spawn(move || run(keys, ready_tx))?;
 
         // The loop is what owns the Cursive, so its sink comes back from in there.
         // A send that never arrives means the thread died before it started, which
@@ -352,9 +348,7 @@ impl Terminal {
     /// finished first.
     pub fn dismiss_prompt(&self) {
         let _ = self.cb.send(Box::new(|siv: &mut Cursive| {
-            let up = siv
-                .call_on_name(text::FIELD, |_: &mut cursive::views::EditView| ())
-                .is_some();
+            let up = siv.call_on_name(text::FIELD, |_: &mut cursive::views::EditView| ()).is_some();
             if up {
                 siv.pop_layer();
             }

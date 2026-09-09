@@ -12,11 +12,7 @@ const INK: Gray8 = Gray8::BLACK;
 /// Render a region as a string, `#` for ink and `.` for ground.
 fn region(s: &Surface, x0: u16, y0: u16, w: u16, h: u16) -> Vec<String> {
     (0..h)
-        .map(|r| {
-            (0..w)
-                .map(|c| if s.get(x0 + c, y0 + r) == INK { '#' } else { '.' })
-                .collect()
-        })
+        .map(|r| (0..w).map(|c| if s.get(x0 + c, y0 + r) == INK { '#' } else { '.' }).collect())
         .collect()
 }
 
@@ -33,14 +29,7 @@ fn selector_corner_is_a_contiguous_diagonal() {
 
     assert_eq!(
         region(&s, 0, 0, 6, 6),
-        [
-            "..####",
-            ".#....",
-            "#.....",
-            "#.....",
-            "#.....",
-            "#.....",
-        ],
+        ["..####", ".#....", "#.....", "#.....", "#.....", "#.....",],
         "top-left corner"
     );
 }
@@ -55,14 +44,7 @@ fn soft_button_stair_is_the_same_rule_at_r4() {
 
     assert_eq!(
         region(&s, 0, 0, 6, 6),
-        [
-            "...###",
-            "..####",
-            ".#####",
-            "######",
-            "######",
-            "######",
-        ],
+        ["...###", "..####", ".#####", "######", "######", "######",],
         "filled r=4 corner steps in 3, 2, 1, 0"
     );
 }

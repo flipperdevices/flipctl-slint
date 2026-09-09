@@ -112,10 +112,7 @@ impl KmsSink {
             .and_then(|info| info.modes().first().copied().map(|m| (info.handle(), m)))
             .ok_or_else(|| std::io::Error::other("no connected connector with a mode"))?;
 
-        let crtc = *resources
-            .crtcs()
-            .first()
-            .ok_or_else(|| std::io::Error::other("no CRTC"))?;
+        let crtc = *resources.crtcs().first().ok_or_else(|| std::io::Error::other("no CRTC"))?;
 
         let (w, h) = mode.size();
 
@@ -149,8 +146,8 @@ impl KmsSink {
         // only depth and bpp, and the kernel maps 8/8 to C8, a palette format the
         // driver does not advertise, so the attempt would fail for the wrong reason
         // and silently never be used.
-        let want_r8 = !std::env::var("FLIPPER_FB_FORMAT")
-            .is_ok_and(|v| v.eq_ignore_ascii_case("xrgb"));
+        let want_r8 =
+            !std::env::var("FLIPPER_FB_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("xrgb"));
 
         let (mut buffer, fb, greyscale) = match card
             .create_dumb_buffer((u32::from(w), u32::from(h)), DrmFourcc::R8, 8)
@@ -162,17 +159,12 @@ impl KmsSink {
                 }
             })
             .and_then(|b| {
-                card.add_planar_framebuffer(&Planar(&b), FbCmd2Flags::empty())
-                    .map(|fb| (b, fb))
-            })
-        {
+                card.add_planar_framebuffer(&Planar(&b), FbCmd2Flags::empty()).map(|fb| (b, fb))
+            }) {
             Ok((b, fb)) => (b, fb, true),
             Err(_) => {
-                let b = card.create_dumb_buffer(
-                    (u32::from(w), u32::from(h)),
-                    DrmFourcc::Xrgb8888,
-                    32,
-                )?;
+                let b =
+                    card.create_dumb_buffer((u32::from(w), u32::from(h)), DrmFourcc::Xrgb8888, 32)?;
                 let fb = card.add_framebuffer(&b, 24, 32)?;
                 (b, fb, false)
             }
@@ -205,9 +197,7 @@ impl KmsSink {
             .filter_map(Result::ok)
             .map(|e| e.path())
             .filter(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("card"))
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("card"))
             })
             .collect();
         candidates.sort();
@@ -405,7 +395,10 @@ impl KmsSink {
                 ));
             }
             if !waited {
-                crate::logline!("panel          waiting for DRM master on {} ({err})", path.display());
+                crate::logline!(
+                    "panel          waiting for DRM master on {} ({err})",
+                    path.display()
+                );
                 waited = true;
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -439,13 +432,7 @@ impl KmsSink {
     }
 
     fn set_crtc(&self) -> std::io::Result<()> {
-        self.card.set_crtc(
-            self.crtc,
-            Some(self.fb),
-            (0, 0),
-            &[self.connector],
-            Some(self.mode),
-        )
+        self.card.set_crtc(self.crtc, Some(self.fb), (0, 0), &[self.connector], Some(self.mode))
     }
 
     /// Which flush path the panel ended up on. Reported by the demo so a driver

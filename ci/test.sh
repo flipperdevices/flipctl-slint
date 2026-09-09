@@ -23,6 +23,11 @@ echo "== the terminal front end (needs the tui feature) =="
 # way the drawing gets looked at off the device, so it must not break silently.
 cargo test --quiet -p flipper-ui --features tui --examples
 
+echo "== formatting =="
+# rustfmt.toml is the argument about style; this is what keeps it true. A table that
+# is deliberately wider than the limit carries #[rustfmt::skip].
+cargo fmt --all --check
+
 echo "== no raw colours or panel dimensions =="
 ./ci/no-raw-colours.sh
 

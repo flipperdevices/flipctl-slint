@@ -30,10 +30,8 @@ fn main() {
     // rasterise with zero partial coverage at 16px and antialias at any other size.
     std::env::set_var("SLINT_FONT_SIZES", "16");
 
-    let libs = HashMap::from([
-        ("theme".to_string(), theme),
-        ("flipctl".to_string(), ui.join("ui")),
-    ]);
+    let libs =
+        HashMap::from([("theme".to_string(), theme), ("flipctl".to_string(), ui.join("ui"))]);
     let config = slint_build::CompilerConfiguration::new()
         .embed_resources(slint_build::EmbedResourcesKind::EmbedForSoftwareRenderer)
         .with_library_paths(libs);

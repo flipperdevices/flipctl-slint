@@ -39,7 +39,9 @@ impl Socket {
     pub fn open(protocol: libc::c_int) -> io::Result<Self> {
         // SAFETY: constant arguments, and the descriptor is checked before it is
         // taken ownership of.
-        let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, protocol) };
+        let fd = unsafe {
+            libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, protocol)
+        };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -100,7 +102,8 @@ impl Socket {
     pub fn send(&self, message: &[u8]) -> io::Result<()> {
         // SAFETY: pointer and length describe the same slice; a netlink socket is
         // connected to the kernel without a connect.
-        let sent = unsafe { libc::send(self.0.as_raw_fd(), message.as_ptr().cast(), message.len(), 0) };
+        let sent =
+            unsafe { libc::send(self.0.as_raw_fd(), message.as_ptr().cast(), message.len(), 0) };
         if sent < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -248,16 +251,8 @@ impl Waiter {
     /// here costs nothing until one of the two happens.
     pub fn wait(&self, socket: &Socket) -> io::Result<Wake> {
         let mut fds = [
-            libc::pollfd {
-                fd: socket.as_fd().as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: self.0.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
+            libc::pollfd { fd: socket.as_fd().as_raw_fd(), events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: self.0.as_raw_fd(), events: libc::POLLIN, revents: 0 },
         ];
         loop {
             // SAFETY: the array and its length describe the same two entries, and
@@ -344,10 +339,7 @@ mod tests {
     #[test]
     fn a_message_is_framed_with_its_length_and_padding() {
         let built = message(20, NLM_F_DUMP, &[7, 0, 0, 0], &[(3, &1u32.to_ne_bytes())]);
-        assert_eq!(
-            u32::from_ne_bytes(built[..4].try_into().unwrap()) as usize,
-            built.len()
-        );
+        assert_eq!(u32::from_ne_bytes(built[..4].try_into().unwrap()) as usize, built.len());
         assert_eq!(built.len() % 4, 0);
         let mut seen = Vec::new();
         each_message(&built, |kind, body| {

@@ -99,10 +99,7 @@ pub fn rename_dialog(
         .child(TextView::new(rules.check(seed)).with_name(WARNING));
 
     OnEventView::new(
-        Dialog::around(body)
-            .title(title)
-            .button("Save", on_save)
-            .button("Cancel", on_cancel),
+        Dialog::around(body).title(title).button("Save", on_save).button("Cancel", on_cancel),
     )
     .on_event(Key::Esc, on_escape)
     .on_event(cursive::event::EventTrigger::any(), |_| {})

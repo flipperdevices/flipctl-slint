@@ -31,8 +31,8 @@
 //! ```
 
 pub use flipper_ui::status::{Status, StatusSource};
-pub use flipper_ui::{dropdown, font, paint, pixel, theme};
 pub use flipper_ui::Ethernet;
+pub use flipper_ui::{dropdown, font, paint, pixel, theme};
 
 /// Put a status reading on the panel's bar.
 ///
@@ -74,8 +74,7 @@ macro_rules! apply_status {
 /// is 110KB, which at the rate a graph changes is nothing.
 pub fn picture(surface: &paint::Surface) -> slint::Image {
     let (w, h) = (surface.width(), surface.height());
-    let mut buffer =
-        slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(u32::from(w), u32::from(h));
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(u32::from(w), u32::from(h));
     for (px, grey) in buffer.make_mut_slice().iter_mut().zip(surface.pixels()) {
         *px = slint::Rgb8Pixel { r: grey.0, g: grey.0, b: grey.0 };
     }

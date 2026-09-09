@@ -259,10 +259,7 @@ impl Recents {
     /// panel when it comes forward again, so what appears is that app's own last
     /// screen rather than whatever the framebuffer happened to hold.
     pub fn frame_of(&self, name: &str) -> Option<Snapshot> {
-        self.apps
-            .iter()
-            .find(|a| a.name == name)
-            .and_then(|a| a.snapshot.clone())
+        self.apps.iter().find(|a| a.name == name).and_then(|a| a.snapshot.clone())
     }
 
     pub fn list(&self) -> &[Entry] {
@@ -624,12 +621,8 @@ impl Switcher {
     /// Every card, placed and in drawing order.
     pub fn placed(&self) -> Vec<Placed> {
         let e = self.eased();
-        let mut out: Vec<Placed> = self
-            .cards
-            .iter()
-            .filter(|c| !c.hidden)
-            .filter_map(|c| self.place(c, e))
-            .collect();
+        let mut out: Vec<Placed> =
+            self.cards.iter().filter(|c| !c.hidden).filter_map(|c| self.place(c, e)).collect();
         // Furthest from the focus first, so the nearest card paints last. Killed
         // and overlay cards sort to the very end: one slides over the survivors,
         // the other rises in front of the card it is replacing.
@@ -691,23 +684,24 @@ impl Switcher {
         // status bar is cropped rather than sitting under the title bar. During a
         // zoom it translates only, never scales: resampling a pixel screen is
         // worse than cropping it.
-        let (img_x, img_y) = if card.image_from_full || matches!(self.phase, Phase::Opening | Phase::Closing) {
-            let target = deck.slot(card.position).unwrap_or_else(|| deck.focused());
-            let target_y = target.y - IMG_LIFT_ZOOM;
-            if self.phase == Phase::Closing {
-                (
-                    lerp(IMG_X as f32, 0.0, e).round() as i32,
-                    lerp(target_y as f32, 0.0, e).round() as i32,
-                )
+        let (img_x, img_y) =
+            if card.image_from_full || matches!(self.phase, Phase::Opening | Phase::Closing) {
+                let target = deck.slot(card.position).unwrap_or_else(|| deck.focused());
+                let target_y = target.y - IMG_LIFT_ZOOM;
+                if self.phase == Phase::Closing {
+                    (
+                        lerp(IMG_X as f32, 0.0, e).round() as i32,
+                        lerp(target_y as f32, 0.0, e).round() as i32,
+                    )
+                } else {
+                    (
+                        lerp(0.0, IMG_X as f32, e).round() as i32,
+                        lerp(0.0, target_y as f32, e).round() as i32,
+                    )
+                }
             } else {
-                (
-                    lerp(0.0, IMG_X as f32, e).round() as i32,
-                    lerp(0.0, target_y as f32, e).round() as i32,
-                )
-            }
-        } else {
-            (IMG_X, state.y + 1 - IMG_LIFT)
-        };
+                (IMG_X, state.y + 1 - IMG_LIFT)
+            };
 
         let z = if card.killing {
             -1.0

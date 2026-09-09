@@ -30,7 +30,6 @@ use flipper_ui::tui::{text::Rules, Terminal, TerminalEvent};
 use flipper_ui::{keyboard, Frame, FrameSink, InputSource, PANEL_H, PANEL_W};
 use slint::ComponentHandle;
 
-
 slint::include_modules!();
 
 fn main() -> std::process::ExitCode {
@@ -45,17 +44,11 @@ fn main() -> std::process::ExitCode {
     // init with stdio on /dev/console there is none, and nothing happens. --no-tui is
     // for a console somebody else wants, and for proving the menu is no slower without.
     let want_tui = !args.iter().any(|a| a == "--no-tui");
-    let card = args
-        .windows(2)
-        .find(|w| w[0] == "--kms-device")
-        .map(|w| w[1].clone());
+    let card = args.windows(2).find(|w| w[0] == "--kms-device").map(|w| w[1].clone());
     // Old kernels are hidden unless asked for: a 6.1 BSP entry left on disk boots
     // nothing anybody wants, and the menu is a list of things worth choosing.
-    let kernels = if args.iter().any(|a| a == "--all-kernels") {
-        Kernels::All
-    } else {
-        Kernels::Modern
-    };
+    let kernels =
+        if args.iter().any(|a| a == "--all-kernels") { Kernels::All } else { Kernels::Modern };
 
     match run(card.as_deref(), kernels, want_tui) {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -245,7 +238,9 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
                 }
                 if booting {
                     takeover_committed = true;
-                    flipper_ui::logline!("boot menu      takeover drawn; the panel is left alone from here");
+                    flipper_ui::logline!(
+                        "boot menu      takeover drawn; the panel is left alone from here"
+                    );
                 }
             }
             match tui.take() {
@@ -303,10 +298,7 @@ fn press(
     // What makes the name invalid, which also gates saving it.
     *warning = match kb.as_ref() {
         Some(field) => {
-            let being = flipper_ui::boot::Profile {
-                name: kb_for.clone(),
-                ..Default::default()
-            };
+            let being = flipper_ui::boot::Profile { name: kb_for.clone(), ..Default::default() };
             flipper_ui::boot::rename_warning(&field.text, &being, menu.profiles())
         }
         None => String::new(),
@@ -344,14 +336,9 @@ fn press(
             Outcome::Leave => menu.reread(),
             Outcome::Rename { name, label } => {
                 if let Some(terminal) = tui {
-                    let being = flipper_ui::boot::Profile {
-                        name: name.clone(),
-                        ..Default::default()
-                    };
-                    let rules = Rules {
-                        being,
-                        profiles: menu.profiles().to_vec(),
-                    };
+                    let being =
+                        flipper_ui::boot::Profile { name: name.clone(), ..Default::default() };
+                    let rules = Rules { being, profiles: menu.profiles().to_vec() };
                     terminal.prompt_rename("Profile name", &label, rules);
                 }
                 *kb = Some(keyboard::TextInput::new("Profile name", &label));
@@ -385,8 +372,7 @@ fn apply(ui: &Menu, view: &BootView, kb: Option<&keyboard::TextInput>, warning: 
     ui.set_spin_frame(view.spin_frame);
     ui.set_booting(view.booting.as_str().into());
 
-    let buttons: Vec<slint::SharedString> =
-        view.buttons.iter().map(|s| (*s).into()).collect();
+    let buttons: Vec<slint::SharedString> = view.buttons.iter().map(|s| (*s).into()).collect();
     ui.set_buttons(slint::ModelRc::new(slint::VecModel::from(buttons)));
 
     ui.set_popup_open(view.popup_open);
@@ -458,10 +444,8 @@ fn apply(ui: &Menu, view: &BootView, kb: Option<&keyboard::TextInput>, warning: 
         ui.set_kb_tab_pressed(v.tab_pressed);
         ui.set_kb_discard(v.discard);
         // The keyboard's own two labelled keys, as flipctl labels them.
-        let buttons: Vec<slint::SharedString> = ["Cancel", "", "", "", "Done"]
-            .iter()
-            .map(|s| (*s).into())
-            .collect();
+        let buttons: Vec<slint::SharedString> =
+            ["Cancel", "", "", "", "Done"].iter().map(|s| (*s).into()).collect();
         ui.set_kb_buttons(slint::ModelRc::new(slint::VecModel::from(buttons)));
     }
 }

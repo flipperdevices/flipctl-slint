@@ -259,19 +259,12 @@ impl Converter {
                 display,
                 config,
                 None,
-                &[
-                    egl::CONTEXT_MAJOR_VERSION,
-                    3,
-                    egl::CONTEXT_MINOR_VERSION,
-                    0,
-                    egl::NONE,
-                ],
+                &[egl::CONTEXT_MAJOR_VERSION, 3, egl::CONTEXT_MINOR_VERSION, 0, egl::NONE],
             )
             .map_err(io::Error::other)?;
         // Current on this thread for as long as the converter lives, which is why the
         // converter is built on the thread that will use it.
-        egl.make_current(display, None, None, Some(context))
-            .map_err(io::Error::other)?;
+        egl.make_current(display, None, None, Some(context)).map_err(io::Error::other)?;
 
         let lib = unsafe { libloading::Library::new("libGLESv2.so.2") }
             .map_err(|e| io::Error::other(format!("no libGLESv2: {e}")))?;
@@ -282,22 +275,46 @@ impl Converter {
             gen_textures: sym!(lib, "glGenTextures", unsafe extern "C" fn(i32, *mut u32)),
             bind_texture: sym!(lib, "glBindTexture", unsafe extern "C" fn(u32, u32)),
             tex_parameteri: sym!(lib, "glTexParameteri", unsafe extern "C" fn(u32, u32, i32)),
-            tex_storage_2d: sym!(lib, "glTexStorage2D", unsafe extern "C" fn(u32, i32, u32, i32, i32)),
+            tex_storage_2d: sym!(
+                lib,
+                "glTexStorage2D",
+                unsafe extern "C" fn(u32, i32, u32, i32, i32)
+            ),
             gen_framebuffers: sym!(lib, "glGenFramebuffers", unsafe extern "C" fn(i32, *mut u32)),
             bind_framebuffer: sym!(lib, "glBindFramebuffer", unsafe extern "C" fn(u32, u32)),
-            framebuffer_texture_2d: sym!(lib, "glFramebufferTexture2D", unsafe extern "C" fn(u32, u32, u32, u32, i32)),
-            check_framebuffer_status: sym!(lib, "glCheckFramebufferStatus", unsafe extern "C" fn(u32) -> u32),
+            framebuffer_texture_2d: sym!(
+                lib,
+                "glFramebufferTexture2D",
+                unsafe extern "C" fn(u32, u32, u32, u32, i32)
+            ),
+            check_framebuffer_status: sym!(
+                lib,
+                "glCheckFramebufferStatus",
+                unsafe extern "C" fn(u32) -> u32
+            ),
             create_shader: sym!(lib, "glCreateShader", unsafe extern "C" fn(u32) -> u32),
-            shader_source: sym!(lib, "glShaderSource", unsafe extern "C" fn(u32, i32, *const *const c_char, *const i32)),
+            shader_source: sym!(
+                lib,
+                "glShaderSource",
+                unsafe extern "C" fn(u32, i32, *const *const c_char, *const i32)
+            ),
             compile_shader: sym!(lib, "glCompileShader", unsafe extern "C" fn(u32)),
             get_shaderiv: sym!(lib, "glGetShaderiv", unsafe extern "C" fn(u32, u32, *mut i32)),
-            get_shader_info_log: sym!(lib, "glGetShaderInfoLog", unsafe extern "C" fn(u32, i32, *mut i32, *mut c_char)),
+            get_shader_info_log: sym!(
+                lib,
+                "glGetShaderInfoLog",
+                unsafe extern "C" fn(u32, i32, *mut i32, *mut c_char)
+            ),
             create_program: sym!(lib, "glCreateProgram", unsafe extern "C" fn() -> u32),
             attach_shader: sym!(lib, "glAttachShader", unsafe extern "C" fn(u32, u32)),
             link_program: sym!(lib, "glLinkProgram", unsafe extern "C" fn(u32)),
             get_programiv: sym!(lib, "glGetProgramiv", unsafe extern "C" fn(u32, u32, *mut i32)),
             use_program: sym!(lib, "glUseProgram", unsafe extern "C" fn(u32)),
-            get_uniform_location: sym!(lib, "glGetUniformLocation", unsafe extern "C" fn(u32, *const c_char) -> i32),
+            get_uniform_location: sym!(
+                lib,
+                "glGetUniformLocation",
+                unsafe extern "C" fn(u32, *const c_char) -> i32
+            ),
             uniform1i: sym!(lib, "glUniform1i", unsafe extern "C" fn(i32, i32)),
             uniform2f: sym!(lib, "glUniform2f", unsafe extern "C" fn(i32, f32, f32)),
             active_texture: sym!(lib, "glActiveTexture", unsafe extern "C" fn(u32)),
@@ -306,7 +323,11 @@ impl Converter {
             clear: sym!(lib, "glClear", unsafe extern "C" fn(u32)),
             draw_arrays: sym!(lib, "glDrawArrays", unsafe extern "C" fn(u32, i32, i32)),
             pixel_storei: sym!(lib, "glPixelStorei", unsafe extern "C" fn(u32, i32)),
-            read_pixels: sym!(lib, "glReadPixels", unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void)),
+            read_pixels: sym!(
+                lib,
+                "glReadPixels",
+                unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void)
+            ),
             get_error: sym!(lib, "glGetError", unsafe extern "C" fn() -> u32),
             image_target_texture_2d: unsafe { std::mem::transmute(image_target) },
             _lib: lib,
@@ -378,12 +399,7 @@ impl Converter {
             )));
         }
         let (fd, stride, offset, modifier) = unsafe {
-            (
-                (g.bo_fd)(bo),
-                (g.bo_stride)(bo),
-                (g.bo_offset)(bo, 0),
-                (g.bo_modifier)(bo),
-            )
+            ((g.bo_fd)(bo), (g.bo_stride)(bo), (g.bo_offset)(bo, 0), (g.bo_modifier)(bo))
         };
         if fd < 0 {
             unsafe { (g.bo_destroy)(bo) };
@@ -394,13 +410,7 @@ impl Converter {
         let image = self.import(&fd, fourcc, modifier, offset, stride, w, h)?;
         self.buffers[slot.min(1)] = Some(Buffer { bo, image, size: (w, h) });
 
-        Ok(Target {
-            planes: vec![Plane { fd, offset, stride }],
-            fourcc,
-            modifier,
-            w,
-            h,
-        })
+        Ok(Target { planes: vec![Plane { fd, offset, stride }], fourcc, modifier, w, h })
     }
 
     /// Let go of one buffer and its image, if there is one.
@@ -552,12 +562,7 @@ fn load_gbm() -> io::Result<Gbm> {
     // kernels, which has already cost this project a blank panel once. On any other
     // machine that path does not exist, so `--render-node` names the node to use and
     // renderD128 is the last resort.
-    let open = |path: &str| {
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-    };
+    let open = |path: &str| std::fs::OpenOptions::new().read(true).write(true).open(path);
     let node = match std::env::var("FLIPCTL_RENDER_NODE") {
         Ok(named) => open(&named)?,
         Err(_) => open("/dev/dri/by-path/platform-27800000.gpu-render")
@@ -575,16 +580,8 @@ fn load_gbm() -> io::Result<Gbm> {
         ),
         bo_fd: sym!(lib, "gbm_bo_get_fd", unsafe extern "C" fn(*mut c_void) -> i32),
         bo_stride: sym!(lib, "gbm_bo_get_stride", unsafe extern "C" fn(*mut c_void) -> u32),
-        bo_offset: sym!(
-            lib,
-            "gbm_bo_get_offset",
-            unsafe extern "C" fn(*mut c_void, i32) -> u32
-        ),
-        bo_modifier: sym!(
-            lib,
-            "gbm_bo_get_modifier",
-            unsafe extern "C" fn(*mut c_void) -> u64
-        ),
+        bo_offset: sym!(lib, "gbm_bo_get_offset", unsafe extern "C" fn(*mut c_void, i32) -> u32),
+        bo_modifier: sym!(lib, "gbm_bo_get_modifier", unsafe extern "C" fn(*mut c_void) -> u64),
         bo_destroy: sym!(lib, "gbm_bo_destroy", unsafe extern "C" fn(*mut c_void)),
         device_destroy: sym!(lib, "gbm_device_destroy", unsafe extern "C" fn(*mut c_void)),
         device: {
@@ -602,9 +599,7 @@ fn load_gbm() -> io::Result<Gbm> {
 
 /// A DRM fourcc as the four characters it is, for a message a person can read.
 pub fn fourcc_name(code: u32) -> String {
-    let bytes = code
-        .to_le_bytes()
-        .map(|b| if b.is_ascii_graphic() { b } else { b'?' });
+    let bytes = code.to_le_bytes().map(|b| if b.is_ascii_graphic() { b } else { b'?' });
     String::from_utf8_lossy(&bytes).into_owned()
 }
 

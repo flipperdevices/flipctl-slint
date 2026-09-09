@@ -7,12 +7,6 @@
 
 use flipper_ui::app;
 
-
-
-
-
-
-
 /// Discovery reads the manifests in `apps/` and sorts by name, so the menu order
 /// does not depend on directory order.
 #[test]
@@ -51,11 +45,8 @@ fn a_directory_without_a_manifest_is_skipped() {
     std::fs::create_dir_all(tmp.join("broken")).expect("mkdir");
     std::fs::write(tmp.join("broken/app.py"), "print(\"hello\")\n").expect("write");
     std::fs::create_dir_all(tmp.join("good")).expect("mkdir");
-    std::fs::write(
-        tmp.join("good/app.toml"),
-        "name = \"Good\"\nwayland = \"python3 app.py\"\n",
-    )
-    .expect("write");
+    std::fs::write(tmp.join("good/app.toml"), "name = \"Good\"\nwayland = \"python3 app.py\"\n")
+        .expect("write");
 
     let apps = app::discover(&tmp);
     assert_eq!(apps.len(), 1);
@@ -85,12 +76,7 @@ fn discovered_paths_are_absolute() {
         // the program behind it may be the system's or a binary that is not built
         // yet.
         let proof = entry.dir.join(app::MANIFEST);
-        assert!(
-            proof.is_file(),
-            "{} points at a missing file: {}",
-            entry.name,
-            proof.display()
-        );
+        assert!(proof.is_file(), "{} points at a missing file: {}", entry.name, proof.display());
     }
 }
 
@@ -130,10 +116,7 @@ audio = true
     assert_eq!(a.apt, ["iputils-ping", "curl"]);
     assert_eq!(a.pip, ["requests", "rich"], "a list may span lines");
     assert!(a.audio);
-    assert_eq!(
-        a.icon_path(),
-        Some(app.canonicalize().unwrap().join("thing.png"))
-    );
+    assert_eq!(a.icon_path(), Some(app.canonicalize().unwrap().join("thing.png")));
 }
 
 /// An app built from a crate: the manifest names it and the crate names the binary.
@@ -151,25 +134,14 @@ fn a_crate_gives_the_binary_its_name() {
         "name = \"Display Name\"\nwayland = \"./target/release/crate-name\"\n",
     )
     .unwrap();
-    std::fs::write(
-        app.join("Cargo.toml"),
-        "[workspace]\n\n[package]\nname = \"crate-name\"\n",
-    )
-    .unwrap();
+    std::fs::write(app.join("Cargo.toml"), "[workspace]\n\n[package]\nname = \"crate-name\"\n")
+        .unwrap();
 
     let found = app::discover(&dir);
     assert_eq!(found[0].name, "Display Name");
     assert_eq!(found[0].bin, "crate-name");
     assert_eq!(found[0].binary(), found[0].dir.join("target/release/crate-name"));
 }
-
-
-
-
-
-
-
-
 
 /// A hosted app is a manifest and nothing else.
 ///
@@ -193,11 +165,7 @@ fn the_htop_app_is_a_manifest() {
         "in a terminal of its own, not on a VT: {}",
         htop.wayland
     );
-    assert_eq!(
-        htop.apt,
-        ["foot", "htop"],
-        "both declared, so they can be installed on demand"
-    );
+    assert_eq!(htop.apt, ["foot", "htop"], "both declared, so they can be installed on demand");
     assert!(htop.pip.is_empty());
     assert!(!htop.dir.join("app.py").exists(), "no code of ours");
 
@@ -205,15 +173,8 @@ fn the_htop_app_is_a_manifest() {
     // of these says "journalctl -f" it has to stay one command, not two.
     let (program, args) = htop.command();
     assert_eq!(program, std::path::Path::new("/bin/sh"));
-    assert_eq!(
-        args,
-        [
-            std::path::Path::new("-c"),
-            std::path::Path::new(htop.wayland.as_str())
-        ]
-    );
+    assert_eq!(args, [std::path::Path::new("-c"), std::path::Path::new(htop.wayland.as_str())]);
 }
-
 
 /// Apps are found in folders at any depth, and a folder is only a folder until it
 /// has a manifest: an app's own directory stops the walk, so its `target` and
@@ -230,15 +191,9 @@ fn apps_are_found_in_folders() {
     write(&tmp.join("net/ping"), "name = \"Ping\"\nwayland = \"true\"\n");
     write(&tmp.join("net/deeper/nmap"), "name = \"Nmap\"\nwayland = \"true\"\n");
     // Build output inside an app, which must not be read as a folder of apps.
-    write(
-        &tmp.join("built/target/release/decoy"),
-        "name = \"Decoy\"\nwayland = \"true\"\n",
-    );
-    std::fs::write(
-        tmp.join("built/app.toml"),
-        "name = \"Built\"\nwayland = \"true\"\n",
-    )
-    .expect("write");
+    write(&tmp.join("built/target/release/decoy"), "name = \"Decoy\"\nwayland = \"true\"\n");
+    std::fs::write(tmp.join("built/app.toml"), "name = \"Built\"\nwayland = \"true\"\n")
+        .expect("write");
 
     // A loop, which an unbounded walk has to survive.
     std::os::unix::fs::symlink(&tmp, tmp.join("net/loop")).expect("symlink");
@@ -246,12 +201,7 @@ fn apps_are_found_in_folders() {
     let apps = app::discover(&tmp);
     let found: Vec<(&str, Vec<&str>)> = apps
         .iter()
-        .map(|a| {
-            (
-                a.name.as_str(),
-                a.group.iter().map(String::as_str).collect::<Vec<_>>(),
-            )
-        })
+        .map(|a| (a.name.as_str(), a.group.iter().map(String::as_str).collect::<Vec<_>>()))
         .collect();
     assert_eq!(
         found,

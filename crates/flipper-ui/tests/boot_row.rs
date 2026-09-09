@@ -46,14 +46,8 @@ fn the_status_goes_when_the_name_does_not_leave_room() {
 
     // The heart and the medium badge sit between the name and the status, so each of
     // them is width as much as a character is.
-    assert!(
-        !status_fits(&name, status, true, Medium::Internal),
-        "the heart has to fit too"
-    );
-    assert!(
-        !status_fits(&name, status, false, Medium::Sd),
-        "and so does the wider medium badge"
-    );
+    assert!(!status_fits(&name, status, true, Medium::Internal), "the heart has to fit too");
+    assert!(!status_fits(&name, status, false, Medium::Sd), "and so does the wider medium badge");
 }
 
 /// A profile never booted has no status at all, which always fits.

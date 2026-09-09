@@ -8,6 +8,7 @@ pub const ROW: BitmapFont = BitmapFont {
     glyphs: &ROW_GLYPHS,
 };
 
+#[rustfmt::skip]
 const ROW_GLYPHS: [Glyph; 95] = [
     // 32 space
     Glyph { advance: 6, rows: &[0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000] },

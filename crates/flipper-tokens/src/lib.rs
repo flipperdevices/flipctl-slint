@@ -98,28 +98,20 @@ pub fn rust_theme(doc: &toml::Value) -> String {
 
     let cols = colors(doc);
 
-    s.push_str("/// Every colour token. The panel is 8-bit greyscale, so a token is a single\n\
+    s.push_str(
+        "/// Every colour token. The panel is 8-bit greyscale, so a token is a single\n\
                 /// grey level; the r/g/b triple is kept for the Slint side and the tests.\n\
-                pub mod color {\n    use super::Gray8;\n\n");
+                pub mod color {\n    use super::Gray8;\n\n",
+    );
     for (name, hex, (r, g, b)) in &cols {
         writeln!(s, "    /// `{hex}`").unwrap();
-        writeln!(
-            s,
-            "    pub const {}: Gray8 = Gray8({r});",
-            name.to_uppercase()
-        )
-        .unwrap();
+        writeln!(s, "    pub const {}: Gray8 = Gray8({r});", name.to_uppercase()).unwrap();
         let _ = (g, b);
     }
     s.push_str("}\n\n");
 
     s.push_str("/// (name, hex, r, g, b) for every colour token, for the invariant tests.\n");
-    writeln!(
-        s,
-        "pub const ALL_COLORS: [(&str, &str, u8, u8, u8); {}] = [",
-        cols.len()
-    )
-    .unwrap();
+    writeln!(s, "pub const ALL_COLORS: [(&str, &str, u8, u8, u8); {}] = [", cols.len()).unwrap();
     for (name, hex, (r, g, b)) in &cols {
         writeln!(s, "    ({name:?}, {hex:?}, {r}, {g}, {b}),").unwrap();
     }
@@ -132,13 +124,8 @@ pub fn rust_theme(doc: &toml::Value) -> String {
             writeln!(s, "    pub const {}: i32 = {n};", name.to_uppercase()).unwrap();
         }
         s.push_str("}\n\n");
-        writeln!(
-            s,
-            "pub const ALL_{}: [(&str, i32); {}] = [",
-            group.to_uppercase(),
-            items.len()
-        )
-        .unwrap();
+        writeln!(s, "pub const ALL_{}: [(&str, i32); {}] = [", group.to_uppercase(), items.len())
+            .unwrap();
         for (name, n) in &items {
             writeln!(s, "    ({name:?}, {n}),").unwrap();
         }
@@ -150,9 +137,7 @@ pub fn rust_theme(doc: &toml::Value) -> String {
     let mut akeys: Vec<_> = alpha.iter().collect();
     akeys.sort_by_key(|(k, _)| (*k).clone());
     for (name, val) in &akeys {
-        let f = val
-            .as_float()
-            .unwrap_or_else(|| panic!("[alpha].{name} must be a float"));
+        let f = val.as_float().unwrap_or_else(|| panic!("[alpha].{name} must be a float"));
         writeln!(s, "    pub const {}: f32 = {f};", name.to_uppercase()).unwrap();
     }
     s.push_str("}\n\n");
@@ -162,9 +147,7 @@ pub fn rust_theme(doc: &toml::Value) -> String {
     rkeys.sort_by_key(|(k, _)| (*k).clone());
     s.push_str("/// System-wide rules, decided once in tokens.toml.\npub mod rule {\n");
     for (name, val) in &rkeys {
-        let v = val
-            .as_str()
-            .unwrap_or_else(|| panic!("[rule].{name} must be a string"));
+        let v = val.as_str().unwrap_or_else(|| panic!("[rule].{name} must be a string"));
         writeln!(s, "    pub const {}: &str = {v:?};", name.to_uppercase()).unwrap();
     }
     s.push_str("}\n\n");
@@ -179,10 +162,12 @@ pub fn rust_theme(doc: &toml::Value) -> String {
     let fonts = table(doc, "font");
     let mut fkeys: Vec<_> = fonts.iter().collect();
     fkeys.sort_by_key(|(k, _)| (*k).clone());
-    s.push_str("/// Font frame geometry. Advance width is per-glyph and lives in the glyph\n\
+    s.push_str(
+        "/// Font frame geometry. Advance width is per-glyph and lives in the glyph\n\
                 /// tables, so text width is a sum and never a multiplication.\n\
                 pub mod font {\n    pub struct FontMetrics {\n        \
-                pub name: &'static str,\n        pub rows: u8,\n        pub cols: u8,\n    }\n\n");
+                pub name: &'static str,\n        pub rows: u8,\n        pub cols: u8,\n    }\n\n",
+    );
     for (key, val) in &fkeys {
         let t = val.as_table().unwrap();
         let name = t["name"].as_str().unwrap();
@@ -223,23 +208,13 @@ pub fn slint_theme(doc: &toml::Value) -> String {
     let mut akeys: Vec<_> = alpha.iter().collect();
     akeys.sort_by_key(|(k, _)| (*k).clone());
     for (name, val) in akeys {
-        writeln!(
-            s,
-            "    out property <float> {name}_alpha: {};",
-            val.as_float().unwrap()
-        )
-        .unwrap();
+        writeln!(s, "    out property <float> {name}_alpha: {};", val.as_float().unwrap()).unwrap();
     }
     let rules = table(doc, "rule");
     let mut rkeys: Vec<_> = rules.iter().collect();
     rkeys.sort_by_key(|(k, _)| (*k).clone());
     for (name, val) in rkeys {
-        writeln!(
-            s,
-            "    out property <string> {name}_rule: {:?};",
-            val.as_str().unwrap()
-        )
-        .unwrap();
+        writeln!(s, "    out property <string> {name}_rule: {:?};", val.as_str().unwrap()).unwrap();
     }
 
     // The panel size as a length, so the Window components bind to tokens.toml rather

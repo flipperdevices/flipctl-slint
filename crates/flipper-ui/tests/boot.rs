@@ -77,7 +77,7 @@ fn used_ago_reads_as_a_person_would_say_it() {
     let at = |s: &str| {
         std::time::UNIX_EPOCH
             + std::time::Duration::from_secs(
-                boot::parse_stamp_for_test(s).expect("parseable") as u64,
+                boot::parse_stamp_for_test(s).expect("parseable") as u64
             )
     };
     let now = at("2026-08-20 12:00:00");
@@ -160,10 +160,7 @@ fn a_clone_is_named_from_its_source() {
 #[test]
 fn actions_refuse_a_name_that_cannot_be_a_profile() {
     for bad in ["", "@", "Minimal", "@has space", "@semi;colon", "@../escape"] {
-        assert!(
-            boot::clone("", bad, "@Ok__x__").is_err(),
-            "{bad:?} should be refused as a source"
-        );
+        assert!(boot::clone("", bad, "@Ok__x__").is_err(), "{bad:?} should be refused as a source");
         assert!(
             boot::clone("", "@Minimal", bad).is_err(),
             "{bad:?} should be refused as a destination"
@@ -173,10 +170,7 @@ fn actions_refuse_a_name_that_cannot_be_a_profile() {
     // nothing here builds a path out of one, and a value with a separator in it cannot
     // be an entry.
     for bad in ["", ".hidden", "has space", "../escape", "sub/dir", "semi;colon"] {
-        assert!(
-            boot::set_auto_start("", bad).is_err(),
-            "{bad:?} should be refused as an entry id"
-        );
+        assert!(boot::set_auto_start("", bad).is_err(), "{bad:?} should be refused as an entry id");
     }
     assert!(boot::valid_entry_id("900-flipperos-Desktop-7.2.0-00249-g26619ffca0bd"));
 }
@@ -229,10 +223,7 @@ linux /@Minimal/usr/lib/modules/6.1.172/vmlinuz
 options rootflags=subvol=@Minimal
 linux /boot/vmlinuz-7.2.0-ga0d2d145deeb
 ";
-    assert_eq!(
-        boot::parse_conf("x", in_boot).unwrap().version,
-        "7.2.0-ga0d2d145deeb"
-    );
+    assert_eq!(boot::parse_conf("x", in_boot).unwrap().version, "7.2.0-ga0d2d145deeb");
 }
 
 /// Overlays are the entry's own, and a drop-in is the user's.
@@ -249,11 +240,7 @@ devicetree-overlay /@No-Graphics/usr/lib/rk3576-no-graphics.dtbo /@No-Graphics/e
 ";
     let conf = boot::parse_conf("500-flipperos-No-Graphics-7.2.0", text).unwrap();
     assert_eq!(conf.system, ["rk3576-no-graphics.dtbo"]);
-    assert_eq!(
-        conf.user,
-        ["mine.dtbo"],
-        "a drop-in under /etc/kernel/dtbo is the user's"
-    );
+    assert_eq!(conf.user, ["mine.dtbo"], "a drop-in under /etc/kernel/dtbo is the user's");
 }
 
 /// Old kernels are hidden, and an unreadable version is not.
@@ -267,12 +254,7 @@ fn only_the_kernels_worth_choosing_are_offered() {
     for old in ["6.1.172", "6.16.0-rc1", "0.1"] {
         assert!(!boot::version_at_least(old, (7, 0)), "{old} is older than 7.0");
     }
-    for new in [
-        "7.2.0-00249-g26619ffca0bd",
-        "7.2.0-ga0d2d145deeb",
-        "7.0",
-        "8.1.0",
-    ] {
+    for new in ["7.2.0-00249-g26619ffca0bd", "7.2.0-ga0d2d145deeb", "7.0", "8.1.0"] {
         assert!(boot::version_at_least(new, (7, 0)), "{new} is 7.0 or newer");
     }
     for unreadable in ["", "mainline", "v7.2.0"] {
@@ -291,8 +273,8 @@ fn size_output_is_parsed_from_key_value_pairs() {
     assert_eq!(quick.unique, "1.1GB");
     assert_eq!(quick.referenced, "", "-q skips the compsize walk");
 
-    let full = boot::parse_space("TOTAL=2.5GB UNIQUE=0.0B REFERENCED=1.4GB COMPRESSION=1.8\n")
-        .unwrap();
+    let full =
+        boot::parse_space("TOTAL=2.5GB UNIQUE=0.0B REFERENCED=1.4GB COMPRESSION=1.8\n").unwrap();
     assert_eq!(full.referenced, "1.4GB");
 
     // The whole-filesystem report has no such pairs, so it must not be mistaken
@@ -321,10 +303,7 @@ NAME                                        KIND     ID   CREATED              L
     };
 
     // A factory image: its name is its origin base.
-    assert_eq!(
-        boot::edit_actions(&by("@Minimal")),
-        ["Clone", "Factory Reset", "Auto Start"]
-    );
+    assert_eq!(boot::edit_actions(&by("@Minimal")), ["Clone", "Factory Reset", "Auto Start"]);
     // An image made outside this menu. No brackets in the list, so no Rename and
     // no Delete either, even though its name differs from the base.
     assert_eq!(boot::display_name("@Desktop_Computer"), "Desktop_Computer");
@@ -352,10 +331,7 @@ NAME                                   KIND     ID   CREATED              LAST U
 ";
     let p = boot::parse_listing(listing, boot::Medium::Internal, "", "/dev/sda", "UFS").remove(0);
     assert_eq!(boot::profile_label(&p.name), "movie night");
-    assert_eq!(
-        boot::rename_dest(&p, "Movie Night 2"),
-        "@TV-Media-Box__Movie-Night-2__"
-    );
+    assert_eq!(boot::rename_dest(&p, "Movie Night 2"), "@TV-Media-Box__Movie-Night-2__");
     // Punctuation is not part of a subvolume name, and the edges are trimmed.
     assert_eq!(boot::encode_label("  hello, world!  "), "hello-world");
     assert_eq!(boot::encode_label("***"), "");
@@ -381,7 +357,8 @@ NAME             KIND     ID   CREATED              LAST USED            RO  PAR
 ";
 
     // What flipctl passes for a card: no marker, and removable.
-    let rows = boot::parse_listing(listing, boot::Medium::Sd, "/dev/mmcblk0p3", "/dev/mmcblk0", "SD");
+    let rows =
+        boot::parse_listing(listing, boot::Medium::Sd, "/dev/mmcblk0p3", "/dev/mmcblk0", "SD");
     assert_eq!(rows.len(), 2, "the preamble must not be read as a row");
     assert!(rows.iter().all(|p| p.medium == boot::Medium::Sd), "every row came off the card");
     assert_eq!(rows[0].name, "@Desktop");
@@ -413,7 +390,8 @@ fn a_cards_rows_carry_their_device() {
 NAME             KIND     ID   CREATED              LAST USED  RO  PARENT  ORIGIN
 @Desktop         profile  265  2026-08-20 08:44:06  never      rw  -       -
 ";
-    let card = boot::parse_listing(listing, boot::Medium::Sd, "/dev/mmcblk0p3", "/dev/mmcblk0", "SD");
+    let card =
+        boot::parse_listing(listing, boot::Medium::Sd, "/dev/mmcblk0p3", "/dev/mmcblk0", "SD");
     assert_eq!(card[0].dev, "/dev/mmcblk0p3");
     // What the Info popup's Drive line reads from.
     assert_eq!(card[0].disk, "/dev/mmcblk0");
@@ -422,7 +400,6 @@ NAME             KIND     ID   CREATED              LAST USED  RO  PARENT  ORIGI
     let own = boot::parse_listing(listing, boot::Medium::Internal, "", "/dev/sda", "UFS");
     assert!(own[0].dev.is_empty());
 }
-
 
 /// What counts as a leftover from a factory reset, and what does not.
 ///
@@ -436,7 +413,10 @@ fn only_stamped_copies_of_the_booted_profile_are_leftovers() {
 
     assert!(!boot::is_old_backup("@Desktop_old_notes", "@Desktop"), "not a stamp");
     assert!(!boot::is_old_backup("@Desktop_old_2026-8-27_14-31-05", "@Desktop"), "short month");
-    assert!(!boot::is_old_backup("@Desktop_old_2026-08-27_14-31-05_x", "@Desktop"), "counter is digits");
+    assert!(
+        !boot::is_old_backup("@Desktop_old_2026-08-27_14-31-05_x", "@Desktop"),
+        "counter is digits"
+    );
     assert!(!boot::is_old_backup("@Desktop", "@Desktop"), "the profile itself");
     assert!(
         !boot::is_old_backup("@Minimal_old_2026-08-27_14-31-05", "@Desktop"),
@@ -470,10 +450,7 @@ fn a_boot_counter_is_part_of_the_name_and_not_of_the_id() {
     );
 
     // A name nobody here wrote is not a reason to call an entry bad and refuse it.
-    assert_eq!(
-        boot::split_counter("weird+notanumber.conf"),
-        ("weird".to_string(), None)
-    );
+    assert_eq!(boot::split_counter("weird+notanumber.conf"), ("weird".to_string(), None));
 }
 
 /// What an entry says about itself, which the Config screen shows beside its version.
@@ -516,10 +493,34 @@ fn the_first_entry_is_the_one_that_boots() {
 
     // The device as it stands: @Desktop boots by itself (autoboot digit 0) and has two
     // kernels, the chosen one at rank 0; the other profiles follow by band.
-    let desktop_new = conf("900-flipperos-Desktop-7.2.0-00249+3-0.conf", "7.2.0-00249", "debian-0100-Desktop-0", 200, Some(3));
-    let desktop_old = conf("900-flipperos-Desktop-7.2.0-ga0d2.conf", "7.2.0-ga0d2", "debian-0100-Desktop-1", 100, None);
-    let tv = conf("800-flipperos-TV-Media-Box-7.2.0-ga0d2.conf", "7.2.0-ga0d2", "debian-1200-TV-Media-Box-0", 100, None);
-    let minimal = conf("600-flipperos-Minimal-7.2.0-ga0d2.conf", "7.2.0-ga0d2", "debian-1400-Minimal-0", 100, None);
+    let desktop_new = conf(
+        "900-flipperos-Desktop-7.2.0-00249+3-0.conf",
+        "7.2.0-00249",
+        "debian-0100-Desktop-0",
+        200,
+        Some(3),
+    );
+    let desktop_old = conf(
+        "900-flipperos-Desktop-7.2.0-ga0d2.conf",
+        "7.2.0-ga0d2",
+        "debian-0100-Desktop-1",
+        100,
+        None,
+    );
+    let tv = conf(
+        "800-flipperos-TV-Media-Box-7.2.0-ga0d2.conf",
+        "7.2.0-ga0d2",
+        "debian-1200-TV-Media-Box-0",
+        100,
+        None,
+    );
+    let minimal = conf(
+        "600-flipperos-Minimal-7.2.0-ga0d2.conf",
+        "7.2.0-ga0d2",
+        "debian-1400-Minimal-0",
+        100,
+        None,
+    );
 
     let mut order: Vec<&boot::Conf> = vec![&minimal, &tv, &desktop_old, &desktop_new];
     boot::sort_confs(&mut order);
@@ -536,7 +537,13 @@ fn the_first_entry_is_the_one_that_boots() {
 
     // Every try spent: the entry sorts last however good its key, and the kernel that
     // was booting before leads again. This is the fallback, and it needs no state.
-    let failed = conf("900-flipperos-Desktop-7.2.0-00249+0-3.conf", "7.2.0-00249", "debian-0100-Desktop-0", 200, Some(0));
+    let failed = conf(
+        "900-flipperos-Desktop-7.2.0-00249+0-3.conf",
+        "7.2.0-00249",
+        "debian-0100-Desktop-0",
+        200,
+        Some(0),
+    );
     let mut order: Vec<&boot::Conf> = vec![&failed, &desktop_old, &tv];
     boot::sort_confs(&mut order);
     assert_eq!(
@@ -548,7 +555,8 @@ fn the_first_entry_is_the_one_that_boots() {
 
     // A higher version leads, whenever the version says anything: an old kernel rebuilt
     // today must not outrank a new one just for being newer on disk.
-    let old_rebuilt = conf("900-flipperos-Desktop-6.1.172.conf", "6.1.172", "debian-0100-Desktop-1", 900, None);
+    let old_rebuilt =
+        conf("900-flipperos-Desktop-6.1.172.conf", "6.1.172", "debian-0100-Desktop-1", 900, None);
     let mut order: Vec<&boot::Conf> = vec![&old_rebuilt, &desktop_old];
     boot::sort_confs(&mut order);
     assert_eq!(
@@ -561,9 +569,12 @@ fn the_first_entry_is_the_one_that_boots() {
 
     // Two entries a build wrote in the same second, with keys that cannot separate them
     // either: newest first, then the name descending, and never an arbitrary answer.
-    let a = conf("900-flipperos-Desktop-7.2.0-a.conf", "7.2.0-a", "debian-0100-Desktop-1", 100, None);
-    let b = conf("900-flipperos-Desktop-7.2.0-b.conf", "7.2.0-b", "debian-0100-Desktop-1", 100, None);
-    let newer = conf("900-flipperos-Desktop-7.2.0-c.conf", "7.2.0-c", "debian-0100-Desktop-1", 500, None);
+    let a =
+        conf("900-flipperos-Desktop-7.2.0-a.conf", "7.2.0-a", "debian-0100-Desktop-1", 100, None);
+    let b =
+        conf("900-flipperos-Desktop-7.2.0-b.conf", "7.2.0-b", "debian-0100-Desktop-1", 100, None);
+    let newer =
+        conf("900-flipperos-Desktop-7.2.0-c.conf", "7.2.0-c", "debian-0100-Desktop-1", 500, None);
     let mut order: Vec<&boot::Conf> = vec![&a, &b, &newer];
     boot::sort_confs(&mut order);
     assert_eq!(

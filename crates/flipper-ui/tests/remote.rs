@@ -71,11 +71,7 @@ fn commits_are_free_while_unwatched() {
     assert_eq!(view.viewers(), 0);
 
     let pixels = vec![Gray8::WHITE; usize::from(PANEL_W) * usize::from(PANEL_H)];
-    view
-        .commit(
-            Frame::new(&pixels, PANEL_W, PANEL_H),
-            Rect::new(0, 0, PANEL_W, PANEL_H),
-        )
+    view.commit(Frame::new(&pixels, PANEL_W, PANEL_H), Rect::new(0, 0, PANEL_W, PANEL_H))
         .expect("commit");
     assert_eq!(view.viewers(), 0);
 }
@@ -95,20 +91,12 @@ fn streams_whole_frames_with_a_header() {
     pixels[0] = Gray8::BLACK;
 
     // Damage accumulated while unwatched.
-    view
-        .commit(
-            Frame::new(&pixels, PANEL_W, PANEL_H),
-            Rect::new(0, 0, 10, 10),
-        )
+    view.commit(Frame::new(&pixels, PANEL_W, PANEL_H), Rect::new(0, 0, 10, 10))
         .expect("unwatched commit");
 
     let mut stream = TcpStream::connect(addr).expect("connect");
-    stream
-        .write_all(b"GET /stream HTTP/1.1\r\nHost: x\r\n\r\n")
-        .expect("write");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .expect("timeout");
+    stream.write_all(b"GET /stream HTTP/1.1\r\nHost: x\r\n\r\n").expect("write");
+    stream.set_read_timeout(Some(Duration::from_secs(10))).expect("timeout");
     let mut reader = BufReader::new(stream);
 
     let mut status = String::new();
@@ -131,11 +119,7 @@ fn streams_whole_frames_with_a_header() {
     }
     assert_eq!(view.viewers(), 1, "the stream must register as a viewer");
 
-    view
-        .commit(
-            Frame::new(&pixels, PANEL_W, PANEL_H),
-            Rect::new(20, 20, 8, 4),
-        )
+    view.commit(Frame::new(&pixels, PANEL_W, PANEL_H), Rect::new(20, 20, 8, 4))
         .expect("watched commit");
 
     // One chunk: hex length, CRLF, body, CRLF.
@@ -213,12 +197,8 @@ fn a_second_viewer_also_gets_a_whole_frame() {
     let mut first_frames = Vec::new();
     for round in 0..2 {
         let mut stream = TcpStream::connect(addr).expect("connect");
-        stream
-            .write_all(b"GET /stream HTTP/1.1\r\nHost: x\r\n\r\n")
-            .expect("write");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .expect("timeout");
+        stream.write_all(b"GET /stream HTTP/1.1\r\nHost: x\r\n\r\n").expect("write");
+        stream.set_read_timeout(Some(Duration::from_secs(10))).expect("timeout");
         let mut reader = BufReader::new(stream);
 
         let mut line = String::new();
@@ -237,11 +217,7 @@ fn a_second_viewer_also_gets_a_whole_frame() {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        view
-            .commit(
-                Frame::new(&pixels, PANEL_W, PANEL_H),
-                Rect::new(0, 0, PANEL_W, PANEL_H),
-            )
+        view.commit(Frame::new(&pixels, PANEL_W, PANEL_H), Rect::new(0, 0, PANEL_W, PANEL_H))
             .expect("commit");
 
         // Skip any keepalive and take the first real frame.

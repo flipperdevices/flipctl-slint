@@ -66,9 +66,8 @@ impl Attention {
 pub fn available() -> bool {
     static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FOUND.get_or_init(|| {
-        std::env::var_os("PATH").is_some_and(|path| {
-            std::env::split_paths(&path).any(|dir| dir.join("sway").is_file())
-        })
+        std::env::var_os("PATH")
+            .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("sway").is_file()))
     })
 }
 
@@ -159,14 +158,7 @@ impl Host {
         };
         let ipc = UnixStream::connect(&ipc_path)?;
 
-        Ok(Self {
-            sway,
-            dir,
-            display,
-            ipc,
-            outputs: 1,
-            free: Vec::new(),
-        })
+        Ok(Self { sway, dir, display, ipc, outputs: 1, free: Vec::new() })
     }
 
     /// The Wayland and IPC socket names in `dir`, once both exist.
@@ -197,11 +189,7 @@ impl Host {
     /// a workspace the last time this was built.
     pub fn place(&mut self, w: u32, h: u32) -> io::Result<Placement> {
         if let Some(again) = self.free.pop() {
-            self.run(&format!(
-                "output {} mode {w}x{h}@{}Hz",
-                again.output,
-                Attention::Front.hz()
-            ))?;
+            self.run(&format!("output {} mode {w}x{h}@{}Hz", again.output, Attention::Front.hz()))?;
             self.run(&format!("workspace {}", again.workspace))?;
             return Ok(again);
         }
@@ -213,10 +201,7 @@ impl Host {
         let output = format!("HEADLESS-{workspace}");
         self.outputs += 1;
 
-        self.run(&format!(
-            "output {output} mode {w}x{h}@{}Hz",
-            Attention::Front.hz()
-        ))?;
+        self.run(&format!("output {output} mode {w}x{h}@{}Hz", Attention::Front.hz()))?;
         self.run(&format!("workspace {workspace} output {output}"))?;
         self.run(&format!("workspace {workspace}"))?;
         Ok(Placement { output, workspace })
@@ -225,11 +210,7 @@ impl Host {
     /// Set how fast an app's output runs, which is what throttles a client nobody is
     /// watching.
     pub fn attend(&mut self, at: &Placement, how: Attention, w: u32, h: u32) -> io::Result<()> {
-        self.run(&format!(
-            "output {} mode {w}x{h}@{}Hz",
-            at.output,
-            how.hz()
-        ))
+        self.run(&format!("output {} mode {w}x{h}@{}Hz", at.output, how.hz()))
     }
 
     /// Give an app the keyboard by focusing its workspace. There is one seat, so focus
@@ -258,10 +239,7 @@ impl Host {
 
     /// Close whatever is on an app's workspace, for a card that was killed.
     pub fn close(&mut self, at: &Placement) -> io::Result<()> {
-        self.run(&format!(
-            "[workspace=\"{}\"] kill",
-            at.workspace
-        ))
+        self.run(&format!("[workspace=\"{}\"] kill", at.workspace))
     }
 
     /// Whether anything is on an app's workspace, which answers "did it ever draw".

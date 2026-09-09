@@ -13,12 +13,7 @@ fn text_width_matches_the_prototype() {
     ];
     for (font, expected) in cases {
         for (text, width) in expected {
-            assert_eq!(
-                font.text_width(text),
-                width,
-                "{:?} width of {text:?}",
-                font.rows
-            );
+            assert_eq!(font.text_width(text), width, "{:?} width of {text:?}", font.rows);
         }
     }
 }
@@ -86,10 +81,7 @@ fn the_transliteration_tables_line_up() {
         // Lowercase in, lowercase out. The hard and soft signs are the two that
         // come back as nothing at all: they modify the letter before them and
         // there is no letter to write for them.
-        assert!(
-            drawn.chars().all(|l| l.is_ascii_lowercase()),
-            "{c} became {drawn:?}"
-        );
+        assert!(drawn.chars().all(|l| l.is_ascii_lowercase()), "{c} became {drawn:?}");
         assert_eq!(drawn.is_empty(), c == 'ъ' || c == 'ь', "{c} -> {drawn:?}");
     }
 }

@@ -80,12 +80,7 @@ impl Surface {
         if x1 <= x0 || y1 <= y0 {
             return None;
         }
-        Some(Rect::new(
-            x0 as u16,
-            y0 as u16,
-            (x1 - x0) as u16,
-            (y1 - y0) as u16,
-        ))
+        Some(Rect::new(x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16))
     }
 
     pub fn clear(&mut self, colour: Gray8) {
@@ -185,7 +180,14 @@ impl Surface {
     }
 
     /// Draw `text` with its glyph frames' top-left at `(x, y)`.
-    pub fn text(&mut self, font: &crate::font::BitmapFont, text: &str, x: i32, y: i32, colour: Gray8) {
+    pub fn text(
+        &mut self,
+        font: &crate::font::BitmapFont,
+        text: &str,
+        x: i32,
+        y: i32,
+        colour: Gray8,
+    ) {
         let mut plots: Vec<(i32, i32)> = Vec::new();
         font.for_each_pixel(text, x, y, |px, py| plots.push((px, py)));
         for (px, py) in plots {
@@ -241,12 +243,8 @@ impl Surface {
         stroke: Gray8,
     ) {
         let pick = |on: bool| if r > 0 && on { r } else { 0 };
-        let (tl, tr, bl, br) = (
-            pick(corners.tl),
-            pick(corners.tr),
-            pick(corners.bl),
-            pick(corners.br),
-        );
+        let (tl, tr, bl, br) =
+            (pick(corners.tl), pick(corners.tr), pick(corners.bl), pick(corners.br));
 
         // Body, row by row. Cut-corner pixels are never touched, so whatever is
         // underneath shows through.

@@ -216,11 +216,7 @@ fn order(c: &Conf) -> Order {
 pub fn version_rank(version: &str) -> (u32, u32, u32) {
     let numbers = version.split('-').next().unwrap_or_default();
     let mut parts = numbers.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
-    (
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-        parts.next().unwrap_or(0),
-    )
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0))
 }
 
 /// The PATH to run a tool with: root's, as this system declares it.
@@ -239,8 +235,7 @@ pub fn version_rank(version: &str) -> (u32, u32, u32) {
 /// again for every tool that runs.
 fn tool_path() -> Option<&'static str> {
     static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    PATH.get_or_init(|| env_supath(&std::fs::read_to_string("/etc/login.defs").ok()?))
-        .as_deref()
+    PATH.get_or_init(|| env_supath(&std::fs::read_to_string("/etc/login.defs").ok()?)).as_deref()
 }
 
 /// `ENV_SUPATH` out of an /etc/login.defs, which states it as `ENV_SUPATH PATH=...`.
@@ -282,10 +277,7 @@ fn tool(args: &[&str]) -> Command {
 }
 
 fn sudo(args: &[&str]) -> Option<String> {
-    let out = tool(args)
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let out = tool(args).stderr(Stdio::null()).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -323,10 +315,7 @@ pub fn available() -> bool {
 fn which(name: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let admin = ["/usr/local/sbin", "/usr/sbin", "/sbin"].map(std::path::PathBuf::from);
-    std::env::split_paths(&path)
-        .chain(admin)
-        .map(|dir| dir.join(name))
-        .find(|p| p.is_file())
+    std::env::split_paths(&path).chain(admin).map(|dir| dir.join(name)).find(|p| p.is_file())
 }
 
 /// The partition type every filesystem of ours carries: the Discoverable Partitions
@@ -413,11 +402,7 @@ fn classify(subsystems: &str, tran: &str, disk: &str, hotplug: bool) -> (Medium,
             .unwrap_or_default()
             .trim()
             .to_string();
-        return if kind == "MMC" {
-            (Medium::Internal, "eMMC")
-        } else {
-            (Medium::Sd, "SD")
-        };
+        return if kind == "MMC" { (Medium::Internal, "eMMC") } else { (Medium::Sd, "SD") };
     }
     // The controller, for the buses lsblk does not name.
     let path = std::fs::canonicalize(format!("/sys/block/{disk}"))
@@ -444,9 +429,9 @@ fn classify(subsystems: &str, tran: &str, disk: &str, hotplug: bool) -> (Medium,
 /// card reports `RM=0` and `HOTPLUG=1`, which is the opposite way round to what the
 /// name suggests.
 pub fn stores() -> Vec<Store> {
-    let Some(listing) = output(&[
-        "lsblk", "-P", "-o", "PATH,PARTTYPE,FSTYPE,HOTPLUG,SUBSYSTEMS,TRAN,PKNAME",
-    ]) else {
+    let Some(listing) =
+        output(&["lsblk", "-P", "-o", "PATH,PARTTYPE,FSTYPE,HOTPLUG,SUBSYSTEMS,TRAN,PKNAME"])
+    else {
         return Vec::new();
     };
     // The booted device, without the subvolume that follows it in brackets.
@@ -470,12 +455,8 @@ pub fn stores() -> Vec<Store> {
             continue;
         }
         let parent = val("PKNAME");
-        let (medium, kind) = classify(
-            &val("SUBSYSTEMS"),
-            &val("TRAN"),
-            &parent,
-            val("HOTPLUG") == "1",
-        );
+        let (medium, kind) =
+            classify(&val("SUBSYSTEMS"), &val("TRAN"), &parent, val("HOTPLUG") == "1");
         out.push(Store {
             booted: dev == booted,
             disk: if parent.is_empty() { dev.clone() } else { format!("/dev/{parent}") },
@@ -548,11 +529,8 @@ pub fn listing(kernels: Kernels) -> Listing {
             }
         }
         for profile in &drive.profiles {
-            let mut mine: Vec<&Conf> = drive
-                .confs
-                .iter()
-                .filter(|c| c.subvol == profile.name)
-                .collect();
+            let mut mine: Vec<&Conf> =
+                drive.confs.iter().filter(|c| c.subvol == profile.name).collect();
             let all = mine.len();
             if kernels == Kernels::Modern {
                 mine.retain(|c| version_at_least(&c.version, MIN_KERNEL));
@@ -883,10 +861,7 @@ pub const VIDEO_OUT: &[(&str, &str)] = &[
 /// Which of them a profile is on: what its newest entry that this setting is written
 /// to says, so the row reads back what the write put there.
 pub fn video_out_for(p: &Profile) -> usize {
-    p.entries
-        .iter()
-        .find(|e| version_at_least(&e.version, MIN_KERNEL))
-        .map_or(0, video_out_of)
+    p.entries.iter().find(|e| version_at_least(&e.version, MIN_KERNEL)).map_or(0, video_out_of)
 }
 
 /// Which of them an entry is on, as an index into `VIDEO_OUT`.
@@ -916,9 +891,7 @@ pub fn with_video_out(text: &str, choice: usize) -> String {
         .unwrap_or_default();
     let ours = |path: &str| {
         let base = path.rsplit('/').next().unwrap_or(path);
-        VIDEO_OUT
-            .iter()
-            .any(|(name, _)| !name.is_empty() && base == format!("{name}.dtbo"))
+        VIDEO_OUT.iter().any(|(name, _)| !name.is_empty() && base == format!("{name}.dtbo"))
     };
 
     let mut keep: Vec<String> = Vec::new();
@@ -974,8 +947,7 @@ pub fn set_video_out(p: &Profile, choice: usize) -> Result<(), String> {
     let hold = match p.dev.is_empty() {
         true => None,
         false => Some(
-            TopLevel::rw(&p.dev)
-                .ok_or_else(|| format!("could not mount {} to write to", p.dev))?,
+            TopLevel::rw(&p.dev).ok_or_else(|| format!("could not mount {} to write to", p.dev))?,
         ),
     };
     let dir = match &hold {
@@ -1048,13 +1020,9 @@ fn set_one_video_out(path: &std::path::Path, choice: usize) -> Result<(), String
 pub fn split_counter(name: &str) -> (String, Option<u32>) {
     let stem = name.strip_suffix(".conf").unwrap_or(name);
     match stem.split_once('+') {
-        Some((id, counter)) => (
-            id.to_string(),
-            counter
-                .split('-')
-                .next()
-                .and_then(|left| left.parse::<u32>().ok()),
-        ),
+        Some((id, counter)) => {
+            (id.to_string(), counter.split('-').next().and_then(|left| left.parse::<u32>().ok()))
+        }
         None => (stem.to_string(), None),
     }
 }
@@ -1119,11 +1087,8 @@ pub fn parse_listing(
         if line.is_empty() {
             continue;
         }
-        let cols: Vec<&str> = line
-            .split("  ")
-            .filter(|c| !c.trim().is_empty())
-            .map(str::trim)
-            .collect();
+        let cols: Vec<&str> =
+            line.split("  ").filter(|c| !c.trim().is_empty()).map(str::trim).collect();
         if cols.len() < 4 {
             continue;
         }
@@ -1229,13 +1194,10 @@ pub fn used_ago(last_used: &str, now: std::time::SystemTime) -> String {
         // Not a timestamp: show it verbatim rather than inventing one.
         return last_used.to_string();
     };
-    let now_secs = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
+    let now_secs = now.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     let secs = (now_secs - then).max(0);
-    let plural = |n: i64, unit: &str| {
-        format!("Used {n} {unit}{} ago", if n == 1 { "" } else { "s" })
-    };
+    let plural =
+        |n: i64, unit: &str| format!("Used {n} {unit}{} ago", if n == 1 { "" } else { "s" });
     if secs < 60 {
         return "Used just now".into();
     }
@@ -1268,10 +1230,7 @@ pub fn used_ago(last_used: &str, now: std::time::SystemTime) -> String {
 pub fn running_kernel() -> &'static str {
     static RELEASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     RELEASE.get_or_init(|| {
-        std::fs::read_to_string("/proc/sys/kernel/osrelease")
-            .unwrap_or_default()
-            .trim()
-            .to_string()
+        std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default().trim().to_string()
     })
 }
 
@@ -1356,9 +1315,7 @@ pub fn space(dev: &str, name: &str) -> Option<Space> {
 /// The `KEY=value` pairs `btrfs-show-space <@subvol>` prints.
 pub fn parse_space(out: &str) -> Option<Space> {
     let field = |key: &str| {
-        out.split_whitespace()
-            .find_map(|tok| tok.strip_prefix(key))
-            .map(str::to_string)
+        out.split_whitespace().find_map(|tok| tok.strip_prefix(key)).map(str::to_string)
     };
     let total = field("TOTAL=")?;
     Some(Space {
@@ -1466,9 +1423,7 @@ impl Drop for TopLevel {
 fn valid_name(name: &str) -> bool {
     name.len() > 1
         && name.starts_with('@')
-        && name[1..]
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && name[1..].chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// An entry id safe to hand to the tools: an entry file's name without `.conf`.
@@ -1481,15 +1436,11 @@ pub fn valid_entry_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 255
         && !id.starts_with('.')
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
 }
 
 fn run(args: &[&str]) -> Result<(), String> {
-    let out = tool(args)
-        .output()
-        .map_err(|e| format!("cannot run {}: {e}", args[0]))?;
+    let out = tool(args).output().map_err(|e| format!("cannot run {}: {e}", args[0]))?;
     if out.status.success() {
         // A tool that succeeded can still have something to say, and it says it on
         // stderr: boot-profile warns there when it has to boot a profile without
@@ -1503,11 +1454,8 @@ fn run(args: &[&str]) -> Result<(), String> {
         return Ok(());
     }
     // The tools put the useful line last, on either stream.
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stderr),
-        String::from_utf8_lossy(&out.stdout)
-    );
+    let text =
+        format!("{}{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout));
     // A tool's own last line is its error and goes on screen as it stands. A tool that
     // fails silently leaves only its exit status, which is a fact for the log and not
     // for a 256x144 panel: the screen says what happened, the log says what to chase.
@@ -1519,7 +1467,9 @@ fn run(args: &[&str]) -> Result<(), String> {
     }
     use std::os::unix::process::ExitStatusExt;
     match (out.status.code(), out.status.signal()) {
-        (Some(code), _) => crate::logline!("tool           {} exited {code}, saying nothing", args[0]),
+        (Some(code), _) => {
+            crate::logline!("tool           {} exited {code}, saying nothing", args[0])
+        }
         (_, Some(sig)) => crate::logline!("tool           {} killed by signal {sig}", args[0]),
         _ => crate::logline!("tool           {} died without a status", args[0]),
     }
@@ -1627,9 +1577,7 @@ pub fn arm(p: &Profile) -> Result<bool, String> {
 /// decides whether the tool loads anything, and nothing in the reply distinguishes
 /// "loaded" from "nothing to load".
 pub fn kexec_loaded() -> bool {
-    std::fs::read_to_string("/sys/kernel/kexec_loaded")
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false)
+    std::fs::read_to_string("/sys/kernel/kexec_loaded").map(|s| s.trim() == "1").unwrap_or(false)
 }
 
 /// Discard an image left loaded by `arm`.
@@ -1644,12 +1592,7 @@ pub fn kexec_loaded() -> bool {
 /// thing that is lost.
 pub fn disarm() {
     let mut cmd = tool(&["boot-profile", "--disarm"]);
-    if let Err(e) = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+    if let Err(e) = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         crate::logline!("boot menu      cannot disarm: {e}");
     }
 }
@@ -1748,11 +1691,7 @@ pub fn reap_old_backups() {
     // aimed at a filesystem by assumption is not one to leave to assumption: profile
     // names repeat across drives, so a default that ever went elsewhere would delete
     // another drive's subvolume of the same name.
-    let dev = stores()
-        .into_iter()
-        .find(|s| s.booted)
-        .map(|s| s.dev)
-        .unwrap_or_default();
+    let dev = stores().into_iter().find(|s| s.booted).map(|s| s.dev).unwrap_or_default();
     let on_dev = |rest: &[&str]| -> Vec<String> {
         let mut args: Vec<String> = vec![rest[0].to_string()];
         if !dev.is_empty() {
@@ -1785,10 +1724,7 @@ pub fn reap_old_backups() {
 /// Spelled out rather than pattern-matched loosely, because the answer decides what
 /// gets deleted: `@Desktop_old_notes` is someone's subvolume, not a leftover.
 pub fn is_old_backup(name: &str, booted: &str) -> bool {
-    let Some(stamp) = name
-        .strip_prefix(booted)
-        .and_then(|rest| rest.strip_prefix("_old_"))
-    else {
+    let Some(stamp) = name.strip_prefix(booted).and_then(|rest| rest.strip_prefix("_old_")) else {
         return false;
     };
     let (stamp, extra) = match stamp.split_once('_') {
@@ -1824,10 +1760,7 @@ pub fn factory_reset(dev: &str, name: &str, origin: &str) -> Result<bool, String
     if !valid_name(name) || !valid_name(origin) {
         return Err("invalid name".into());
     }
-    let booted = profiles()
-        .iter()
-        .find(|p| p.name == name)
-        .is_some_and(|p| p.booted);
+    let booted = profiles().iter().find(|p| p.name == name).is_some_and(|p| p.booted);
 
     run(&on_dev("create-profile", dev, &["-y", "--no-keep", origin, name]))?;
     Ok(booted)
@@ -1864,19 +1797,14 @@ pub fn clone_dest(p: &Profile, existing: &[Profile]) -> String {
         Some((_, rest)) => rest.trim_end_matches('_').to_string(),
         None => raw.to_string(),
     };
-    let safe: String = src
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
-        .collect();
+    let safe: String =
+        src.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
     let taken = |n: &str| existing.iter().any(|e| e.name == n);
     let first = format!("@{base}__{safe}-clone__");
     if !taken(&first) {
         return first;
     }
-    (2..)
-        .map(|n| format!("@{base}__{safe}-clone-{n}__"))
-        .find(|c| !taken(c))
-        .unwrap_or(first)
+    (2..).map(|n| format!("@{base}__{safe}-clone-{n}__")).find(|c| !taken(c)).unwrap_or(first)
 }
 
 /// Whether a profile is one a user made, which is the `@Base__label__` shape the
@@ -2010,9 +1938,7 @@ pub fn size_parts(s: &str) -> (String, String) {
     if s.is_empty() {
         return ("?".into(), String::new());
     }
-    let split = s
-        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .unwrap_or(s.len());
+    let split = s.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(s.len());
     let (num, unit) = s.split_at(split);
     if num.is_empty() {
         (s.to_string(), String::new())
@@ -2029,7 +1955,8 @@ mod tests {
     /// The separator is a tab in both, and the value carries the PATH= prefix.
     #[test]
     fn reads_root_path_as_a_system_states_it() {
-        let debian = "ENV_SUPATH\tPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
+        let debian =
+            "ENV_SUPATH\tPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
                       ENV_PATH\tPATH=/usr/local/bin:/usr/bin:/bin\n";
         assert_eq!(
             env_supath(debian).as_deref(),
@@ -2037,10 +1964,7 @@ mod tests {
         );
 
         let arch = "# comments and blank lines\n\nENV_SUPATH\tPATH=/usr/local/sbin:/usr/local/bin:/usr/bin\n";
-        assert_eq!(
-            env_supath(arch).as_deref(),
-            Some("/usr/local/sbin:/usr/local/bin:/usr/bin")
-        );
+        assert_eq!(env_supath(arch).as_deref(), Some("/usr/local/sbin:/usr/local/bin:/usr/bin"));
 
         // A commented-out declaration states nothing, and neither does ENV_PATH: the
         // user's own PATH is not the one a tool of ours runs with.
@@ -2062,11 +1986,8 @@ mod mount_tests {
     /// wrong filesystem and reported no entries at all.
     #[test]
     fn every_mount_gets_a_directory_of_its_own() {
-        let names = [
-            mount_point("/dev/sda3"),
-            mount_point("/dev/mmcblk0p3"),
-            mount_point("/dev/sda3"),
-        ];
+        let names =
+            [mount_point("/dev/sda3"), mount_point("/dev/mmcblk0p3"), mount_point("/dev/sda3")];
         let unique: std::collections::HashSet<&String> = names.iter().collect();
         assert_eq!(unique.len(), names.len(), "two mounts share a name: {names:?}");
         // The device is in the name, so the mount is legible in /proc/mounts while
@@ -2128,11 +2049,9 @@ initrd     /@Desktop/usr/lib/modules/7.2.0-ge8750f615ebf/initrd
         let headless = with_video_out(ENTRY, 2);
         assert_eq!(
             overlays(&headless),
-            vec![
-                "/@Desktop/usr/lib/linux-image-7.2.0-ge8750f615ebf/rockchip/\
+            vec!["/@Desktop/usr/lib/linux-image-7.2.0-ge8750f615ebf/rockchip/\
                  rk3576-no-graphics.dtbo"
-                    .replace("                 ", "")
-            ]
+                .replace("                 ", "")]
         );
         // And it sits after the directory it is relative to, which is where
         // kernel-install puts it.
@@ -2225,10 +2144,8 @@ initrd     /@Desktop/usr/lib/modules/7.2.0-ge8750f615ebf/initrd
         };
         let p = Profile {
             entries: vec![
-                conf("900-a.conf", "7.2.0-new", "/@Desktop/usr/lib/linux-image-7.2.0-new")
-                    .entry(),
-                conf("900-b.conf", "7.1.0-old", "/@Desktop/usr/lib/linux-image-7.1.0-old")
-                    .entry(),
+                conf("900-a.conf", "7.2.0-new", "/@Desktop/usr/lib/linux-image-7.2.0-new").entry(),
+                conf("900-b.conf", "7.1.0-old", "/@Desktop/usr/lib/linux-image-7.1.0-old").entry(),
                 conf("900-c.conf", "6.1.172", "/@Desktop/usr/lib/linux-image-6.1.172").entry(),
             ],
             ..Default::default()

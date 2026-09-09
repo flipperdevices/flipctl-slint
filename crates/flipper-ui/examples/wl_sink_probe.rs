@@ -12,10 +12,7 @@ use flipper_ui::wl_sink::WlSink;
 use flipper_ui::{PANEL_H, PANEL_W};
 
 fn main() -> std::io::Result<()> {
-    let seconds: u64 = std::env::args()
-        .nth(1)
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(20);
+    let seconds: u64 = std::env::args().nth(1).and_then(|n| n.parse().ok()).unwrap_or(20);
 
     let w = usize::from(PANEL_W);
     let h = usize::from(PANEL_H);

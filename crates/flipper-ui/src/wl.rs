@@ -15,18 +15,16 @@
 
 use std::ffi::CString;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use wayland_client::protocol::{
-    wl_buffer, wl_output, wl_registry, wl_seat, wl_shm, wl_shm_pool,
-};
+use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_seat, wl_shm, wl_shm_pool};
 use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, QueueHandle};
 #[cfg(feature = "gpu")]
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
@@ -308,12 +306,9 @@ impl Grab {
             }
             guard.read().map_err(io::Error::other)?;
         }
-        self.queue
-            .dispatch_pending(&mut self.state)
-            .map_err(io::Error::other)?;
+        self.queue.dispatch_pending(&mut self.state).map_err(io::Error::other)?;
         Ok(true)
     }
-
 
     /// Capture as soon as the app draws something new, or give up at `timeout`.
     ///
@@ -435,12 +430,7 @@ impl Grab {
         Ok(true)
     }
 
-    fn capture(
-        &mut self,
-        timeout: Duration,
-        on_change: bool,
-        out: &mut [u8],
-    ) -> io::Result<bool> {
+    fn capture(&mut self, timeout: Duration, on_change: bool, out: &mut [u8]) -> io::Result<bool> {
         let manager = self.state.screencopy.clone().unwrap();
         let output = self.chosen()?;
         let qh = self.queue.handle();
@@ -469,10 +459,7 @@ impl Grab {
         };
         let stride = self.state.capture[0].stride;
         let height = self.state.capture[0].height;
-        let stale = self
-            .shm
-            .as_ref()
-            .is_none_or(|s| s.format != format || s.stride != stride);
+        let stale = self.shm.as_ref().is_none_or(|s| s.format != format || s.stride != stride);
         if stale {
             self.shm = Some(Shm::new(&self.shm_global, &qh, format, stride, height)?);
         }
@@ -510,11 +497,8 @@ impl Grab {
         };
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            if let Some((output, _)) = self
-                .state
-                .outputs
-                .iter()
-                .find(|(_, name)| name.as_deref() == Some(want.as_str()))
+            if let Some((output, _)) =
+                self.state.outputs.iter().find(|(_, name)| name.as_deref() == Some(want.as_str()))
             {
                 return Ok(output.clone());
             }
@@ -534,10 +518,7 @@ impl Grab {
     /// `drm_fb_xrgb8888_to_gray8` greys agree.
     fn to_panel(&mut self, out: &mut [u8]) {
         let Some(shm) = self.shm.as_ref() else { return };
-        let bgr = matches!(
-            shm.format,
-            wl_shm::Format::Xrgb8888 | wl_shm::Format::Argb8888
-        );
+        let bgr = matches!(shm.format, wl_shm::Format::Xrgb8888 | wl_shm::Format::Argb8888);
         let src = unsafe { std::slice::from_raw_parts(shm.map, shm.len) };
         // Letterbox bars are the caller's black, not the last frame's edges.
         out.fill(0);
@@ -580,8 +561,8 @@ impl Session {
         let socket = host_dir.join(display);
         let stream = UnixStream::connect(&socket)?;
         let conn = Connection::from_socket(stream).map_err(io::Error::other)?;
-        let (globals, mut queue) =
-            wayland_client::globals::registry_queue_init::<State>(&conn).map_err(io::Error::other)?;
+        let (globals, mut queue) = wayland_client::globals::registry_queue_init::<State>(&conn)
+            .map_err(io::Error::other)?;
         let qh = queue.handle();
 
         let mut state = State {
@@ -717,12 +698,10 @@ impl Session {
             stop: AtomicBool::new(false),
             still: AtomicU64::new(0),
         });
-        let reader = std::thread::Builder::new()
-            .name("flipctl-capture".into())
-            .spawn({
-                let frames = frames.clone();
-                move || read_frames(grab, frames)
-            })?;
+        let reader = std::thread::Builder::new().name("flipctl-capture".into()).spawn({
+            let frames = frames.clone();
+            move || read_frames(grab, frames)
+        })?;
 
         Ok(Self {
             app,
@@ -921,10 +900,7 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
         eprintln!("wl: GPU conversion disabled, reading on the CPU");
         None
     } else {
-        match crate::gpu::Converter::new(
-        u32::from(crate::PANEL_W),
-        u32::from(crate::PANEL_H),
-    ) {
+        match crate::gpu::Converter::new(u32::from(crate::PANEL_W), u32::from(crate::PANEL_H)) {
             Ok(c) => {
                 eprintln!("wl: frames converted on the GPU");
                 Some(c)
@@ -979,12 +955,8 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
                 // Collect the copy that was asked for last time round, then ask for the
                 // next one straight away, so the compositor's copy overlaps the
                 // conversion and the panel commit rather than following them.
-                let ready = grab.collect_copy(
-                    converter,
-                    slot,
-                    Duration::from_millis(120),
-                    &mut next,
-                );
+                let ready =
+                    grab.collect_copy(converter, slot, Duration::from_millis(120), &mut next);
                 let outcome = match ready {
                     Ok(got) => {
                         slot = 1 - slot;
@@ -1142,7 +1114,6 @@ pub(crate) fn private_runtime_dir() -> io::Result<PathBuf> {
     Ok(dir)
 }
 
-
 impl Dispatch<ZwlrScreencopyFrameV1, usize> for State {
     fn event(
         state: &mut Self,
@@ -1153,12 +1124,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, usize> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            zwlr_screencopy_frame_v1::Event::Buffer {
-                format,
-                width,
-                height,
-                stride,
-            } => {
+            zwlr_screencopy_frame_v1::Event::Buffer { format, width, height, stride } => {
                 state.capture[(*slot).min(1)].format = format.into_result().ok();
                 state.capture[(*slot).min(1)].width = width;
                 state.capture[(*slot).min(1)].height = height;
@@ -1168,8 +1134,12 @@ impl Dispatch<ZwlrScreencopyFrameV1, usize> for State {
             zwlr_screencopy_frame_v1::Event::LinuxDmabuf { format, width, height } => {
                 state.offered = Some((format, width, height));
             }
-            zwlr_screencopy_frame_v1::Event::BufferDone => state.capture[(*slot).min(1)].described = true,
-            zwlr_screencopy_frame_v1::Event::Ready { .. } => state.capture[(*slot).min(1)].ready = true,
+            zwlr_screencopy_frame_v1::Event::BufferDone => {
+                state.capture[(*slot).min(1)].described = true
+            }
+            zwlr_screencopy_frame_v1::Event::Ready { .. } => {
+                state.capture[(*slot).min(1)].ready = true
+            }
             zwlr_screencopy_frame_v1::Event::Failed => state.capture[(*slot).min(1)].failed = true,
             _ => {}
         }

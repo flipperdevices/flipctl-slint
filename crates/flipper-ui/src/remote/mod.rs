@@ -144,12 +144,7 @@ impl RemoteView {
                 .spawn(move || accept_loop(listener, shared, tx, assets, peer))?;
         }
 
-        Ok(Self {
-            shared,
-            events,
-            addr: local,
-            last_viewers: 0,
-        })
+        Ok(Self { shared, events, addr: local, last_viewers: 0 })
     }
 
     pub fn addr(&self) -> std::net::SocketAddr {
@@ -181,17 +176,9 @@ impl FrameSink for RemoteView {
             return Ok(());
         }
 
-        let stored = StoredFrame {
-            pixels: frame.pixels.to_vec(),
-            w: frame.w,
-            h: frame.h,
-        };
+        let stored = StoredFrame { pixels: frame.pixels.to_vec(), w: frame.w, h: frame.h };
         {
-            let viewers = self
-                .shared
-                .viewer_queues
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let viewers = self.shared.viewer_queues.lock().unwrap_or_else(|e| e.into_inner());
             for viewer in viewers.iter() {
                 let mut queue = viewer.frames.lock().unwrap_or_else(|e| e.into_inner());
                 // Bounded: a viewer that stalls must not grow this without limit.
@@ -205,11 +192,7 @@ impl FrameSink for RemoteView {
             }
         }
 
-        *self
-            .shared
-            .last
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(stored);
+        *self.shared.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(stored);
 
         self.shared.generation.fetch_add(1, Ordering::Release);
         Ok(())
@@ -238,11 +221,9 @@ fn accept_loop(
         // One thread per connection. A viewer holds its /stream open, so this is
         // one long-lived thread per browser tab plus short-lived ones for the
         // page, the photo and each key press.
-        let _ = std::thread::Builder::new()
-            .name("remote-conn".into())
-            .spawn(move || {
-                let _ = serve(stream, &shared, &tx, &assets, peer.as_deref());
-            });
+        let _ = std::thread::Builder::new().name("remote-conn".into()).spawn(move || {
+            let _ = serve(stream, &shared, &tx, &assets, peer.as_deref());
+        });
     }
 }
 
@@ -274,9 +255,8 @@ fn serve(
         if line.is_empty() {
             break;
         }
-        if let Some(v) = line
-            .split_once(':')
-            .filter(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        if let Some(v) =
+            line.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("content-length"))
         {
             content_length = v.1.trim().parse().unwrap_or(0);
         }
@@ -300,9 +280,12 @@ fn serve(
         // The panel in its device photo is the default view; the side-by-side
         // comparison lives at /diff. /device and /compare are kept as aliases so
         // older links do not break.
-        ("GET", "/") | ("GET", "/index.html") | ("GET", "/device") => {
-            write_response(&mut stream, "200 OK", "text/html; charset=utf-8", device_page.as_bytes())
-        }
+        ("GET", "/") | ("GET", "/index.html") | ("GET", "/device") => write_response(
+            &mut stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            device_page.as_bytes(),
+        ),
         // Shared browser code, so a fix cannot land in one page and not the other.
         //
         // Revalidated, never held: a day-long cache meant a browser kept running
@@ -316,9 +299,12 @@ fn serve(
             shared_js.as_bytes(),
             0,
         ),
-        ("GET", "/diff") | ("GET", "/compare") => {
-            write_response(&mut stream, "200 OK", "text/html; charset=utf-8", compare_page.as_bytes())
-        }
+        ("GET", "/diff") | ("GET", "/compare") => write_response(
+            &mut stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            compare_page.as_bytes(),
+        ),
         ("GET", "/peer.png") => match peer {
             Some(peer) => match fetch_peer_screen(peer) {
                 Ok(Some(bytes)) => write_response(&mut stream, "200 OK", "image/png", &bytes),
@@ -332,12 +318,9 @@ fn serve(
                     e.to_string().as_bytes(),
                 ),
             },
-            None => write_response(
-                &mut stream,
-                "404 Not Found",
-                "text/plain",
-                b"no --peer configured",
-            ),
+            None => {
+                write_response(&mut stream, "404 Not Found", "text/plain", b"no --peer configured")
+            }
         },
         ("GET", "/device.png") => match std::fs::read(assets.join("device.png")) {
             // 2 MB, and identical for the life of the build. Served from disk so
@@ -376,10 +359,7 @@ fn serve(
 fn fetch_peer_screen(peer: &str) -> std::io::Result<Option<Vec<u8>>> {
     let mut stream = TcpStream::connect(peer)?;
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
-    write!(
-        stream,
-        "GET /api/screen HTTP/1.0\r\nHost: {peer}\r\nConnection: close\r\n\r\n"
-    )?;
+    write!(stream, "GET /api/screen HTTP/1.0\r\nHost: {peer}\r\nConnection: close\r\n\r\n")?;
     stream.flush()?;
 
     let mut raw = Vec::new();
@@ -425,11 +405,8 @@ fn write_cached(
     body: &[u8],
     max_age: u32,
 ) -> std::io::Result<()> {
-    let cache = if max_age == 0 {
-        "no-cache".to_string()
-    } else {
-        format!("public, max-age={max_age}")
-    };
+    let cache =
+        if max_age == 0 { "no-cache".to_string() } else { format!("public, max-age={max_age}") };
     write!(
         stream,
         "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\n\
@@ -477,26 +454,13 @@ fn stream_frames(mut stream: TcpStream, shared: &Arc<Shared>) -> std::io::Result
     // Registered and counted before the first frame goes in, so a commit landing
     // in between reaches this queue too, and the worst case is the same frame
     // twice rather than none at all.
-    shared
-        .viewer_queues
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(Arc::clone(&queue));
+    shared.viewer_queues.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::clone(&queue));
     shared.viewers.fetch_add(1, Ordering::Relaxed);
     // The screen as it stands. Without this a viewer joining a still screen has
     // nothing to draw until something moves, which on an idle menu can be a long
     // wait, and reads as a page that never connected.
-    if let Some(frame) = shared
-        .last
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
-    {
-        queue
-            .frames
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push_back(frame);
+    if let Some(frame) = shared.last.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        queue.frames.lock().unwrap_or_else(|e| e.into_inner()).push_back(frame);
         queue.ready.notify_all();
     }
 
@@ -585,10 +549,7 @@ fn pump(stream: &mut TcpStream, viewer: &Arc<ViewerQueue>) -> std::io::Result<()
         body.extend_from_slice(&stored.h.to_le_bytes());
         body.extend(stored.pixels.iter().map(|p| p.0));
 
-        debug_assert_eq!(
-            body.len(),
-            HEADER + usize::from(stored.w) * usize::from(stored.h)
-        );
+        debug_assert_eq!(body.len(), HEADER + usize::from(stored.w) * usize::from(stored.h));
         write!(stream, "{:x}\r\n", body.len())?;
         stream.write_all(&body)?;
         stream.write_all(b"\r\n")?;

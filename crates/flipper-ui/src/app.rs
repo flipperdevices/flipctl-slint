@@ -110,10 +110,7 @@ impl AppEntry {
     /// Through a shell, because the manifest names a command line rather than a
     /// program: "foot -e htop" is one field, not two.
     pub fn command(&self) -> (PathBuf, Vec<PathBuf>) {
-        (
-            PathBuf::from("/bin/sh"),
-            vec![PathBuf::from("-c"), PathBuf::from(&self.wayland)],
-        )
+        (PathBuf::from("/bin/sh"), vec![PathBuf::from("-c"), PathBuf::from(&self.wayland)])
     }
 
     /// Where cargo puts the binary, for an app that carries a crate.
@@ -152,37 +149,33 @@ fn toml_section<'a>(src: &'a str, header: &str) -> Option<&'a str> {
 /// mistaken for the manifest. Both quote styles are accepted, and a trailing
 /// comment is ignored.
 fn py_string(src: &str, key: &str) -> Option<String> {
-    src.lines()
-        .filter(|l| !l.starts_with(char::is_whitespace))
-        .find_map(|line| {
-            let (k, v) = line.split_once('=')?;
-            if k.trim() != key {
-                return None;
-            }
-            let v = v.trim();
-            let quote = v.chars().next().filter(|c| *c == '"' || *c == '\'')?;
-            let rest = &v[1..];
-            let end = rest.find(quote)?;
-            Some(rest[..end].to_string())
-        })
+    src.lines().filter(|l| !l.starts_with(char::is_whitespace)).find_map(|line| {
+        let (k, v) = line.split_once('=')?;
+        if k.trim() != key {
+            return None;
+        }
+        let v = v.trim();
+        let quote = v.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let rest = &v[1..];
+        let end = rest.find(quote)?;
+        Some(rest[..end].to_string())
+    })
 }
 
 /// A boolean field, e.g. `audio = true`. None when the key is absent, so a
 /// caller can tell "said no" from "said nothing".
 fn py_bool(src: &str, key: &str) -> Option<bool> {
-    src.lines()
-        .filter(|l| !l.starts_with(char::is_whitespace))
-        .find_map(|line| {
-            let (k, v) = line.split_once('=')?;
-            if k.trim() != key {
-                return None;
-            }
-            match v.trim().trim_end_matches(|c: char| c == ',').to_ascii_lowercase().as_str() {
-                "true" | "yes" | "1" => Some(true),
-                "false" | "no" | "0" => Some(false),
-                _ => None,
-            }
-        })
+    src.lines().filter(|l| !l.starts_with(char::is_whitespace)).find_map(|line| {
+        let (k, v) = line.split_once('=')?;
+        if k.trim() != key {
+            return None;
+        }
+        match v.trim().trim_end_matches(|c: char| c == ',').to_ascii_lowercase().as_str() {
+            "true" | "yes" | "1" => Some(true),
+            "false" | "no" | "0" => Some(false),
+            _ => None,
+        }
+    })
 }
 
 /// A module-level list of strings, e.g. `APP_APT = ["a", "b"]`.
@@ -190,9 +183,9 @@ fn py_bool(src: &str, key: &str) -> Option<bool> {
 /// Written across as many lines as the author likes, with or without a trailing
 /// comma, because that is how a list of packages tends to grow.
 fn py_list(src: &str, key: &str) -> Vec<String> {
-    let Some(at) = src.find(&format!("\n{key}")).map(|i| i + 1).or_else(|| {
-        src.starts_with(key).then_some(0)
-    }) else {
+    let Some(at) =
+        src.find(&format!("\n{key}")).map(|i| i + 1).or_else(|| src.starts_with(key).then_some(0))
+    else {
         return Vec::new();
     };
     let rest = &src[at..];
@@ -382,11 +375,7 @@ impl Missing {
         if n == 0 {
             return build.trim_start().trim_start_matches("and ").to_string();
         }
-        format!(
-            "{n} package{}: {}{build}",
-            if n == 1 { "" } else { "s" },
-            names.join(", ")
-        )
+        format!("{n} package{}: {}{build}", if n == 1 { "" } else { "s" }, names.join(", "))
     }
 }
 
@@ -423,11 +412,7 @@ fn missing_apt(packages: &[String]) -> Vec<String> {
             (status.trim() == "installed").then_some(name)
         })
         .collect();
-    packages
-        .iter()
-        .filter(|p| !installed.contains(&p.as_str()))
-        .cloned()
-        .collect()
+    packages.iter().filter(|p| !installed.contains(&p.as_str())).cloned().collect()
 }
 
 /// Stop a program and everything it started.
@@ -478,8 +463,7 @@ impl Stop {
         let pid = self.pid.lock().ok().and_then(|p| *p);
         match pid {
             Some(pid) => {
-                self.asked
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.asked.store(true, std::sync::atomic::Ordering::Relaxed);
                 stop_group(pid);
                 true
             }
@@ -528,10 +512,8 @@ fn cargo() -> Option<PathBuf> {
             return Some(from_env);
         }
     }
-    let mut candidates = vec![
-        PathBuf::from("/usr/local/bin/cargo"),
-        PathBuf::from("/usr/bin/cargo"),
-    ];
+    let mut candidates =
+        vec![PathBuf::from("/usr/local/bin/cargo"), PathBuf::from("/usr/bin/cargo")];
     if let Some(home) = std::env::var_os("HOME") {
         candidates.insert(0, PathBuf::from(home).join(".cargo/bin/cargo"));
     }
@@ -556,14 +538,7 @@ const CARGO_MSRV: u32 = 92;
 
 /// The minor version out of `cargo 1.94.1 (...)`.
 fn cargo_minor(version: &str) -> Option<u32> {
-    version
-        .split_whitespace()
-        .nth(1)?
-        .strip_prefix("1.")?
-        .split('.')
-        .next()?
-        .parse()
-        .ok()
+    version.split_whitespace().nth(1)?.strip_prefix("1.")?.split('.').next()?.parse().ok()
 }
 
 /// What a program says its version is.
@@ -628,10 +603,7 @@ fn venv_stamp(dir: &Path) -> PathBuf {
 /// Blocking: it runs dpkg-query and the interpreter, so callers put it on a
 /// thread rather than in a render loop.
 pub fn missing(entry: &AppEntry) -> Missing {
-    let mut m = Missing {
-        apt: missing_apt(&entry.apt),
-        ..Default::default()
-    };
+    let mut m = Missing { apt: missing_apt(&entry.apt), ..Default::default() };
     if !entry.bin.is_empty() {
         // Rebuild when the binary is absent or older than any source file. Cargo
         // decides what actually needs recompiling; this only decides whether to
@@ -726,15 +698,13 @@ pub fn install(
         // total, so no share of the work is claimed.
         let started = std::time::Instant::now();
         let mut crates = 0usize;
-        let mut build_log = |line: String| {
-            match line.trim_start().strip_prefix("Compiling ") {
-                Some(what) => {
-                    crates += 1;
-                    let secs = started.elapsed().as_secs();
-                    log(format!("[{crates:3}] {}:{:02} {what}", secs / 60, secs % 60));
-                }
-                None => log(line),
+        let mut build_log = |line: String| match line.trim_start().strip_prefix("Compiling ") {
+            Some(what) => {
+                crates += 1;
+                let secs = started.elapsed().as_secs();
+                log(format!("[{crates:3}] {}:{:02} {what}", secs / 60, secs % 60));
             }
+            None => log(line),
         };
         // The one step a person may cut short, so it is the one that runs in its own
         // process group: cargo starts a rustc per crate, and signalling only cargo would
@@ -781,10 +751,7 @@ pub fn install(
 
     log(format!("uv pip: {}", missing.pip.join(" ")));
     run_logged(
-        Command::new(&uv)
-            .args(["pip", "install", "--python"])
-            .arg(&python)
-            .args(&missing.pip),
+        Command::new(&uv).args(["pip", "install", "--python"]).arg(&python).args(&missing.pip),
         &mut log,
     )?;
 
@@ -933,10 +900,7 @@ mod summary_tests {
         m.needs_build = true;
         assert_eq!(m.summary(), "a build");
         m.needs_cargo = true;
-        assert_eq!(
-            m.summary(),
-            "a build, which needs a Rust toolchain this machine has not got"
-        );
+        assert_eq!(m.summary(), "a build, which needs a Rust toolchain this machine has not got");
         // Alongside an app's own packages, which are still offered: only the
         // toolchain is beyond our reach.
         m.apt = vec!["libfoo".into()];

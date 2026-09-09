@@ -175,7 +175,11 @@ fn widest_value(p: &Profile) -> u16 {
 /// How tall a popup line of each kind is, matching what boot.slint draws.
 fn line_h(kind: i32) -> f32 {
     use crate::theme::metric::{POPUP_LINE_H, POPUP_ROW_H};
-    if kind == 0 { POPUP_LINE_H as f32 } else { POPUP_ROW_H as f32 }
+    if kind == 0 {
+        POPUP_LINE_H as f32
+    } else {
+        POPUP_ROW_H as f32
+    }
 }
 
 /// Which of `profile`'s entries names the kernel `running`.
@@ -188,11 +192,7 @@ fn kernel_base_of(profile: &Profile, running: &str) -> usize {
     if !profile.booted || running.is_empty() {
         return 0;
     }
-    profile
-        .entries
-        .iter()
-        .position(|e| e.version == running)
-        .unwrap_or(0)
+    profile.entries.iter().position(|e| e.version == running).unwrap_or(0)
 }
 
 /// The Config screen, top to bottom.
@@ -203,13 +203,7 @@ fn kernel_base_of(profile: &Profile, running: &str) -> usize {
 /// category and a readable label, and a way to enable a unit inside a profile that is
 /// not running. The profile's facts are not here: they are the View screen this opens
 /// from.
-const CONFIG_LINES: [&str; 5] = [
-    "GPIO",
-    "Hardware config",
-    "Video Out",
-    "Services",
-    "Kernel",
-];
+const CONFIG_LINES: [&str; 5] = ["GPIO", "Hardware config", "Video Out", "Services", "Kernel"];
 /// Which output the display pipeline is wired to, from `boot::VIDEO_OUT`.
 const CONFIG_VIDEO: usize = 2;
 const CONFIG_KERNEL: usize = 4;
@@ -280,9 +274,7 @@ pub struct View {
 /// fit; only one of the two is ever drawn.
 pub fn status_fits(label: &str, status: &str, auto: bool, medium: boot::Medium) -> bool {
     use crate::font::TITLE;
-    use crate::theme::metric::{
-        BOOT_ICON_BOX_W, BOOT_SD_W, BOOT_TEXT_GAP, ICON_PAD, STATUS_PAD_R,
-    };
+    use crate::theme::metric::{BOOT_ICON_BOX_W, BOOT_SD_W, BOOT_TEXT_GAP, ICON_PAD, STATUS_PAD_R};
 
     if status.is_empty() {
         return true;
@@ -328,10 +320,7 @@ struct Aim {
 
 /// The image a profile would be loaded from, or None for a profile with no kernel.
 fn aim(p: &Profile) -> Option<Aim> {
-    p.entries.first().map(|e| Aim {
-        dev: p.dev.clone(),
-        entry: e.id.clone(),
-    })
+    p.entries.first().map(|e| Aim { dev: p.dev.clone(), entry: e.id.clone() })
 }
 
 /// What the load that just finished says about this kernel, if anything.
@@ -624,9 +613,7 @@ impl BootMenu {
             return;
         }
         crate::logline!("boot menu      the drives changed, reading them again");
-        self.keep = self
-            .selected_profile()
-            .map(|p| (p.name.clone(), p.dev.clone()));
+        self.keep = self.selected_profile().map(|p| (p.name.clone(), p.dev.clone()));
         let again = Self::open(self.visible, self.auto_start, self.kernels);
         self.pending = again.pending;
     }
@@ -735,15 +722,17 @@ impl BootMenu {
                     self.popup = Some(Popup::Edit);
                 }
                 FlipperKey::Up => {
-                    self.popup_index = (self.popup_index + actions.len().saturating_sub(1))
-                        % actions.len().max(1);
+                    self.popup_index =
+                        (self.popup_index + actions.len().saturating_sub(1)) % actions.len().max(1);
                     self.popup = Some(Popup::Edit);
                 }
                 FlipperKey::Ok | FlipperKey::Run => {
                     // Auto Start is reversible and immediate; the rest change or
                     // destroy a profile, so they ask first.
                     match actions.get(self.popup_index).copied() {
-                        Some("Auto Start") => self.popup = self.start_action("Auto Start", &profile),
+                        Some("Auto Start") => {
+                            self.popup = self.start_action("Auto Start", &profile)
+                        }
                         // Rename asks for the name first. The popup stays as it was,
                         // so backing out of the keyboard returns to the same list of
                         // actions.
@@ -782,17 +771,13 @@ impl BootMenu {
 
     /// Which entry the spinner is on: what has been picked, or where it starts.
     fn kernel_at(&self, profile: &Option<Profile>) -> usize {
-        self.kernel_pick.unwrap_or_else(|| {
-            profile.as_ref().map_or(0, |p| self.kernel_base(p))
-        })
+        self.kernel_pick.unwrap_or_else(|| profile.as_ref().map_or(0, |p| self.kernel_base(p)))
     }
 
     /// Which video out the spinner is on: what has been picked, or what the profile's
     /// own entry applies.
     fn video_at(&self, profile: &Option<Profile>) -> usize {
-        self.video_pick.unwrap_or_else(|| {
-            profile.as_ref().map_or(0, boot::video_out_for)
-        })
+        self.video_pick.unwrap_or_else(|| profile.as_ref().map_or(0, boot::video_out_for))
     }
 
     /// A key on the Config screen.
@@ -911,11 +896,9 @@ impl BootMenu {
             if p.entries.len() == 1 { "y" } else { "ies" }
         );
         let (tx, rx) = std::sync::mpsc::channel();
-        self.popup = match std::thread::Builder::new()
-            .name("boot-video".into())
-            .spawn(move || {
-                let _ = tx.send(boot::set_video_out(&p, at).map(|()| false));
-            }) {
+        self.popup = match std::thread::Builder::new().name("boot-video".into()).spawn(move || {
+            let _ = tx.send(boot::set_video_out(&p, at).map(|()| false));
+        }) {
             Ok(_) => Some(Popup::Busy("Saving".into(), Some(rx))),
             Err(_) => Some(Popup::Said("could not start the change".into())),
         };
@@ -933,11 +916,9 @@ impl BootMenu {
         let Some(entry) = p.entries.get(at).cloned() else { return Outcome::Stay };
         crate::logline!("boot menu      {} is to boot {}", p.name, entry.id);
         let (tx, rx) = std::sync::mpsc::channel();
-        self.popup = match std::thread::Builder::new()
-            .name("boot-kernel".into())
-            .spawn(move || {
-                let _ = tx.send(boot::set_kernel(&p.dev, &entry.id).map(|()| false));
-            }) {
+        self.popup = match std::thread::Builder::new().name("boot-kernel".into()).spawn(move || {
+            let _ = tx.send(boot::set_kernel(&p.dev, &entry.id).map(|()| false));
+        }) {
             Ok(_) => Some(Popup::Busy("Saving".into(), Some(rx))),
             Err(_) => Some(Popup::Said("could not start the change".into())),
         };
@@ -962,10 +943,8 @@ impl BootMenu {
     /// An unchanged name is not a rename: it would move a subvolume onto itself.
     pub fn renamed(&mut self, name: &str, text: Option<&str>) {
         let Some(text) = text else { return };
-        let dest = boot::rename_dest(
-            &Profile { name: name.to_string(), ..Default::default() },
-            text,
-        );
+        let dest =
+            boot::rename_dest(&Profile { name: name.to_string(), ..Default::default() }, text);
         if dest.is_empty() || dest == name {
             self.popup = Some(Popup::Edit);
             return;
@@ -982,11 +961,9 @@ impl BootMenu {
         let (tx, rx) = std::sync::mpsc::channel();
         let from = name.to_string();
         let to = dest.clone();
-        self.popup = match std::thread::Builder::new()
-            .name("boot-rename".into())
-            .spawn(move || {
-                let _ = tx.send(boot::rename(&dev, &from, &to).map(|()| false));
-            }) {
+        self.popup = match std::thread::Builder::new().name("boot-rename".into()).spawn(move || {
+            let _ = tx.send(boot::rename(&dev, &from, &to).map(|()| false));
+        }) {
             Ok(_) => Some(Popup::Busy("Renaming".into(), Some(rx))),
             Err(_) => Some(Popup::Said("could not start rename".into())),
         };
@@ -1061,29 +1038,21 @@ impl BootMenu {
             // the first entry there is, not a marker naming one.
             "Auto Start" => {
                 let name = p.name.clone();
-                (
-                    "Saving",
-                    Box::new(move || boot::set_auto_start(&p.dev, &name).map(|_| false)),
-                )
+                ("Saving", Box::new(move || boot::set_auto_start(&p.dev, &name).map(|_| false)))
             }
             "Clone" => {
                 let dest = boot::clone_dest(&p, &existing);
-                (
-                    "Cloning",
-                    Box::new(move || boot::clone(&p.dev, &p.name, &dest).map(|_| false)),
-                )
+                ("Cloning", Box::new(move || boot::clone(&p.dev, &p.name, &dest).map(|_| false)))
             }
-            "Delete" => (
-                "Deleting",
-                Box::new(move || boot::delete(&p.dev, &p.name).map(|_| false)),
-            ),
+            "Delete" => {
+                ("Deleting", Box::new(move || boot::delete(&p.dev, &p.name).map(|_| false)))
+            }
             // The one action that can answer "and now the device has to reboot": the
             // running root is the copy moved aside, so the fresh one is only
             // reachable through a reboot.
-            "Factory Reset" => (
-                "Resetting",
-                Box::new(move || boot::factory_reset(&p.dev, &p.name, &p.origin)),
-            ),
+            "Factory Reset" => {
+                ("Resetting", Box::new(move || boot::factory_reset(&p.dev, &p.name, &p.origin)))
+            }
             // Rename is not started here: it needs a name first.
             _ => return Some(Popup::Edit),
         };
@@ -1138,7 +1107,9 @@ impl BootMenu {
             .spawn(move || {
                 if let Some(rx) = arming {
                     if rx.recv_timeout(ARM_WAIT).is_err() {
-                        crate::logline!("boot menu      gave up waiting for the arm, booting anyway");
+                        crate::logline!(
+                            "boot menu      gave up waiting for the arm, booting anyway"
+                        );
                     }
                 }
                 let _ = tx.send(boot::boot_now(&p));
@@ -1200,10 +1171,7 @@ impl BootMenu {
                         // A re-read nobody asked for: back onto the same profile, or as
                         // close as the shorter list allows if it is gone.
                         Some((name, dev)) => {
-                            match self
-                                .profiles
-                                .iter()
-                                .position(|p| p.name == name && p.dev == dev)
+                            match self.profiles.iter().position(|p| p.name == name && p.dev == dev)
                             {
                                 Some(at) => self.selected = at as i32,
                                 None => {
@@ -1426,7 +1394,7 @@ impl BootMenu {
                 // controller armed for the next kernel to trip over, which is a panic
                 // it cannot even report. The takeover is drawn once and then stands
                 // still. The boot itself is on its own thread and waits for none of it.
-                Err(std::sync::mpsc::TryRecvError::Empty) => None
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
             },
             None => None,
         };
@@ -1485,9 +1453,7 @@ impl BootMenu {
         // The window the cursor is in, clamped to the ends: the list is taller than
         // the panel as soon as a card is in the slot.
         let count = self.profiles.len() as i32;
-        let scroll = (self.selected - self.visible + 1)
-            .max(0)
-            .min((count - self.visible).max(0));
+        let scroll = (self.selected - self.visible + 1).max(0).min((count - self.visible).max(0));
 
         let counting = self.started.is_some() && !self.cancelled;
         let countdown = match self.started {
@@ -1791,10 +1757,7 @@ mod tests {
     use super::*;
 
     fn entry(version: &str) -> boot::Entry {
-        boot::Entry {
-            version: version.into(),
-            ..Default::default()
-        }
+        boot::Entry { version: version.into(), ..Default::default() }
     }
 
     /// The Config screen opens on the kernel the machine is running, not on the one
@@ -1880,12 +1843,7 @@ mod tests {
     fn a_row_passed_through_is_not_loaded() {
         let next = on("", "900-flipperos-Desktop-7.2.0");
         assert!(!worth_arming(Some(true), Duration::ZERO, None, &next));
-        assert!(!worth_arming(
-            Some(true),
-            ARM_SETTLE - Duration::from_millis(1),
-            None,
-            &next
-        ));
+        assert!(!worth_arming(Some(true), ARM_SETTLE - Duration::from_millis(1), None, &next));
         assert!(worth_arming(Some(true), ARM_SETTLE, None, &next));
     }
 
@@ -1951,9 +1909,6 @@ mod tests {
         // The drives changed and the list is being read again. The kernel still holds
         // the image either way.
         menu.reread();
-        assert!(
-            menu.holds_an_arm(),
-            "a re-read forgot an image the kernel is still holding"
-        );
+        assert!(menu.holds_an_arm(), "a re-read forgot an image the kernel is still holding");
     }
 }

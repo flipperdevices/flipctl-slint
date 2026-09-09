@@ -144,8 +144,7 @@ fn main() {
                             view.selected = (view.selected + 1) % view.rows.len() as i32
                         }
                         flipper_ui::FlipperKey::Up => {
-                            view.selected =
-                                (view.selected - 1).rem_euclid(view.rows.len() as i32)
+                            view.selected = (view.selected - 1).rem_euclid(view.rows.len() as i32)
                         }
                         flipper_ui::FlipperKey::View => view.popup_open = !view.popup_open,
                         _ => {}
@@ -180,11 +179,7 @@ fn main() {
 /// keeps. The menu itself never needs this: it builds a fresh view every frame.
 fn clone_of(view: &View) -> View {
     View {
-        rows: view
-            .rows
-            .iter()
-            .map(|r| row(&r.label, &r.status, r.auto, r.medium))
-            .collect(),
+        rows: view.rows.iter().map(|r| row(&r.label, &r.status, r.auto, r.medium)).collect(),
         selected: view.selected,
         scroll: view.scroll,
         countdown: view.countdown,

@@ -15,11 +15,11 @@
 //! 16px advance tables and mean nothing here, so they are ignored and the box is
 //! measured in columns instead.
 
+use cursive::direction::Direction;
 use cursive::event::{Event, EventResult, Key};
 use cursive::reexports::crossbeam_channel::Sender;
-use cursive::view::CannotFocus;
-use cursive::direction::Direction;
 use cursive::style::ColorStyle;
+use cursive::view::CannotFocus;
 use cursive::{Cursive, Printer, Vec2};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -336,11 +336,7 @@ fn frame(x: usize, y: usize, w: usize, h: usize, title: &str) -> Vec<Painted> {
     for row in 1..h - 1 {
         out.push(plain(x, y + row, format!("\u{2502}{}\u{2502}", " ".repeat(inner))));
     }
-    out.push(plain(
-        x,
-        y + h - 1,
-        format!("\u{2514}{}\u{2518}", "\u{2500}".repeat(inner)),
-    ));
+    out.push(plain(x, y + h - 1, format!("\u{2514}{}\u{2518}", "\u{2500}".repeat(inner))));
     out
 }
 
@@ -360,10 +356,7 @@ fn summary(view: &View) -> Vec<(String, String)> {
     let status = row.map(|r| r.status.clone()).unwrap_or_default();
     vec![
         ("Size".into(), size),
-        (
-            "Last used".into(),
-            if status.is_empty() { "never".into() } else { status },
-        ),
+        ("Last used".into(), if status.is_empty() { "never".into() } else { status }),
         (
             "Auto start".into(),
             match row.map(|r| r.auto) {
@@ -470,11 +463,7 @@ fn two_pane(view: &View, cols: usize, rows: usize) -> Vec<Painted> {
             if i >= inner_h {
                 break;
             }
-            out.push(plain(
-                right_x + 1,
-                1 + i,
-                line(&format!(" {label:<11}{value}"), "", inner_w),
-            ));
+            out.push(plain(right_x + 1, 1 + i, line(&format!(" {label:<11}{value}"), "", inner_w)));
         }
     }
 
@@ -759,7 +748,8 @@ mod tests {
     /// and for the same reason: the name is the half that says which profile it is.
     #[test]
     fn a_status_that_would_meet_the_name_is_dropped() {
-        let line = row_line(&row("A rather long profile name", "Used 3 hours ago", false, 0), false, 32);
+        let line =
+            row_line(&row("A rather long profile name", "Used 3 hours ago", false, 0), false, 32);
         assert!(!line.contains("Used"), "{line}");
         assert_eq!(line.chars().count(), 32);
     }

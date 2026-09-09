@@ -51,7 +51,6 @@ pub struct Net {
     pub ssid: String,
 }
 
-
 /// `nmcli -t -f WIFI,WWAN radio` prints one line, `<wifi>:<wwan>`.
 fn read_radio() -> Option<(bool, bool)> {
     let s = output(&["nmcli", "-t", "-f", "WIFI,WWAN", "radio"])?;

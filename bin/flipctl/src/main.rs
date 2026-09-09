@@ -13,12 +13,8 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |flag: &str| args.iter().any(|a| a == flag);
-    let value = |flag: &str| {
-        args.iter()
-            .position(|a| a == flag)
-            .and_then(|i| args.get(i + 1))
-            .cloned()
-    };
+    let value =
+        |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
 
     if has("--help") || args.is_empty() {
         eprintln!("{}", USAGE);
@@ -109,9 +105,7 @@ mod demo {
 
     pub fn labels(list: &[&str]) -> slint::ModelRc<slint::SharedString> {
         slint::ModelRc::new(slint::VecModel::from(
-            list.iter()
-                .map(|s| slint::SharedString::from(*s))
-                .collect::<Vec<_>>(),
+            list.iter().map(|s| slint::SharedString::from(*s)).collect::<Vec<_>>(),
         ))
     }
 
@@ -157,11 +151,8 @@ mod demo {
     /// SubMenuScene derives its trail from the scene stack rather than storing it,
     /// so a nested screen shows the whole path it was reached by.
     pub fn crumb(stack: &[(&'static Menu, i32, i32)], leaf: &str) -> String {
-        let mut parts: Vec<&str> = stack
-            .iter()
-            .map(|(m, _, _)| m.title)
-            .filter(|t| !t.is_empty())
-            .collect();
+        let mut parts: Vec<&str> =
+            stack.iter().map(|(m, _, _)| m.title).filter(|t| !t.is_empty()).collect();
         parts.push(leaf);
         format!("> {}", parts.join(" > "))
     }
@@ -223,13 +214,9 @@ mod demo {
         // The main menu's title is empty, which is also how MenuBody knows to use
         // the higher container anchor and draw no trail.
         screen.set_breadcrumb(
-            if menu.title.is_empty() {
-                String::new()
-            } else {
-                format!("> {}", menu.title)
-            }
-            .as_str()
-            .into(),
+            if menu.title.is_empty() { String::new() } else { format!("> {}", menu.title) }
+                .as_str()
+                .into(),
         );
     }
 
@@ -338,6 +325,7 @@ mod demo {
     ///
     /// Row order, icons and status providers are all as they are there. Airplane
     /// mode leads because it gates the two rows below it.
+    #[rustfmt::skip]
     pub static NETWORK: Menu = Menu {
         title: "Network",
         rows: &[
@@ -365,11 +353,10 @@ mod demo {
 
     /// The tracked submenu with this title.
     pub fn card_menu(title: &str) -> Option<&'static Menu> {
-        [&NETWORK, &SETTINGS]
-            .into_iter()
-            .find(|menu| menu.title == title)
+        [&NETWORK, &SETTINGS].into_iter().find(|menu| menu.title == title)
     }
 
+    #[rustfmt::skip]
     pub static SETTINGS: Menu = Menu {
         title: "Settings",
         rows: &[
@@ -395,6 +382,7 @@ mod demo {
     /// Files, Router, Boot Menu and the two target apps have scenes in the
     /// prototype that this port has not taken yet. Testing goes to the prototype
     /// itself rather than porting its scene.
+    #[rustfmt::skip]
     pub static MAIN: Menu = Menu {
         title: "",
         rows: &[
@@ -478,13 +466,7 @@ mod detail {
     }
 
     fn row(label: &str, value: &str) -> DetailRow {
-        DetailRow {
-            kind: 0,
-            label: label.into(),
-            value: value.into(),
-            percent: 0,
-            dim: false,
-        }
+        DetailRow { kind: 0, label: label.into(), value: value.into(), percent: 0, dim: false }
     }
 
     /// A secondary row, in the dim tone.
@@ -497,11 +479,7 @@ mod detail {
     }
 
     fn gauge(label: &str, percent: i32) -> DetailRow {
-        DetailRow {
-            kind: 2,
-            percent: percent.clamp(0, 100),
-            ..row(label, "")
-        }
+        DetailRow { kind: 2, percent: percent.clamp(0, 100), ..row(label, "") }
     }
 
     /// A full-width line with no value column.
@@ -526,10 +504,7 @@ mod detail {
         let sd = sysinfo::largest_partition(SD_DISK)
             .map(|part| sysinfo::disk(&part))
             .unwrap_or_default();
-        Disks {
-            ufs: sysinfo::disk_at("/"),
-            sd,
-        }
+        Disks { ufs: sysinfo::disk_at("/"), sd }
     }
 
     /// Whichever screen is open, with its poller.
@@ -572,9 +547,7 @@ mod detail {
                 // rtnetlink announces a route changing, which is the only time the
                 // table can differ, and the page then updates at once rather than
                 // up to a second later.
-                Detail::Routing => {
-                    Live::Routing(flipper_ui::route_watch::RouteWatch::spawn())
-                }
+                Detail::Routing => Live::Routing(flipper_ui::route_watch::RouteWatch::spawn()),
                 // diskspace.js fetches once on enter; a slow re-read costs nothing
                 // and picks up a card inserted while the screen is open.
                 Detail::Disk => Live::Disk(Watch::spawn(
@@ -700,11 +673,8 @@ mod detail {
         if !d.mounted {
             return vec![row(label, "Not mounted")];
         }
-        let pct = if d.total_gb > 0.0 {
-            (d.used_gb / d.total_gb * 100.0).round() as i32
-        } else {
-            0
-        };
+        let pct =
+            if d.total_gb > 0.0 { (d.used_gb / d.total_gb * 100.0).round() as i32 } else { 0 };
         vec![
             row(label, &format!("{:.1}/{:.1} GB", d.used_gb, d.total_gb)),
             gauge(&format!("{pct}%"), pct),
@@ -749,18 +719,9 @@ mod detail {
                 _ => "--".into(),
             },
         ));
-        out.push(row(
-            "Voltage",
-            &b.voltage.map_or("--".into(), |v| format!("{v:.3} V")),
-        ));
-        out.push(row(
-            "Current",
-            &b.current.map_or("--".into(), |v| format!("{v:.3} A")),
-        ));
-        out.push(row(
-            "Power",
-            &b.power.map_or("-- W".into(), |v| format!("{v:.3} W")),
-        ));
+        out.push(row("Voltage", &b.voltage.map_or("--".into(), |v| format!("{v:.3} V"))));
+        out.push(row("Current", &b.current.map_or("--".into(), |v| format!("{v:.3} A"))));
+        out.push(row("Power", &b.power.map_or("-- W".into(), |v| format!("{v:.3} W"))));
         if let Some(t) = b.temp {
             // sysfs reports tenths of a degree.
             out.push(row("Temp", &format!("{:.1} C", t as f32 / 10.0)));
@@ -889,11 +850,7 @@ mod detail {
         // The prototype cleans NetworkManager's state string; sysfs gives the plain
         // word already.
         let state = if iface.connected { "connected" } else { "disconnected" };
-        out.push(drow(
-            0,
-            &format!("{}  {}", sysinfo::iface_display_name(&iface.name), state),
-            "",
-        ));
+        out.push(drow(0, &format!("{}  {}", sysinfo::iface_display_name(&iface.name), state), ""));
 
         let speed = sysinfo::format_speed(iface.speed);
         if !speed.is_empty() || iface.rx_bytes > 0 || iface.tx_bytes > 0 {
@@ -931,11 +888,7 @@ mod detail {
         let mut top = 0.0f32;
         for row in &mut out {
             row.top = top;
-            top += if row.kind == 1 {
-                ETH_MODAL_DIVIDER_H as f32
-            } else {
-                ETH_MODAL_LINE_H as f32
-            };
+            top += if row.kind == 1 { ETH_MODAL_DIVIDER_H as f32 } else { ETH_MODAL_LINE_H as f32 };
         }
         (out, top)
     }
@@ -969,12 +922,8 @@ mod detail {
     /// update.js, whose seven states this reproduces one for one.
     fn update_rows(u: &UpdateStatus, applying: &Applying) -> Vec<DetailRow> {
         match applying {
-            Applying::Running => {
-                return vec![row("Updating...", ""), dim("Do not power off", "")]
-            }
-            Applying::Done => {
-                return vec![row("Update complete", ""), dim("Restarting...", "")]
-            }
+            Applying::Running => return vec![row("Updating...", ""), dim("Do not power off", "")],
+            Applying::Done => return vec![row("Update complete", ""), dim("Restarting...", "")],
             Applying::Failed(e) => return vec![row("Update failed", ""), dim(e, "")],
             Applying::No => {}
         }
@@ -985,10 +934,7 @@ mod detail {
             return vec![row("Error", &u.error), dim(&elide(&u.current_commit), "")];
         }
         if !u.available {
-            return vec![
-                row("No updates available", ""),
-                dim(&elide(&u.current_commit), ""),
-            ];
+            return vec![row("No updates available", ""), dim(&elide(&u.current_commit), "")];
         }
         let mut out = vec![row(
             &format!(
@@ -1112,12 +1058,7 @@ mod wifi {
 
         /// The rows as they stand, for both the key handler and the frame.
         pub fn view(&self) -> DetailView {
-            detail_rows(
-                self.details.as_ref(),
-                self.loading(),
-                self.active,
-                self.reveal,
-            )
+            detail_rows(self.details.as_ref(), self.loading(), self.active, self.reveal)
         }
     }
 
@@ -1172,7 +1113,6 @@ mod wifi {
             .ok();
         rx
     }
-
 
     /// The page's rows, as Slint's own struct.
     pub fn row_model(rows: &[Row]) -> slint::ModelRc<flipper_ui::ui::WifiRow> {
@@ -1247,11 +1187,7 @@ fn wrap_log(line: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
     for word in line.split_whitespace() {
-        let candidate = if cur.is_empty() {
-            word.to_string()
-        } else {
-            format!("{cur} {word}")
-        };
+        let candidate = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
         if fits(&candidate) {
             cur = candidate;
             continue;
@@ -1407,7 +1343,6 @@ impl PanelOut {
         }
     }
 
-
     /// Keys, for the sink that also carries them. The KMS path reads evdev itself.
     fn poll_key(&mut self) -> Option<flipper_ui::KeyEvent> {
         match self {
@@ -1497,10 +1432,8 @@ fn start_hosted(
 
     // Its own size if it insists on one, the panel's otherwise. Doom renders 320x200
     // and cannot be told otherwise, and here it simply gets an output that shape.
-    let (w, h) = entry.size.unwrap_or((
-        u32::from(flipper_ui::PANEL_W),
-        u32::from(flipper_ui::PANEL_H),
-    ));
+    let (w, h) =
+        entry.size.unwrap_or((u32::from(flipper_ui::PANEL_W), u32::from(flipper_ui::PANEL_H)));
     let place = match host.place(w, h) {
         Ok(place) => place,
         Err(e) => {
@@ -1614,10 +1547,7 @@ fn paint_status(
     turn: flipper_ui::Rotate,
 ) {
     use flipper_ui::theme::metric::STATUS_BAR_H;
-    let (pw, ph) = (
-        usize::from(flipper_ui::PANEL_W),
-        usize::from(flipper_ui::PANEL_H),
-    );
+    let (pw, ph) = (usize::from(flipper_ui::PANEL_W), usize::from(flipper_ui::PANEL_H));
     let tall = STATUS_BAR_H as usize;
     for y in 0..tall {
         for x in 0..usize::from(long) {
@@ -1660,9 +1590,8 @@ fn card_of(
 
     let image = match p.snapshot.as_ref() {
         Some(grey) => {
-            if let Some((_, image)) = cache
-                .iter()
-                .find(|(held, _)| std::sync::Arc::ptr_eq(held, grey))
+            if let Some((_, image)) =
+                cache.iter().find(|(held, _)| std::sync::Arc::ptr_eq(held, grey))
             {
                 image.clone()
             } else {
@@ -1780,11 +1709,7 @@ fn apply_text_input(
     use flipper_ui::keyboard::{self, Focus};
     use flipper_ui::theme::metric::KB_INPUT_PAD;
     let field_w = keyboard::field_w(i32::from(flipper_ui::font::TITLE.text_width(&input.text)));
-    let fitted = keyboard::fit_input(
-        &input.text,
-        input.cursor,
-        field_w - 2 * KB_INPUT_PAD,
-    );
+    let fitted = keyboard::fit_input(&input.text, input.cursor, field_w - 2 * KB_INPUT_PAD);
     let cells: Vec<flipper_ui::ui::KbCell> = input
         .placed()
         .into_iter()
@@ -1851,11 +1776,8 @@ fn dialog_wrap(apt: &[String], pip: &[String]) -> Vec<String> {
     let budget = (MODAL_W - 2 * PAD_LEFT) as u16;
     // pip packages are marked, because "requests" from pip and from apt are not
     // the same thing and the user is being asked to approve one of them.
-    let names: Vec<String> = apt
-        .iter()
-        .cloned()
-        .chain(pip.iter().map(|p| format!("{p} (pip)")))
-        .collect();
+    let names: Vec<String> =
+        apt.iter().cloned().chain(pip.iter().map(|p| format!("{p} (pip)"))).collect();
 
     let mut lines: Vec<String> = Vec::new();
     for name in &names {
@@ -1911,10 +1833,8 @@ fn app_rows(apps: &[flipper_ui::AppEntry], path: &[String]) -> Vec<AppRow> {
         }
     }
     folders.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut rows: Vec<AppRow> = folders
-        .into_iter()
-        .map(|(name, count)| AppRow::Folder(name, count))
-        .collect();
+    let mut rows: Vec<AppRow> =
+        folders.into_iter().map(|(name, count)| AppRow::Folder(name, count)).collect();
     rows.extend(here);
     rows
 }
@@ -1925,10 +1845,9 @@ fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow]) -> Vec<(String, St
     rows.iter()
         .map(|row| match row {
             AppRow::Folder(name, count) => (name.clone(), count.to_string()),
-            AppRow::App(at) => (
-                apps.get(*at).map_or_else(String::new, |a| a.name.clone()),
-                String::new(),
-            ),
+            AppRow::App(at) => {
+                (apps.get(*at).map_or_else(String::new, |a| a.name.clone()), String::new())
+            }
         })
         .collect()
 }
@@ -1965,10 +1884,7 @@ fn apply_app_list(
     screen.set_app_selected(selected);
     screen.set_app_items(slint::ModelRc::new(slint::VecModel::from(items)));
     screen.set_app_buttons(slint::ModelRc::new(slint::VecModel::from(
-        buttons
-            .iter()
-            .map(|h| slint::SharedString::from(h.as_str()))
-            .collect::<Vec<_>>(),
+        buttons.iter().map(|h| slint::SharedString::from(h.as_str())).collect::<Vec<_>>(),
     )));
 }
 
@@ -2243,11 +2159,8 @@ fn png(
     let bytes: Vec<u8> = frame.iter().map(|p| p.0).collect();
 
     let file = std::fs::File::create(path)?;
-    let mut encoder = png::Encoder::new(
-        std::io::BufWriter::new(file),
-        u32::from(PANEL_W),
-        u32::from(PANEL_H),
-    );
+    let mut encoder =
+        png::Encoder::new(std::io::BufWriter::new(file), u32::from(PANEL_W), u32::from(PANEL_H));
     encoder.set_color(png::ColorType::Grayscale);
     encoder.set_depth(png::BitDepth::Eight);
     encoder
@@ -2334,25 +2247,14 @@ fn panel(
     // Under a compositor the keys come with the frames: it holds the input devices
     // and hands us key events on the same connection, so reading evdev as well would
     // be two readers of one press.
-    let mut input = if headless || wayland {
-        None
-    } else {
-        Some(EvdevSource::open()?)
-    };
+    let mut input = if headless || wayland { None } else { Some(EvdevSource::open()?) };
     // The pad and the motor, on the same terms as the buttons: not in headless or
     // under a compositor, and never fatal. Neither exists on every board, and the
     // pad reaches only the text-input screen, so a missing one costs that screen
     // a way in rather than costing anything else.
-    let mut pad = if headless || wayland {
-        None
-    } else {
-        flipper_ui::evdev::TouchpadSource::open().ok()
-    };
-    let mut buzz = if headless || wayland {
-        None
-    } else {
-        flipper_ui::haptic::Haptic::open().ok()
-    };
+    let mut pad =
+        if headless || wayland { None } else { flipper_ui::evdev::TouchpadSource::open().ok() };
+    let mut buzz = if headless || wayland { None } else { flipper_ui::haptic::Haptic::open().ok() };
 
     // The browser view is a second sink over the same frames and a second source
     // of the same key events, so nothing downstream can tell a remote click from
@@ -2504,8 +2406,7 @@ fn panel(
     // The dialog as it was last handed over, plus whether anything is covering
     // it: the switcher's cards, or an app in front. Both hide the question
     // without answering it, and uncovering has to bring it back.
-    let mut last_dialog: (bool, Option<(Vec<String>, &'static str, &'static str)>) =
-        (false, None);
+    let mut last_dialog: (bool, Option<(Vec<String>, &'static str, &'static str)>) = (false, None);
 
     // Which chevron of a selected toggle row is flashing, and until when.
     let mut arrow: Option<(i32, Instant)> = None;
@@ -2670,13 +2571,9 @@ fn panel(
             let menu = stack.last().unwrap().0;
             demo::apply_menu(&screen, menu, &net_now);
             screen.set_breadcrumb(
-                if menu.title.is_empty() {
-                    String::new()
-                } else {
-                    format!("> {}", menu.title)
-                }
-                .as_str()
-                .into(),
+                if menu.title.is_empty() { String::new() } else { format!("> {}", menu.title) }
+                    .as_str()
+                    .into(),
             );
             screen.set_screen(Screen::Menu);
         }};
@@ -2706,10 +2603,8 @@ fn panel(
         ($input:expr) => {
             match &kb_for {
                 KbFor::Profile(name) => {
-                    let being = flipper_ui::boot::Profile {
-                        name: name.clone(),
-                        ..Default::default()
-                    };
+                    let being =
+                        flipper_ui::boot::Profile { name: name.clone(), ..Default::default() };
                     let existing = boot.as_ref().map(|m| m.profiles()).unwrap_or(&[]);
                     flipper_ui::boot::rename_warning(&$input.text, &being, existing)
                 }
@@ -2931,7 +2826,8 @@ fn panel(
     #[cfg(feature = "wayland")]
     let mut status_strip = vec![
         flipper_ui::pixel::Gray8::WHITE;
-        usize::from(PANEL_W) * flipper_ui::theme::metric::STATUS_BAR_H as usize
+        usize::from(PANEL_W)
+            * flipper_ui::theme::metric::STATUS_BAR_H as usize
     ];
     #[cfg(feature = "wayland")]
     let mut status_long = PANEL_W;
@@ -2979,19 +2875,10 @@ fn panel(
         eprintln!("frames        {frames}");
         eprintln!("elapsed       {:.2}s", elapsed.as_secs_f32());
         if frames > 0 {
-            eprintln!(
-                "render mean   {:.2}ms",
-                render_total.as_secs_f32() * 1000.0 / frames as f32
-            );
-            eprintln!(
-                "commit mean   {:.2}ms",
-                commit_total.as_secs_f32() * 1000.0 / frames as f32
-            );
+            eprintln!("render mean   {:.2}ms", render_total.as_secs_f32() * 1000.0 / frames as f32);
+            eprintln!("commit mean   {:.2}ms", commit_total.as_secs_f32() * 1000.0 / frames as f32);
             eprintln!("commit worst  {:.2}ms", commit_worst.as_secs_f32() * 1000.0);
-            eprintln!(
-                "throughput    {:.1} fps sustained",
-                frames as f32 / elapsed.as_secs_f32()
-            );
+            eprintln!("throughput    {:.1} fps sustained", frames as f32 / elapsed.as_secs_f32());
         }
     };
 
@@ -3118,10 +3005,7 @@ fn panel(
         // deck, or nothing. One IPC call per change, and none when nothing changed.
         #[cfg(feature = "wayland")]
         if let Some(host) = host.as_mut() {
-            let watched = switcher
-                .as_ref()
-                .and_then(|sw| sw.focused_name())
-                .map(str::to_string);
+            let watched = switcher.as_ref().and_then(|sw| sw.focused_name()).map(str::to_string);
             for app in wl_apps.iter() {
                 let want = if wl_front.as_deref() == Some(app.name.as_str()) {
                     // An app in front that has drawn the same picture for a while is
@@ -3185,10 +3069,7 @@ fn panel(
             let mut leave = None;
             for event in pending_input.drain(..).chain(pending_remote.drain(..)) {
                 if keylog {
-                    eprintln!(
-                        "key            {:?} down={} to {front}",
-                        event.key, event.down
-                    );
+                    eprintln!("key            {:?} down={} to {front}", event.key, event.down);
                 }
                 match event.key {
                     FlipperKey::Back | FlipperKey::AppSwitch => {
@@ -3253,8 +3134,8 @@ fn panel(
                     #[cfg(feature = "remote")]
                     if let Some(view) = web.as_mut() {
                         if view.viewers() > 0 {
-                            let _ = view
-                                .commit(flipper_ui::Frame::new(ready, PANEL_W, PANEL_H), all);
+                            let _ =
+                                view.commit(flipper_ui::Frame::new(ready, PANEL_W, PANEL_H), all);
                         }
                     }
                     app_frames += 1;
@@ -3336,10 +3217,8 @@ fn panel(
             // An app that has gone, or one that has shown nothing at all since it
             // started, must not keep the panel: flipctl would go on committing the
             // last frame with no way back.
-            let alive = wl_apps
-                .iter_mut()
-                .find(|a| a.name == front)
-                .is_some_and(|a| a.session.alive());
+            let alive =
+                wl_apps.iter_mut().find(|a| a.name == front).is_some_and(|a| a.session.alive());
             let silent = !wl_drawn && wl_since.elapsed() > Duration::from_secs(10);
             if !alive || silent {
                 if alive {
@@ -3428,9 +3307,8 @@ fn panel(
                 if bench {
                     continue;
                 }
-                if let Some(app) = wl_apps
-                    .iter()
-                    .find(|a| Some(a.name.as_str()) == wl_front.as_deref())
+                if let Some(app) =
+                    wl_apps.iter().find(|a| Some(a.name.as_str()) == wl_front.as_deref())
                 {
                     let cap = if app.session.still() > 30 { 33 } else { 8 };
                     app.session.wait_ready(Duration::from_millis(cap));
@@ -3478,78 +3356,71 @@ fn panel(
                     continue;
                 }
                 if let Some(sw) = switcher.as_mut() {
-                switch_dirty = true;
-                match sw.key(event.key) {
-                    Some(flipper_ui::switcher::Action::Close) => {
-                        eprintln!("switcher       closing back to {:?}", before_switcher);
-                        switcher = None;
-                        // Back to the screen the deck was opened over. Nothing is
-                        // focused and the recents order is untouched, so every app
-                        // that was running still is, one Tab away. A question that
-                        // was waiting when the deck opened is still waiting, so that
-                        // comes back instead, wherever it was asked.
-                        screen.set_screen(if (deps.is_some() && !deps_detached)
-                            || dialog.is_some()
-                        {
-                            Screen::Apps
-                        } else {
-                            before_switcher
-                        });
-                    }
-                    Some(flipper_ui::switcher::Action::Launch(name, kind)) => {
-                        switcher = None;
-                        // A card for an app that is still being installed has nothing to
-                        // launch: what it leads back to is the log.
-                        if deps.is_some() && pending_app!() == Some(name.as_str()) {
-                            deps_detached = false;
-                            eprintln!("app            back to the install log (card)");
-                            continue;
+                    switch_dirty = true;
+                    match sw.key(event.key) {
+                        Some(flipper_ui::switcher::Action::Close) => {
+                            eprintln!("switcher       closing back to {:?}", before_switcher);
+                            switcher = None;
+                            // Back to the screen the deck was opened over. Nothing is
+                            // focused and the recents order is untouched, so every app
+                            // that was running still is, one Tab away. A question that
+                            // was waiting when the deck opened is still waiting, so that
+                            // comes back instead, wherever it was asked.
+                            screen.set_screen(
+                                if (deps.is_some() && !deps_detached) || dialog.is_some() {
+                                    Screen::Apps
+                                } else {
+                                    before_switcher
+                                },
+                            );
                         }
-                        launch_card(
-                            &screen,
-                            &mut recents,
-                            &mut stack,
-                            &name,
-                            kind,
-                            &net_now,
-                        );
-                    }
-                    Some(flipper_ui::switcher::Action::Kill(name, _)) => {
-                        // Dropping the session signals the app's process group, so a
-                        // game and the shell that launched it go together. The host
-                        // compositor stays up for the other apps, so its output and
-                        // workspace are handed back separately, just below.
-                        #[cfg(feature = "wayland")]
-                        if let Some(at) = wl_apps.iter().position(|a| a.name == name) {
-                            let gone = wl_apps.remove(at);
-                            // The output goes back to the host rather than being
-                            // abandoned: sway can create an output and cannot destroy
-                            // one, so an afternoon of launching and killing would climb
-                            // to HEADLESS-40.
-                            if let Some(host) = host.as_mut() {
-                                host.release(gone.place.clone(), gone.size.0, gone.size.1);
+                        Some(flipper_ui::switcher::Action::Launch(name, kind)) => {
+                            switcher = None;
+                            // A card for an app that is still being installed has nothing to
+                            // launch: what it leads back to is the log.
+                            if deps.is_some() && pending_app!() == Some(name.as_str()) {
+                                deps_detached = false;
+                                eprintln!("app            back to the install log (card)");
+                                continue;
                             }
-                            attention.remove(&gone.name);
-                            drop(gone);
-                            if wl_front.as_deref() == Some(name.as_str()) {
-                                wl_front = None;
-                                screen.set_screen(launched_from);
-                                window.request_redraw();
+                            launch_card(&screen, &mut recents, &mut stack, &name, kind, &net_now);
+                        }
+                        Some(flipper_ui::switcher::Action::Kill(name, _)) => {
+                            // Dropping the session signals the app's process group, so a
+                            // game and the shell that launched it go together. The host
+                            // compositor stays up for the other apps, so its output and
+                            // workspace are handed back separately, just below.
+                            #[cfg(feature = "wayland")]
+                            if let Some(at) = wl_apps.iter().position(|a| a.name == name) {
+                                let gone = wl_apps.remove(at);
+                                // The output goes back to the host rather than being
+                                // abandoned: sway can create an output and cannot destroy
+                                // one, so an afternoon of launching and killing would climb
+                                // to HEADLESS-40.
+                                if let Some(host) = host.as_mut() {
+                                    host.release(gone.place.clone(), gone.size.0, gone.size.1);
+                                }
+                                attention.remove(&gone.name);
+                                drop(gone);
+                                if wl_front.as_deref() == Some(name.as_str()) {
+                                    wl_front = None;
+                                    screen.set_screen(launched_from);
+                                    window.request_redraw();
+                                }
+                                recents.close(&name);
+                                eprintln!("app            {name} killed");
+                                continue;
                             }
+                            // Nothing to stop: a screen leaves the stack and that is the
+                            // whole of it.
                             recents.close(&name);
-                            eprintln!("app            {name} killed");
-                            continue;
                         }
-                        // Nothing to stop: a screen leaves the stack and that is the
-                        // whole of it.
-                        recents.close(&name);
+                        None => {}
                     }
-                    None => {}
+                    continue;
                 }
-                continue;
-            }
 
-            if screen.get_screen() == Screen::TextInput {
+                if screen.get_screen() == Screen::TextInput {
                     if let Some(input) = kb.as_mut() {
                         if input.release(event.key) {
                             kb_dirty = true;
@@ -3589,11 +3460,9 @@ fn panel(
                 Some(i) if demo::SOFT_LABELS[i].is_empty() => {
                     eprintln!("key {} -> slot {i}, no label", event.key.name())
                 }
-                Some(i) => eprintln!(
-                    "key {} -> slot {i} \"{}\"",
-                    event.key.name(),
-                    demo::SOFT_LABELS[i]
-                ),
+                Some(i) => {
+                    eprintln!("key {} -> slot {i} \"{}\"", event.key.name(), demo::SOFT_LABELS[i])
+                }
                 None => eprintln!("key {}", event.key.name()),
             }
             eprintln!(
@@ -3605,11 +3474,8 @@ fn panel(
 
             // A labelled soft key must do something, or the label is a lie.
             let on_menu_now = screen.get_screen() == Screen::Menu;
-            let labels: &[&str; 5] = if on_menu_now {
-                &demo::SOFT_LABELS
-            } else {
-                &demo::IDLE_LABELS
-            };
+            let labels: &[&str; 5] =
+                if on_menu_now { &demo::SOFT_LABELS } else { &demo::IDLE_LABELS };
             let labelled_soft = slot.is_some_and(|i| !labels[i].is_empty());
 
             // Tab belongs to the system, not to whatever is in front. It is
@@ -3627,10 +3493,7 @@ fn panel(
                 // switcher brings it back, and it is still waiting for the same
                 // answer: an install that needed approving is not something to lose
                 // because the user looked at something else first.
-                let inside_app = matches!(
-                    screen.get_screen(),
-                    Screen::AppLog
-                );
+                let inside_app = matches!(screen.get_screen(), Screen::AppLog);
                 // What the user is looking at is the top card when it is a focused
                 // app or one of our tracked screens, and either way that is what
                 // the panel is showing right now.
@@ -3645,9 +3508,7 @@ fn panel(
                 // without being launched sat in the second slot: the very slot the
                 // focus starts on, which made every switch land back on it.
                 if let Some(name) = front.as_deref() {
-                    let kind = recents
-                        .kind(name)
-                        .unwrap_or(flipper_ui::switcher::Kind::App);
+                    let kind = recents.kind(name).unwrap_or(flipper_ui::switcher::Kind::App);
                     recents.open(name, kind);
                 }
                 stash_front(&mut recents, front, &frame);
@@ -3657,8 +3518,7 @@ fn panel(
                 // opened over, which is the one thing Back from the deck must not do:
                 // it is the way out, and the app stays running either way.
                 before_switcher = match screen.get_screen() {
-                    Screen::AppLog
-                    | Screen::Switcher => launched_from,
+                    Screen::AppLog | Screen::Switcher => launched_from,
                     other => other,
                 };
                 eprintln!("switcher       opened over {:?}", before_switcher);
@@ -3862,10 +3722,7 @@ fn panel(
                     // Only a connected card opens: a disconnected one has nothing
                     // to show, which is also why its chevron is suppressed.
                     FlipperKey::Ok | FlipperKey::Run => {
-                        if ifaces
-                            .get(eth_selected as usize)
-                            .is_some_and(|i| i.connected)
-                        {
+                        if ifaces.get(eth_selected as usize).is_some_and(|i| i.connected) {
                             eth_open = true;
                             eth_scroll = 0.0;
                             detail_dirty = true;
@@ -3930,13 +3787,9 @@ fn panel(
                             }
                             FlipperKey::Ok | FlipperKey::Run => {
                                 next = match act {
-                                    Some(wifi::Act::Connected) => {
-                                        Some(wifi::Modal::Details(wifi::Detail::open(
-                                            &net_now.ssid,
-                                            &net_now.ssid,
-                                            true,
-                                        )))
-                                    }
+                                    Some(wifi::Act::Connected) => Some(wifi::Modal::Details(
+                                        wifi::Detail::open(&net_now.ssid, &net_now.ssid, true),
+                                    )),
                                     Some(wifi::Act::Visible) => {
                                         Some(wifi::Modal::Visible(wifi::List::default()))
                                     }
@@ -4111,9 +3964,7 @@ fn panel(
                         detail_offset = (detail_offset - 1).max(0);
                         detail_dirty = true;
                     }
-                    FlipperKey::Run | FlipperKey::Ok
-                        if !open.buttons(&applying)[4].is_empty() =>
-                    {
+                    FlipperKey::Run | FlipperKey::Ok if !open.buttons(&applying)[4].is_empty() => {
                         press.soft(FlipperKey::Run, 4, Instant::now() + flash);
                     }
                     FlipperKey::Escape | FlipperKey::Back => {
@@ -4172,7 +4023,6 @@ fn panel(
                 continue;
             }
 
-
             if screen.get_screen() == Screen::TextInput {
                 if let Some(input) = kb.as_mut() {
                     // The two labelled keys invert their own button. The action is
@@ -4186,7 +4036,10 @@ fn panel(
                     let warning = kb_warning!(input);
                     // A passphrase is accepted whatever it says: only the AP can
                     // refuse it. Typing clears whatever it refused last time.
-                    let typed = match input.key(event.key, matches!(kb_for, KbFor::Passphrase { .. }) || warning.is_empty()) {
+                    let typed = match input.key(
+                        event.key,
+                        matches!(kb_for, KbFor::Passphrase { .. }) || warning.is_empty(),
+                    ) {
                         Some(flipper_ui::keyboard::Exit::Save(text)) => Some(Some(text)),
                         Some(flipper_ui::keyboard::Exit::Cancel) => Some(None),
                         None => None,
@@ -4268,7 +4121,6 @@ fn panel(
                 continue;
             }
 
-
             let visible = demo::rows(stack.last().unwrap().0);
             let rows = visible.len() as i32;
             let Some(row) = visible.get(selected as usize).copied() else {
@@ -4292,7 +4144,10 @@ fn panel(
                         selected = sel;
                         scroll = scr;
                         demo::apply_menu(&screen, menu, &net_now);
-                        eprintln!("menu           back to {}", if menu.title.is_empty() { "main" } else { menu.title });
+                        eprintln!(
+                            "menu           back to {}",
+                            if menu.title.is_empty() { "main" } else { menu.title }
+                        );
                     } else {
                         screen.set_screen(Screen::Idle);
                         eprintln!("screen         idle");
@@ -4307,8 +4162,7 @@ fn panel(
                     net.set_airplane(!net_now.airplane);
                     arrow = Some((
                         if event.key == FlipperKey::Left { 1 } else { 2 },
-                        Instant::now()
-                            + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
+                        Instant::now() + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
                     ));
                 }
                 // A toggle flips on ok too, with no press flash and no scene
@@ -4323,12 +4177,10 @@ fn panel(
                 }
                 (_, FlipperKey::Ok) => press.row(FlipperKey::Ok, Instant::now() + flash),
                 // A labelled soft key inverts first and acts when the flash ends.
-                _ if labelled_soft => {
-                    match slot {
-                        Some(i) => press.soft(event.key, i, Instant::now() + flash),
-                        None => press.row(event.key, Instant::now() + flash),
-                    }
-                }
+                _ if labelled_soft => match slot {
+                    Some(i) => press.soft(event.key, i, Instant::now() + flash),
+                    None => press.row(event.key, Instant::now() + flash),
+                },
                 _ => {}
             }
         }
@@ -4389,20 +4241,19 @@ fn panel(
                     let mut next: Option<wifi::Modal> = None;
                     match &mut wifi_modal {
                         wifi::Modal::Visible(list) => {
-                            let scan =
-                                wifi_live.as_ref().map(|l| l.scan.get()).unwrap_or_default();
-                            let saved = wifi_live
-                                .as_ref()
-                                .and_then(|l| l.saved.get())
-                                .unwrap_or_default();
+                            let scan = wifi_live.as_ref().map(|l| l.scan.get()).unwrap_or_default();
+                            let saved =
+                                wifi_live.as_ref().and_then(|l| l.saved.get()).unwrap_or_default();
                             if let Some(picked) = scan.networks.get(list.selected as usize) {
                                 let ssid = picked.ssid.clone();
                                 let known = wifi::saved_match(&saved, &ssid);
                                 if net_now.wifi_connected && net_now.ssid == ssid {
                                     // Nothing to do, said out loud: without this the
                                     // press looks like it was swallowed.
-                                    wifi_toast =
-                                        Some(("Already connected".into(), Instant::now() + toast_for));
+                                    wifi_toast = Some((
+                                        "Already connected".into(),
+                                        Instant::now() + toast_for,
+                                    ));
                                 } else if let Some(profile) = known {
                                     // A profile for it already exists, so nmcli has
                                     // the passphrase and there is nothing to ask.
@@ -4439,18 +4290,15 @@ fn panel(
                         // from the settings is back to the page, which is what
                         // wifi.js does here.
                         wifi::Modal::Saved(list) => {
-                            let saved = wifi_live
-                                .as_ref()
-                                .and_then(|l| l.saved.get())
-                                .unwrap_or_default();
+                            let saved =
+                                wifi_live.as_ref().and_then(|l| l.saved.get()).unwrap_or_default();
                             if let Some(profile) = saved.get(list.selected as usize) {
                                 let title = if profile.ssid.is_empty() {
                                     &profile.name
                                 } else {
                                     &profile.ssid
                                 };
-                                let active =
-                                    net_now.wifi_connected && net_now.ssid == profile.name;
+                                let active = net_now.wifi_connected && net_now.ssid == profile.name;
                                 next = Some(wifi::Modal::Details(wifi::Detail::open(
                                     &profile.name,
                                     title,
@@ -4466,9 +4314,7 @@ fn panel(
                                 Some(wifi::DetailAct::Disconnect) => {
                                     wifi_op = Some((
                                         wifi::Op::Profile,
-                                        wifi::spawn_op(move || {
-                                            flipper_ui::wifi::disconnect(&name)
-                                        }),
+                                        wifi::spawn_op(move || flipper_ui::wifi::disconnect(&name)),
                                     ));
                                 }
                                 Some(wifi::DetailAct::Forget) => {
@@ -4859,21 +4705,12 @@ fn panel(
                         eprintln!("app            back to the install log (card, tick)");
                         continue;
                     }
-                    launch_card(
-                        &screen,
-                        &mut recents,
-                        &mut stack,
-                        &name,
-                        kind,
-                        &net_now,
-                    );
+                    launch_card(&screen, &mut recents, &mut stack, &name, kind, &net_now);
                 }
                 Some(flipper_ui::switcher::Action::Close) => {
                     eprintln!("switcher       closing back to {:?} (tick)", before_switcher);
                     switcher = None;
-                    screen.set_screen(if (deps.is_some() && !deps_detached)
-                        || dialog.is_some()
-                    {
+                    screen.set_screen(if (deps.is_some() && !deps_detached) || dialog.is_some() {
                         Screen::Apps
                     } else {
                         before_switcher
@@ -4907,11 +4744,8 @@ fn panel(
         }
         if let Some(sw) = switcher.as_ref().filter(|sw| sw.animating() || switch_dirty) {
             switch_dirty = sw.animating();
-            let cards: Vec<flipper_ui::ui::SwitchCard> = sw
-                .placed()
-                .into_iter()
-                .map(|p| card_of(&p, &mut card_images))
-                .collect();
+            let cards: Vec<flipper_ui::ui::SwitchCard> =
+                sw.placed().into_iter().map(|p| card_of(&p, &mut card_images)).collect();
             screen.set_switch_cards(slint::ModelRc::new(slint::VecModel::from(cards)));
             screen.set_switch_can_kill(sw.can_kill());
             screen.set_switch_pressed_slot(press.soft_slot());
@@ -5018,8 +4852,11 @@ fn panel(
                     }
                 }
                 Ok(m) => {
-                    eprintln!("app            {} needs {}", 
-                        apps.get(idx as usize).map_or("?", |a| a.name.as_str()), m.summary());
+                    eprintln!(
+                        "app            {} needs {}",
+                        apps.get(idx as usize).map_or("?", |a| a.name.as_str()),
+                        m.summary()
+                    );
                     // Name what is being agreed to: consenting to an install
                     // without being told what is not consent. A Rust app that only
                     // needs compiling is asked about as a build, because calling
@@ -5040,12 +4877,8 @@ fn panel(
                         ));
                         lines.extend(dialog_wrap(&apt, &m.pip));
                     }
-                    dialog = Some(Dialog {
-                        lines,
-                        left: "Cancel",
-                        right,
-                        act: DialogAct::InstallDeps,
-                    });
+                    dialog =
+                        Some(Dialog { lines, left: "Cancel", right, act: DialogAct::InstallDeps });
                     deps = Some(Deps::Asking(idx, m));
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -5183,7 +5016,8 @@ fn panel(
             if open.take_dirty() || detail_dirty {
                 detail_dirty = false;
                 let rows = open.rows(&applying);
-                let max = (rows.len() as i32 - flipper_ui::theme::count::DETAIL_VISIBLE_ROWS).max(0);
+                let max =
+                    (rows.len() as i32 - flipper_ui::theme::count::DETAIL_VISIBLE_ROWS).max(0);
                 detail_offset = detail_offset.clamp(0, max);
                 screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
                 screen.set_detail_offset(detail_offset);
@@ -5222,10 +5056,7 @@ fn panel(
         // alone, by design -- an app draws its own screen and there is none of ours
         // for it to be. A page whose app was launched over it keeps polling.
         if live.is_some()
-            && !matches!(
-                screen.get_screen(),
-                Screen::Detail | Screen::Ethernet | Screen::Switcher
-            )
+            && !matches!(screen.get_screen(), Screen::Detail | Screen::Ethernet | Screen::Switcher)
         {
             live = None;
             eth_open = false;
@@ -5238,8 +5069,7 @@ fn panel(
         // keyboard with its list still behind it.
         if boot.is_some()
             && !matches!(screen.get_screen(), Screen::Boot | Screen::Switcher)
-            && !(screen.get_screen() == Screen::TextInput
-                && matches!(kb_for, KbFor::Profile(_)))
+            && !(screen.get_screen() == Screen::TextInput && matches!(kb_for, KbFor::Profile(_)))
         {
             close_boot!();
         }
@@ -5323,10 +5153,8 @@ fn panel(
                             // An open network has no passphrase to ask for, so
                             // there is nowhere to go but back to the list.
                             wifi::Op::JoinOpen => {
-                                wifi_toast = Some((
-                                    "Connection failed".into(),
-                                    Instant::now() + toast_for,
-                                ));
+                                wifi_toast =
+                                    Some(("Connection failed".into(), Instant::now() + toast_for));
                             }
                             wifi::Op::Profile => {
                                 wifi_toast = Some((
@@ -5347,10 +5175,7 @@ fn panel(
                 }
             }
 
-            if wifi_toast
-                .as_ref()
-                .is_some_and(|(_, until)| Instant::now() >= *until)
-            {
+            if wifi_toast.as_ref().is_some_and(|(_, until)| Instant::now() >= *until) {
                 wifi_toast = None;
                 wifi_dirty = true;
             }
@@ -5367,8 +5192,8 @@ fn panel(
                     _ => false,
                 };
             if waiting {
-                let frame = (started.elapsed().as_millis()
-                    / timing::SPIN_FRAME_MS.max(1) as u128) as i32
+                let frame = (started.elapsed().as_millis() / timing::SPIN_FRAME_MS.max(1) as u128)
+                    as i32
                     % flipper_ui::theme::metric::SPIN_FRAMES;
                 if frame != wifi_spin {
                     wifi_spin = frame;
@@ -5403,8 +5228,6 @@ fn panel(
                 );
             }
         }
-
-
 
         // Nothing repaints unless something changed, so an unattended run needs
         // a reason to redraw. Reuse the animated-icon cadence.
@@ -5460,10 +5283,7 @@ fn panel(
         let covered = switcher.is_some();
         let dialog_key = (
             covered,
-            dialog
-                .as_ref()
-                .filter(|_| !covered)
-                .map(|d| (d.lines.clone(), d.left, d.right)),
+            dialog.as_ref().filter(|_| !covered).map(|d| (d.lines.clone(), d.left, d.right)),
         );
         if dialog_key != last_dialog {
             last_dialog = dialog_key;
@@ -5536,11 +5356,7 @@ fn panel(
         // about 9ms of every frame and went nowhere: the panel had the app's picture
         // and the browser view had the same. Slint paints the whole buffer whenever it
         // does render, and taking the panel back forces one, so nothing is lost.
-        let damage = if app_owns_panel {
-            None
-        } else {
-            render_into(&window, &mut frame)
-        };
+        let damage = if app_owns_panel { None } else { render_into(&window, &mut frame) };
         render_total += render_start.elapsed();
         // Slint is told to treat every render as a new buffer, so `frame` is complete
         // whatever the damage says, and claiming all of it is honest.
@@ -5611,7 +5427,8 @@ fn panel(
             rebind = Instant::now();
             let addr = remote.clone().unwrap_or_default();
             let dir = assets_dir.clone();
-            if let Ok(view) = flipper_ui::remote::RemoteView::bind_with_peer(&addr, dir, peer.clone())
+            if let Ok(view) =
+                flipper_ui::remote::RemoteView::bind_with_peer(&addr, dir, peer.clone())
             {
                 eprintln!("remote view    http://{}/ (bound on retry)", view.addr());
                 web = Some(view);
@@ -5635,7 +5452,5 @@ fn panel(
     _wayland: bool,
     _kernels: flipper_ui::boot::Kernels,
 ) -> std::io::Result<()> {
-    Err(std::io::Error::other(
-        "rebuild with --features device,slint",
-    ))
+    Err(std::io::Error::other("rebuild with --features device,slint"))
 }

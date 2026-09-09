@@ -33,7 +33,12 @@ pub struct Watch<T: Send + 'static> {
 
 impl<T: Clone + PartialEq + Send + 'static> Watch<T> {
     /// Start polling. `fetch` runs immediately, then every `interval`.
-    pub fn spawn(name: &str, interval: Duration, initial: T, fetch: impl Fn() -> T + Send + 'static) -> Self {
+    pub fn spawn(
+        name: &str,
+        interval: Duration,
+        initial: T,
+        fetch: impl Fn() -> T + Send + 'static,
+    ) -> Self {
         let shared = Arc::new(Shared {
             value: Mutex::new(initial),
             dirty: AtomicBool::new(false),

@@ -70,15 +70,16 @@ impl WlSink {
     /// surface of `w` by `h`.
     pub fn new(w: u16, h: u16) -> io::Result<Self> {
         let conn = Connection::connect_to_env().map_err(io::Error::other)?;
-        let (globals, queue) =
-            wayland_client::globals::registry_queue_init::<State>(&conn).map_err(io::Error::other)?;
+        let (globals, queue) = wayland_client::globals::registry_queue_init::<State>(&conn)
+            .map_err(io::Error::other)?;
         let qh = queue.handle();
 
         let mut state = State::default();
         for g in globals.contents().clone_list() {
             match g.interface.as_str() {
                 "wl_compositor" => {
-                    state.compositor = Some(globals.registry().bind(g.name, 4.min(g.version), &qh, ()))
+                    state.compositor =
+                        Some(globals.registry().bind(g.name, 4.min(g.version), &qh, ()))
                 }
                 "wl_shm" => state.shm = Some(globals.registry().bind(g.name, 1, &qh, ())),
                 "xdg_wm_base" => {
@@ -114,16 +115,7 @@ impl WlSink {
             buffers.push(Buffer::new(&shm, &qh, w, h, i)?);
         }
 
-        let mut sink = Self {
-            conn,
-            queue,
-            state,
-            surface,
-            buffers,
-            next: 0,
-            w,
-            h,
-        };
+        let mut sink = Self { conn, queue, state, surface, buffers, next: 0, w, h };
         // The first attach has to wait for the first configure, or the compositor
         // is entitled to ignore it.
         for _ in 0..50 {
@@ -139,9 +131,7 @@ impl WlSink {
     /// Read whatever the compositor has said, without blocking.
     pub fn pump(&mut self) -> io::Result<()> {
         self.conn.flush().map_err(io::Error::other)?;
-        self.queue
-            .dispatch_pending(&mut self.state)
-            .map_err(io::Error::other)?;
+        self.queue.dispatch_pending(&mut self.state).map_err(io::Error::other)?;
         if let Some(guard) = self.conn.prepare_read() {
             match guard.read() {
                 Ok(_) => {}
@@ -149,9 +139,7 @@ impl WlSink {
                     if e.kind() == io::ErrorKind::WouldBlock => {}
                 Err(e) => return Err(io::Error::other(e)),
             }
-            self.queue
-                .dispatch_pending(&mut self.state)
-                .map_err(io::Error::other)?;
+            self.queue.dispatch_pending(&mut self.state).map_err(io::Error::other)?;
         }
         Ok(())
     }
@@ -176,9 +164,7 @@ impl FrameSink for WlSink {
         // Whichever buffer the compositor is not holding. Both busy means it has
         // not caught up, and the frame is dropped rather than queued: the panel
         // shows the newest frame, never a backlog.
-        let slot = (0..BUFFERS)
-            .map(|i| (self.next + i) % BUFFERS)
-            .find(|&i| !self.state.busy[i]);
+        let slot = (0..BUFFERS).map(|i| (self.next + i) % BUFFERS).find(|&i| !self.state.busy[i]);
         let Some(slot) = slot else { return Ok(()) };
         self.next = (slot + 1) % BUFFERS;
 
@@ -262,11 +248,7 @@ impl Buffer {
         if map == libc::MAP_FAILED {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self {
-            buffer,
-            map: map.cast(),
-            len,
-        })
+        Ok(Self { buffer, map: map.cast(), len })
     }
 }
 
@@ -350,10 +332,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_seat::Event::Capabilities {
-            capabilities: WEnum::Value(caps),
-        } = event
-        {
+        if let wl_seat::Event::Capabilities { capabilities: WEnum::Value(caps) } = event {
             let has = caps.contains(wl_seat::Capability::Keyboard);
             match (has, state.keyboard.take()) {
                 (true, None) => state.keyboard = Some(seat.get_keyboard(qh, ())),

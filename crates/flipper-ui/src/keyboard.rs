@@ -49,7 +49,11 @@ impl Cell {
         Self { text, kind, wide: true, peek: false }
     }
     pub fn width(&self) -> i32 {
-        if self.wide { metric::KB_WIDE_W } else { metric::KB_BTN_W }
+        if self.wide {
+            metric::KB_WIDE_W
+        } else {
+            metric::KB_BTN_W
+        }
     }
 }
 
@@ -313,9 +317,7 @@ impl Grid {
     /// Up/Down snap to.
     pub fn closest_col(&self, row: usize, target_2x: i32) -> usize {
         let len = self.rows.get(row).map_or(0, Vec::len);
-        (0..len)
-            .min_by_key(|c| (self.cell_center_2x(row, *c) - target_2x).abs())
-            .unwrap_or(0)
+        (0..len).min_by_key(|c| (self.cell_center_2x(row, *c) - target_2x).abs()).unwrap_or(0)
     }
 }
 
@@ -565,13 +567,7 @@ impl TextInput {
                 // to come back to is the column parked on the bottom row.
                 _ => self.grid.cell_center_2x(last, col.clamp(0, last as i32) as usize),
             };
-            Anchor {
-                x: t.x,
-                y: t.y,
-                row,
-                col,
-                center_2x,
-            }
+            Anchor { x: t.x, y: t.y, row, col, center_2x }
         });
 
         let target_row = anchor.row + steps(t.y - anchor.y, TP_Y_UNITS_PER_STEP);
@@ -645,9 +641,7 @@ impl TextInput {
 
     /// True while the wave or a press flash still needs frames.
     pub fn animating(&mut self) -> bool {
-        let flashing = self
-            .pressed
-            .is_some_and(|(_, _, at)| at.elapsed().as_millis() < PRESS_MS);
+        let flashing = self.pressed.is_some_and(|(_, _, at)| at.elapsed().as_millis() < PRESS_MS);
         if !flashing {
             self.pressed = None;
         }
@@ -685,9 +679,7 @@ impl TextInput {
         self.layout = layout;
         self.grid = Grid::new(layout);
         self.row = self.row.min(self.grid.rows.len().saturating_sub(1));
-        self.col = self
-            .col
-            .min(self.grid.rows.get(self.row).map_or(1, Vec::len).saturating_sub(1));
+        self.col = self.col.min(self.grid.rows.get(self.row).map_or(1, Vec::len).saturating_sub(1));
         let on_peek = self.on_peek();
         self.wave.snap(on_peek, self.col);
     }
@@ -718,11 +710,7 @@ impl TextInput {
     }
 
     fn insert(&mut self, s: &str) {
-        let at = self
-            .text
-            .char_indices()
-            .nth(self.cursor)
-            .map_or(self.text.len(), |(i, _)| i);
+        let at = self.text.char_indices().nth(self.cursor).map_or(self.text.len(), |(i, _)| i);
         self.text.insert_str(at, s);
         self.cursor += s.chars().count();
         self.blink = std::time::Instant::now();
@@ -1067,7 +1055,6 @@ pub fn field_w(text_w: i32) -> i32 {
     (text_w + 2 * metric::KB_INPUT_PAD).clamp(metric::KB_INPUT_MIN_W, metric::KB_INPUT_MAX_W)
 }
 
-
 /// What of the text fits in the field, and where the caret lands.
 pub struct Fitted {
     /// The string to draw, markers included.
@@ -1110,10 +1097,7 @@ pub fn fit_input(text: &str, cursor: usize, inner_w: i32) -> Fitted {
             visible.push_str(RIGHT_MARKER);
         }
         let lead = if left { width(LEFT_MARKER) } else { 0 };
-        Fitted {
-            visible,
-            cursor_dx: lead + width(&slice(a, cursor.clamp(a, b))) + 1,
-        }
+        Fitted { visible, cursor_dx: lead + width(&slice(a, cursor.clamp(a, b))) + 1 }
     };
 
     if width(text) <= inner_w {

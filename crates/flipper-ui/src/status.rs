@@ -135,10 +135,7 @@ fn read_battery() -> (i32, bool) {
         .and_then(|s| s.parse::<i32>().ok())
         .map(|v| v.clamp(0, 100))
         .unwrap_or(-1);
-    let charging = matches!(
-        read(dir.join("status")).as_deref(),
-        Some("Charging") | Some("Full")
-    );
+    let charging = matches!(read(dir.join("status")).as_deref(), Some("Charging") | Some("Full"));
     (level, charging)
 }
 
@@ -532,11 +529,7 @@ fn ipv6_list() -> Vec<(String, String)> {
 
 /// Every IPv6 address on one interface.
 pub fn ipv6_all(want: &str) -> Vec<String> {
-    ipv6_list()
-        .into_iter()
-        .filter(|(iface, _)| iface == want)
-        .map(|(_, addr)| addr)
-        .collect()
+    ipv6_list().into_iter().filter(|(iface, _)| iface == want).map(|(_, addr)| addr).collect()
 }
 
 /// Every IPv4 address on one interface, via `getifaddrs`.
@@ -565,10 +558,7 @@ pub fn ipv4_all(want: &str) -> Vec<String> {
                 // bytes as they sit in memory. to_be_bytes() would reverse them on
                 // a little-endian host and turn 192.168.1.241 into 241.1.168.192.
                 let octets = sin.sin_addr.s_addr.to_ne_bytes();
-                found.push(format!(
-                    "{}.{}.{}.{}",
-                    octets[0], octets[1], octets[2], octets[3]
-                ));
+                found.push(format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3]));
             }
         }
         cur = entry.ifa_next;

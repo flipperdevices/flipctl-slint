@@ -62,12 +62,7 @@ fn resolve_family(socket: &Socket) -> Option<u16> {
     let mut name = b"nl80211".to_vec();
     name.push(0);
     socket
-        .send(&request(
-            GENL_ID_CTRL,
-            CTRL_CMD_GETFAMILY,
-            0,
-            &[(CTRL_ATTR_FAMILY_NAME, &name)],
-        ))
+        .send(&request(GENL_ID_CTRL, CTRL_CMD_GETFAMILY, 0, &[(CTRL_ATTR_FAMILY_NAME, &name)]))
         .ok()?;
     let mut buf = [0u8; 4096];
     let got = socket.recv(&mut buf).ok()?;
@@ -203,9 +198,7 @@ mod tests {
 
     /// One attribute: a 4-byte header then its payload, padded to four.
     fn attr(kind: u16, payload: &[u8]) -> Vec<u8> {
-        let mut out = ((crate::netlink::ATTR_HDR + payload.len()) as u16)
-            .to_ne_bytes()
-            .to_vec();
+        let mut out = ((crate::netlink::ATTR_HDR + payload.len()) as u16).to_ne_bytes().to_vec();
         out.extend_from_slice(&kind.to_ne_bytes());
         out.extend_from_slice(payload);
         out.resize(crate::netlink::align4(out.len()), 0);
@@ -235,5 +228,4 @@ mod tests {
         assert_eq!(average, Some(-53));
         assert_eq!(quality(average.unwrap()), 78);
     }
-
 }

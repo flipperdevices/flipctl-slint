@@ -161,9 +161,20 @@ mod tests {
     fn the_effect_struct_is_the_size_the_kernel_reads() {
         assert_eq!(EFFECT_SIZE, 48);
         let e = FfEffect {
-            kind: 0, id: 0, direction: 0, trigger: [0; 2], replay: [0; 2], _pad: 0,
-            waveform: 0, period: 0, magnitude: 0, offset: 0, phase: 0,
-            envelope: [0; 4], custom_len: 0, custom_data: std::ptr::null(),
+            kind: 0,
+            id: 0,
+            direction: 0,
+            trigger: [0; 2],
+            replay: [0; 2],
+            _pad: 0,
+            waveform: 0,
+            period: 0,
+            magnitude: 0,
+            offset: 0,
+            phase: 0,
+            envelope: [0; 4],
+            custom_len: 0,
+            custom_data: std::ptr::null(),
         };
         let base = std::ptr::addr_of!(e) as usize;
         // The union starts at 16, and its two tail fields are what the alignment

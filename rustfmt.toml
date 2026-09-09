@@ -1,0 +1,9 @@
+# Formatting is checked by ci/test.sh, so this file is the whole argument about it.
+#
+# use_small_heuristics = "Max" lets a struct literal, call or chain stay on one line
+# whenever it fits the width, which is what keeps the row and token tables readable
+# as tables rather than as six lines each. The few tables that are wider than the
+# limit carry #[rustfmt::skip], and the generated font tables carry it from the
+# generator that writes them.
+max_width = 100
+use_small_heuristics = "Max"

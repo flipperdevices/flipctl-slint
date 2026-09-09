@@ -20,11 +20,7 @@ use std::process::{Command, Stdio};
 /// Shared with the modules that ask the system the same way: the radios and the boot
 /// menu's store discovery. It lived in three files before, identically.
 pub(crate) fn output(args: &[&str]) -> Option<String> {
-    let out = Command::new(args[0])
-        .args(&args[1..])
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let out = Command::new(args[0]).args(&args[1..]).stderr(Stdio::null()).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -139,17 +135,10 @@ pub fn format_ipv6(groups: &[u16; 8]) -> String {
     }
     // A single zero group is written out; only a run of two or more collapses.
     if best.1 < 2 {
-        return groups
-            .iter()
-            .map(|g| format!("{g:x}"))
-            .collect::<Vec<_>>()
-            .join(":");
+        return groups.iter().map(|g| format!("{g:x}")).collect::<Vec<_>>().join(":");
     }
     let head: Vec<String> = groups[..best.0].iter().map(|g| format!("{g:x}")).collect();
-    let tail: Vec<String> = groups[best.0 + best.1..]
-        .iter()
-        .map(|g| format!("{g:x}"))
-        .collect();
+    let tail: Vec<String> = groups[best.0 + best.1..].iter().map(|g| format!("{g:x}")).collect();
     format!("{}::{}", head.join(":"), tail.join(":"))
 }
 
@@ -171,10 +160,7 @@ pub struct Disk {
 /// computes it, not total minus available.
 /// Usage of the filesystem mounted at `point`.
 pub fn disk_at(point: &str) -> Disk {
-    let mut d = Disk {
-        device: point.to_string(),
-        ..Default::default()
-    };
+    let mut d = Disk { device: point.to_string(), ..Default::default() };
     let Ok(c) = std::ffi::CString::new(point) else {
         return d;
     };
@@ -235,10 +221,7 @@ pub fn largest_partition(disk: &str) -> Option<String> {
 }
 
 pub fn disk(device: &str) -> Disk {
-    let mut d = Disk {
-        device: device.to_string(),
-        ..Default::default()
-    };
+    let mut d = Disk { device: device.to_string(), ..Default::default() };
     let Ok(mounts) = fs::read_to_string("/proc/mounts") else {
         return d;
     };
@@ -382,9 +365,7 @@ fn json_value(src: &str, key: &str) -> Option<String> {
         let end = rest[1..].find('"')? + 1;
         rest[1..end].to_string()
     } else {
-        let end = rest
-            .find([',', '}', ']', '\n'])
-            .unwrap_or(rest.len());
+        let end = rest.find([',', '}', ']', '\n']).unwrap_or(rest.len());
         rest[..end].trim().to_string()
     };
     (raw != "--" && !raw.is_empty() && raw != "null").then_some(raw)
@@ -524,14 +505,7 @@ pub fn modem(qmi_dev: &str) -> Modem {
     // Cell identity. These three calls are why the whole struct is refreshed on a
     // background thread: each opens the QMI device and takes ~100ms.
     let qmi = |arg: &str| {
-        output(&[
-            "qmicli",
-            "-d",
-            qmi_dev,
-            "--device-open-proxy",
-            arg,
-        ])
-        .unwrap_or_default()
+        output(&["qmicli", "-d", qmi_dev, "--device-open-proxy", arg]).unwrap_or_default()
     };
     let ss = qmi("--nas-get-serving-system");
     m.cell_id = quoted_after(&ss, "3GPP cell ID:");
@@ -594,10 +568,7 @@ pub struct UpdateStatus {
 /// three failure messages, because they are the ones that tell the difference
 /// between "not a repo", "no internet" and "cannot compare".
 pub fn update_check(repo: &str, branch: &str) -> UpdateStatus {
-    let mut u = UpdateStatus {
-        checked: true,
-        ..Default::default()
-    };
+    let mut u = UpdateStatus { checked: true, ..Default::default() };
     let git = |args: &[&str]| {
         let mut v = vec!["git", "-C", repo];
         v.extend_from_slice(args);
@@ -717,16 +688,15 @@ pub fn iface_display_name(name: &str) -> String {
     }
 }
 
-
 /// One nmcli call for every interface's addressing method.
 ///
 /// `nmcli -t -f DEVICE,NAME connection show --active` pairs devices with
 /// connection names, and the method is a per-connection setting, so this is two
 /// calls total rather than two per interface.
 fn ipv4_methods() -> Vec<(String, String)> {
-    let Some(active) = output(&[
-        "nmcli", "-t", "-f", "DEVICE,NAME", "connection", "show", "--active",
-    ]) else {
+    let Some(active) =
+        output(&["nmcli", "-t", "-f", "DEVICE,NAME", "connection", "show", "--active"])
+    else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -737,16 +707,11 @@ fn ipv4_methods() -> Vec<(String, String)> {
         if dev.is_empty() || dev == "lo" {
             continue;
         }
-        let method = output(&[
-            "nmcli", "-t", "-f", "ipv4.method", "connection", "show", conn,
-        ])
-        .and_then(|s| {
-            s.lines()
-                .next()
-                .and_then(|l| l.split_once(':'))
-                .map(|(_, v)| v.trim().to_string())
-        })
-        .unwrap_or_default();
+        let method = output(&["nmcli", "-t", "-f", "ipv4.method", "connection", "show", conn])
+            .and_then(|s| {
+                s.lines().next().and_then(|l| l.split_once(':')).map(|(_, v)| v.trim().to_string())
+            })
+            .unwrap_or_default();
         out.push((dev.to_string(), method));
     }
     out

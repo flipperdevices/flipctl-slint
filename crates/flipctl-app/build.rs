@@ -12,8 +12,5 @@ fn main() {
         .join("flipper-ui");
     println!("cargo:rustc-env=FLIPCTL_UI_DIR={}", ui.join("ui").display());
     println!("cargo:rustc-env=FLIPCTL_TOKENS={}", ui.join("tokens.toml").display());
-    println!(
-        "cargo:rustc-env=FLIPCTL_APP_DIR={}/ui",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    println!("cargo:rustc-env=FLIPCTL_APP_DIR={}/ui", env!("CARGO_MANIFEST_DIR"));
 }

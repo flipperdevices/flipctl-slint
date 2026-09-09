@@ -8,6 +8,7 @@ pub const TITLE: BitmapFont = BitmapFont {
     glyphs: &TITLE_GLYPHS,
 };
 
+#[rustfmt::skip]
 const TITLE_GLYPHS: [Glyph; 95] = [
     // 32 space
     Glyph { advance: 2, rows: &[0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000] },

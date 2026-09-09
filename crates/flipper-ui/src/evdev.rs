@@ -55,11 +55,7 @@ impl EvdevSource {
         let devices: Vec<File> = paths
             .iter()
             .filter_map(|path| {
-                OpenOptions::new()
-                    .read(true)
-                    .custom_flags(libc_o_nonblock())
-                    .open(path)
-                    .ok()
+                OpenOptions::new().read(true).custom_flags(libc_o_nonblock()).open(path).ok()
             })
             .collect();
 
@@ -69,11 +65,7 @@ impl EvdevSource {
             ));
         }
 
-        Ok(Self {
-            devices,
-            queue: std::collections::VecDeque::new(),
-            buf: [0; EVENT_SIZE * 32],
-        })
+        Ok(Self { devices, queue: std::collections::VecDeque::new(), buf: [0; EVENT_SIZE * 32] })
     }
 
     /// `/dev/input/eventN` for every `/sys/class/input/eventN/device/name` that
@@ -197,14 +189,9 @@ impl TouchpadSource {
             }
         }
         let Some(path) = path else {
-            return Err(std::io::Error::other(format!(
-                "no input device named {TOUCHPAD_NAME}"
-            )));
+            return Err(std::io::Error::other(format!("no input device named {TOUCHPAD_NAME}")));
         };
-        let device = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc_o_nonblock())
-            .open(path)?;
+        let device = OpenOptions::new().read(true).custom_flags(libc_o_nonblock()).open(path)?;
         Ok(Self {
             device,
             queue: std::collections::VecDeque::new(),

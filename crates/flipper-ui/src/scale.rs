@@ -27,11 +27,8 @@ pub fn fit(src: &[Gray8], sw: u32, sh: u32, dst: &mut [Gray8], dw: u32, dh: u32)
     // Whole-pixel arithmetic: the largest box that fits, then the offset that
     // centres it. Anything else puts the image half a pixel off and blurs a panel
     // whose pixels are individually visible.
-    let (w, h) = if sw * dh > dw * sh {
-        (dw, (sh * dw / sw).max(1))
-    } else {
-        ((sw * dh / sh).max(1), dh)
-    };
+    let (w, h) =
+        if sw * dh > dw * sh { (dw, (sh * dw / sw).max(1)) } else { ((sw * dh / sh).max(1), dh) };
     let (ox, oy) = ((dw - w) / 2, (dh - h) / 2);
 
     for y in 0..h {
@@ -83,11 +80,8 @@ pub fn fit_from_xrgb(
         return;
     }
 
-    let (w, h) = if sw * dh > dw * sh {
-        (dw, (sh * dw / sw).max(1))
-    } else {
-        ((sw * dh / sh).max(1), dh)
-    };
+    let (w, h) =
+        if sw * dh > dw * sh { (dw, (sh * dw / sw).max(1)) } else { ((sw * dh / sh).max(1), dh) };
     let (ox, oy) = ((dw - w) / 2, (dh - h) / 2);
 
     for y in 0..h {
@@ -143,9 +137,7 @@ mod tests {
     #[test]
     fn averaging_halves_a_checkerboard() {
         // 4x4 alternating 0 and 255 down to 2x2: every box holds one of each.
-        let src = grey(&[
-            0, 255, 0, 255, 255, 0, 255, 0, 0, 255, 0, 255, 255, 0, 255, 0,
-        ]);
+        let src = grey(&[0, 255, 0, 255, 255, 0, 255, 0, 0, 255, 0, 255, 255, 0, 255, 0]);
         let mut dst = grey(&[9; 4]);
         fit(&src, 4, 4, &mut dst, 2, 2);
         assert!(

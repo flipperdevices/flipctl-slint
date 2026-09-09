@@ -6,7 +6,6 @@
 
 use std::path::{Path, PathBuf};
 
-
 use flipper_ui::Surface;
 
 fn golden_dir() -> PathBuf {
@@ -22,11 +21,7 @@ fn write_png(path: &Path, w: u16, h: u16, data: &[u8]) {
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), u32::from(w), u32::from(h));
     encoder.set_color(png::ColorType::Grayscale);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder
-        .write_header()
-        .expect("png header")
-        .write_image_data(data)
-        .expect("png data");
+    encoder.write_header().expect("png header").write_image_data(data).expect("png data");
 }
 
 fn read_png(path: &Path) -> (u16, u16, Vec<u8>) {
@@ -55,7 +50,9 @@ pub fn assert_golden(name: &str, surface: &Surface) {
     if std::env::var_os("FLIPPER_UI_BLESS").is_some() || !golden.exists() {
         write_png(&golden, surface.width(), surface.height(), &actual);
         if std::env::var_os("FLIPPER_UI_BLESS").is_none() {
-            panic!("golden {name}.png did not exist and has been written; review it, then commit it");
+            panic!(
+                "golden {name}.png did not exist and has been written; review it, then commit it"
+            );
         }
         return;
     }
@@ -73,12 +70,7 @@ pub fn assert_golden(name: &str, surface: &Surface) {
         return;
     }
 
-    write_png(
-        &dir.join(format!("{name}.actual.png")),
-        surface.width(),
-        surface.height(),
-        &actual,
-    );
+    write_png(&dir.join(format!("{name}.actual.png")), surface.width(), surface.height(), &actual);
 
     let stride = usize::from(surface.width());
     let differing = expected.iter().zip(&actual).filter(|(a, b)| a != b).count();

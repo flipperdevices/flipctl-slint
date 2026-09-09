@@ -61,10 +61,7 @@ fn list_screen(screen: &Root, pressed: bool) {
     screen.set_ethernet(1);
     screen.set_menu_buttons(slint::ModelRc::new(slint::VecModel::from(
         // The menu shows no soft buttons, as the prototype's MenuScene does not.
-        ["", "", "", "", ""]
-            .iter()
-            .map(|s| slint::SharedString::from(*s))
-            .collect::<Vec<_>>(),
+        ["", "", "", "", ""].iter().map(|s| slint::SharedString::from(*s)).collect::<Vec<_>>(),
     )));
 }
 
@@ -88,10 +85,8 @@ fn list_screen(screen: &Root, pressed: bool) {
 /// can only be installed once per process.
 #[test]
 fn rendered_frames_use_only_design_tokens() {
-    let allowed: Vec<(u8, &str)> = theme::ALL_COLORS
-        .iter()
-        .map(|(name, _, r, ..)| (*r, *name))
-        .collect();
+    let allowed: Vec<(u8, &str)> =
+        theme::ALL_COLORS.iter().map(|(name, _, r, ..)| (*r, *name)).collect();
 
     let window = FlipperSlintPlatform::install();
     let screen = Root::new().expect("create Root");
@@ -114,12 +109,7 @@ fn rendered_frames_use_only_design_tokens() {
         let stride = usize::from(theme::PANEL_W);
         let mut sprite_boxes: Vec<(i32, i32, i32, i32)> = vec![
             (0, 0, 48, theme::metric::STATUS_BAR_H),
-            (
-                i32::from(theme::PANEL_W) - 20,
-                0,
-                20,
-                theme::metric::STATUS_BAR_H,
-            ),
+            (i32::from(theme::PANEL_W) - 20, 0, 20, theme::metric::STATUS_BAR_H),
         ];
         for row in 0..theme::count::LIST_VISIBLE_ROWS {
             sprite_boxes.push((
@@ -297,9 +287,7 @@ fn the_soft_button_strip_matches_the_design_export() {
     list_screen(&screen, false);
     // The export labels every slot with the 8-character budget it was drawn for.
     screen.set_menu_buttons(slint::ModelRc::new(slint::VecModel::from(
-        std::iter::repeat(slint::SharedString::from("8chartxt"))
-            .take(5)
-            .collect::<Vec<_>>(),
+        std::iter::repeat(slint::SharedString::from("8chartxt")).take(5).collect::<Vec<_>>(),
     )));
     screen.show().expect("show");
     slint::platform::update_timers_and_animations();
@@ -333,10 +321,7 @@ fn the_soft_button_strip_matches_the_design_export() {
     for row in 0..4 {
         let want = ink_runs(&|x| reference[row * stride + x]);
         let got = ink_runs(&|x| frame[(strip_top + row) * stride + x].0);
-        assert_eq!(
-            got, want,
-            "strip row {row}: ink runs differ from the design export"
-        );
+        assert_eq!(got, want, "strip row {row}: ink runs differ from the design export");
     }
 
     // Below the chamfer, the only ink that appears in every row is the vertical
@@ -345,19 +330,11 @@ fn the_soft_button_strip_matches_the_design_export() {
     // exactly what encodes the slot edges and the outer slots' missing outer
     // borders.
     let border_columns = |data: &dyn Fn(usize, usize) -> u8, rows: std::ops::Range<usize>| {
-        (0..stride)
-            .filter(|x| rows.clone().all(|row| data(row, *x) == 0))
-            .collect::<Vec<_>>()
+        (0..stride).filter(|x| rows.clone().all(|row| data(row, *x) == 0)).collect::<Vec<_>>()
     };
     let want = border_columns(&|row, x| reference[row * stride + x], 4..ref_h);
-    let got = border_columns(
-        &|row, x| frame[(strip_top + row) * stride + x].0,
-        4..strip_h,
-    );
-    assert_eq!(
-        got, want,
-        "border columns down the straight body differ from the design export"
-    );
+    let got = border_columns(&|row, x| frame[(strip_top + row) * stride + x].0, 4..strip_h);
+    assert_eq!(got, want, "border columns down the straight body differ from the design export");
     // Spelled out, so a regression names the thing that broke rather than just
     // showing two lists: slot 0 has no border at x0 and slot 4 none at x255.
     assert_eq!(
@@ -385,7 +362,9 @@ fn a_pressed_row_inverts_its_label_and_icon() {
     // Row 0's icon box and label area.
     let icon = (8usize..22, 28usize..42);
     let label = (24usize..120, 28usize..42);
-    let count = |frame: &[flipper_ui::Gray8], (xs, ys): (std::ops::Range<usize>, std::ops::Range<usize>), want: u8| {
+    let count = |frame: &[flipper_ui::Gray8],
+                 (xs, ys): (std::ops::Range<usize>, std::ops::Range<usize>),
+                 want: u8| {
         ys.clone()
             .flat_map(|y| xs.clone().map(move |x| (x, y)))
             .filter(|(x, y)| frame[y * stride + x].0 == want)
@@ -475,10 +454,7 @@ fn a_pressed_soft_button_inverts() {
         "pressed the button is mostly ink: {down_ink} ink, {down_white} white"
     );
     // The label survives the inversion rather than vanishing into the fill.
-    assert!(
-        down_white > 0,
-        "the pressed label must be white ink on the black fill, not absent"
-    );
+    assert!(down_white > 0, "the pressed label must be white ink on the black fill, not absent");
     // Inverting swaps the counts rather than merely darkening: the ink pressed
     // should be about what was white at rest, and vice versa.
     assert_eq!(
@@ -557,14 +533,14 @@ fn an_app_log_scrolls_when_it_overflows() {
     // report every one of its rows as thumb.
     let thumb_rows = |frame: &[flipper_ui::Gray8]| -> Vec<usize> {
         (usize::try_from(theme::metric::STATUS_BAR_H).unwrap()..strip_top)
-            .filter(|y| (bar_x..bar_x + bar_w).all(|x| frame[y * stride + x] == flipper_ui::Gray8(0)))
+            .filter(|y| {
+                (bar_x..bar_x + bar_w).all(|x| frame[y * stride + x] == flipper_ui::Gray8(0))
+            })
             .collect()
     };
     let lines = |n: usize| {
         slint::ModelRc::new(slint::VecModel::from(
-            (0..n)
-                .map(|i| slint::SharedString::from(format!("seq {i}")))
-                .collect::<Vec<_>>(),
+            (0..n).map(|i| slint::SharedString::from(format!("seq {i}"))).collect::<Vec<_>>(),
         ))
     };
 
@@ -574,10 +550,7 @@ fn an_app_log_scrolls_when_it_overflows() {
     screen.set_app_log_offset(0);
     slint::platform::update_timers_and_animations();
     let fits = render_frame(&window).expect("frame");
-    assert!(
-        thumb_rows(&fits).is_empty(),
-        "no scrollbar when everything fits"
-    );
+    assert!(thumb_rows(&fits).is_empty(), "no scrollbar when everything fits");
 
     // Overflows, at the top: a thumb, high up.
     screen.set_app_lines(lines(8));
@@ -703,9 +676,7 @@ fn status_columns(frame: &[flipper_ui::Gray8], row: usize, threshold: u8) -> Vec
     let top = SUB_TOP + row * (ROW_H + 1);
     // Stop short of the selector's right edge and corner stairs, which are ink but
     // not status: with no scrollbar the frame runs to x250.
-    (140..246)
-        .filter(|x| (top..top + ROW_H).any(|y| frame[y * stride + x].0 < threshold))
-        .collect()
+    (140..246).filter(|x| (top..top + ROW_H).any(|y| frame[y * stride + x].0 < threshold)).collect()
 }
 
 /// The chevrons of a `< ON >` status hold still when the value changes width.
@@ -829,16 +800,10 @@ fn a_value_at_its_limit_drops_one_chevron() {
     let no_right = value_cols(false, true);
 
     // Suppressing the left chevron removes ink from the left end only.
-    assert!(
-        no_left.first() > both.first(),
-        "the left chevron should be gone"
-    );
+    assert!(no_left.first() > both.first(), "the left chevron should be gone");
     assert_eq!(no_left.last(), both.last(), "the right chevron stays");
     assert_eq!(no_right.first(), both.first(), "the left chevron stays");
-    assert!(
-        no_right.last() < both.last(),
-        "the right chevron should be gone"
-    );
+    assert!(no_right.last() < both.last(), "the right chevron should be gone");
 
     // And the value itself has not moved: its columns are a subset of the
     // both-chevrons render in every case.
@@ -874,11 +839,7 @@ fn ethernet_cards_hold_their_geometry() {
             tx: "12 MB".into(),
             method: "DHCP Client".into(),
         },
-        EthLink {
-            name: "ETH1".into(),
-            connected: false,
-            ..Default::default()
-        },
+        EthLink { name: "ETH1".into(), connected: false, ..Default::default() },
         EthLink {
             name: "USB ETH".into(),
             connected: true,
@@ -908,4 +869,3 @@ fn ethernet_cards_hold_their_geometry() {
         support::assert_golden(name, &surface);
     }
 }
-

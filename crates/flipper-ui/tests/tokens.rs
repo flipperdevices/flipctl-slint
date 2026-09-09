@@ -24,10 +24,7 @@ fn every_colour_is_a_pure_grey() {
 fn colours_round_trip_through_xrgb8888() {
     for (name, hex, r, g, b) in theme::ALL_COLORS {
         let grey = Gray8::from_rgb(r, g, b);
-        assert_eq!(
-            grey.0, r,
-            "token `{name}` = {hex} does not survive the luma conversion"
-        );
+        assert_eq!(grey.0, r, "token `{name}` = {hex} does not survive the luma conversion");
 
         let word = grey.to_xrgb8888();
         let back = Gray8::from_rgb(
@@ -55,10 +52,7 @@ fn metrics_are_sane_pixel_counts() {
         // limited to those. ResponsiveFrame generates its corners for any radius,
         // and the boot menu's popup is the one shape that uses it, at 5.
         let allowed: &[i32] = if name == "popup" { &[5] } else { &[0, 2, 3, 4] };
-        assert!(
-            allowed.contains(&value),
-            "radius `{name}` = {value}, expected one of {allowed:?}"
-        );
+        assert!(allowed.contains(&value), "radius `{name}` = {value}, expected one of {allowed:?}");
     }
     for (name, value) in theme::ALL_TIMING {
         assert!(value > 0, "timing `{name}` = {value} must be positive");
@@ -152,11 +146,7 @@ fn the_button_bar_has_one_slot_per_soft_key() {
     // The approved geometry tiles evenly and fills the panel exactly, which is
     // what lets every button carry the same outline instead of the outer two
     // dropping their outer edge.
-    assert_eq!(
-        [0, 1, 2, 3, 4].map(soft_slot_x),
-        [0, 52, 104, 156, 208],
-        "slot left edges"
-    );
+    assert_eq!([0, 1, 2, 3, 4].map(soft_slot_x), [0, 52, 104, 156, 208], "slot left edges");
     assert_eq!(
         soft_row_width(),
         i32::from(flipper_ui::PANEL_W),
@@ -169,7 +159,6 @@ fn the_button_bar_has_one_slot_per_soft_key() {
         i32::from(flipper_ui::PANEL_W),
         "the last slot must land flush with the right edge"
     );
-
 }
 
 /// The bottom strip is 17px, so the content area ends at y126 and the list has to

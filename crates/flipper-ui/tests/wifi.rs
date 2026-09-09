@@ -203,19 +203,12 @@ fn the_wifi_screens_hold_their_geometry() {
     // ── The saved profiles ─────────────────────────────────────────────────
     let saved: Vec<Saved> = ["Flipper Lab", "Office WiFi", "Home"]
         .into_iter()
-        .map(|name| Saved {
-            name: name.into(),
-            ssid: name.into(),
-            ..Saved::default()
-        })
+        .map(|name| Saved { name: name.into(), ssid: name.into(), ..Saved::default() })
         .collect();
     let names = wifi::saved_names(&saved);
     let layout = wifi::saved_layout(&names);
     let needs_scroll = wifi::saved_content_h(names.len() as i32) > layout.inner_h;
-    screen.set_wifi_net_rows(net_rows(&wifi::saved_rows(
-        &names,
-        layout.row_w(needs_scroll),
-    )));
+    screen.set_wifi_net_rows(net_rows(&wifi::saved_rows(&names, layout.row_w(needs_scroll))));
     screen.set_wifi_modal_tab(wifi::SAVED_TAB.into());
     screen.set_wifi_modal_signal(false);
     screen.set_wifi_modal_chevron(true);
@@ -291,11 +284,8 @@ fn wifi_frames_use_only_design_tokens() {
             + f32::from(over) * (1.0 - theme::alpha::OVERLAY))
             .round() as u8
     };
-    let allowed: Vec<u8> = tokens
-        .iter()
-        .copied()
-        .chain(tokens.iter().copied().map(dimmed))
-        .collect();
+    let allowed: Vec<u8> =
+        tokens.iter().copied().chain(tokens.iter().copied().map(dimmed)).collect();
 
     let window = FlipperSlintPlatform::install();
     let screen = Root::new().expect("create Root");
@@ -354,18 +344,14 @@ fn wifi_frames_use_only_design_tokens() {
         // The status bar's own clusters, and the signal sprite on each list row.
         let mut sprite_boxes: Vec<(i32, i32, i32, i32)> = vec![
             (0, 0, 48, theme::metric::STATUS_BAR_H),
-            (
-                i32::from(theme::PANEL_W) - 20,
-                0,
-                20,
-                theme::metric::STATUS_BAR_H,
-            ),
+            (i32::from(theme::PANEL_W) - 20, 0, 20, theme::metric::STATUS_BAR_H),
         ];
         if overlay == 1 {
             let row_w = list.row_w(needs_scroll);
             for i in 0..list.visible {
                 sprite_boxes.push((
-                    list.frame_x + theme::metric::WIFI_INNER_PAD + row_w - 7
+                    list.frame_x + theme::metric::WIFI_INNER_PAD + row_w
+                        - 7
                         - theme::metric::WIFI_ROW_PAD_R,
                     list.inner_top + i * theme::metric::WIFI_ROW_PITCH,
                     7,

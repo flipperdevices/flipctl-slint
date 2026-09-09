@@ -114,7 +114,8 @@ pub struct Picker {
 /// How tall a picker of `n` options is.
 pub fn picker_h(n: usize) -> i32 {
     let n = n as i32;
-    metric::DROP_PICK_ITEM_H * n + metric::DROP_PICK_GAP * (n - 1).max(0)
+    metric::DROP_PICK_ITEM_H * n
+        + metric::DROP_PICK_GAP * (n - 1).max(0)
         + metric::DROP_PICK_PAD * 2
 }
 
@@ -201,7 +202,10 @@ mod tests {
             picked.value,
             plain.value
         );
-        let room = metric::DROP_CHIP_W - metric::DROP_CHIP_INSET - tw("<") - tw(">")
+        let room = metric::DROP_CHIP_W
+            - metric::DROP_CHIP_INSET
+            - tw("<")
+            - tw(">")
             - metric::DROP_ARROW_PAD * 2;
         assert!(tw(&picked.value) <= room);
     }
@@ -282,7 +286,8 @@ mod tests {
 
     #[test]
     fn an_option_too_long_for_the_picker_is_cut_the_way_a_value_is() {
-        let picker = picker(30, "Station", &opts(&["Radio Nacional de Espana Clasica FM 105.5 Madrid"]), 0);
+        let picker =
+            picker(30, "Station", &opts(&["Radio Nacional de Espana Clasica FM 105.5 Madrid"]), 0);
         assert!(picker.items[0].text.ends_with(".."));
         assert!(tw(&picker.items[0].text) <= metric::DROP_CHIP_W - metric::DROP_CHIP_INSET);
         assert!(picker.items[0].text_x >= 0);

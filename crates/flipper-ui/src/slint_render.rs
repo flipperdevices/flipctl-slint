@@ -64,10 +64,7 @@ impl FlipperSlintPlatform {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         window.set_size(PhysicalSize::new(u32::from(PANEL_W), u32::from(PANEL_H)));
 
-        let platform = Self {
-            window: window.clone(),
-            start: std::time::Instant::now(),
-        };
+        let platform = Self { window: window.clone(), start: std::time::Instant::now() };
         slint::platform::set_platform(Box::new(platform)).expect("set_platform called twice");
         window
     }

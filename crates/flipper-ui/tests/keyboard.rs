@@ -196,10 +196,7 @@ fn leaving_asks_only_when_there_is_something_to_lose() {
 fn short_text_is_not_truncated() {
     let fitted = keyboard::fit_input("abc", 3, 138);
     assert_eq!(fitted.visible, "abc");
-    assert_eq!(
-        fitted.cursor_dx,
-        i32::from(flipper_ui::font::TITLE.text_width("abc")) + 1
-    );
+    assert_eq!(fitted.cursor_dx, i32::from(flipper_ui::font::TITLE.text_width("abc")) + 1);
 }
 
 /// Text too long for the field is windowed around the caret, and each truncated
@@ -355,11 +352,7 @@ fn a_row_ticks_at_half_a_step_the_way_the_prototype_rounds_it() {
         input.touch(MID);
         let start = input.row as i32;
         drag(&mut input, 0, raw);
-        assert_eq!(
-            input.row as i32 - start,
-            want,
-            "{raw} raw units of Y should be {want} rows"
-        );
+        assert_eq!(input.row as i32 - start, want, "{raw} raw units of Y should be {want} rows");
     }
 }
 
