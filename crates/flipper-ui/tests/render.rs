@@ -33,6 +33,7 @@ fn item(label: &str, status: &str, icon: i32, frames: i32) -> ListItem {
         value: value.as_str().into(),
         at_start: false,
         at_end: false,
+        dim: false,
     }
 }
 

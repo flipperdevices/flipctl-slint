@@ -43,8 +43,12 @@ pub struct AppEntry {
     /// Where the manifest and the icon are: the bundle's cache directory, which is
     /// also what names its working directory.
     pub dir: PathBuf,
-    /// The `.AppImage` this was read from.
+    /// The file this was read from: an `.AppImage`, or a script.
     pub bundle: PathBuf,
+    /// What the app is filed under: its path below the Apps folder with the
+    /// separators turned into dashes and the extension dropped. Two apps of one name
+    /// in two folders keep their own cache and their own working directory.
+    pub key: String,
     /// The folders this app sits in under `Apps`, outermost first, empty at the
     /// top level. Apps are grouped by where they live rather than by a category in
     /// the manifest: the folder is already the answer, and two apps cannot
@@ -99,6 +103,10 @@ pub struct AppEntry {
     pub runtime: String,
     /// The runtime this bundle provides. Only a launcher says anything here.
     pub provides: String,
+    /// How a comment starts in the language this launcher runs, for a language whose
+    /// scripts flipctl could not otherwise find the manifest in. Only needed for a
+    /// marker outside the handful tried by default.
+    pub comment: String,
 }
 
 impl AppEntry {
@@ -121,12 +129,21 @@ impl AppEntry {
 
     /// A writable directory of the app's own, which is where it runs.
     ///
-    /// The bundle itself is a read-only image, so a program that writes a config
-    /// beside itself needs somewhere else, and this is the same place every launch.
-    /// Named after the cache directory so the two say the same thing about one file.
+    /// A bundle is a read-only image and a script's folder is the user's, so a
+    /// program that writes beside itself needs somewhere else, and this is the same
+    /// place every launch.
     pub fn work_dir(&self) -> PathBuf {
-        let key = self.dir.file_name().map(PathBuf::from).unwrap_or_default();
-        xdg_home("XDG_DATA_HOME", ".local/share").join("flipctl/apps").join(key)
+        xdg_home("XDG_DATA_HOME", ".local/share").join("flipctl/apps").join(&self.key)
+    }
+
+    /// The short word the list shows beside the name of an app that is run through
+    /// something, and nothing for a bundle, which is the panel's own format.
+    ///
+    /// It is the runtime itself, which for a script is its extension: `py` beside a
+    /// Python one, `js` beside a JavaScript one, and the same word the message names
+    /// when nothing provides it.
+    pub fn tag(&self) -> &str {
+        &self.runtime
     }
 
     pub fn icon_path(&self) -> Option<PathBuf> {
@@ -263,6 +280,7 @@ pub fn parse_manifest(
     group: &[String],
     dir: PathBuf,
     bundle: PathBuf,
+    key: String,
 ) -> Option<AppEntry> {
     let wayland = py_string(src, "wayland").unwrap_or_default();
     if wayland.is_empty() {
@@ -284,9 +302,11 @@ pub fn parse_manifest(
         env: py_list(src, "env"),
         runtime: py_string(src, "runtime").unwrap_or_default(),
         provides: py_string(src, "provides").unwrap_or_default(),
+        comment: py_string(src, "comment").unwrap_or_default(),
         group: group.to_vec(),
         dir,
         bundle,
+        key,
     })
 }
 
@@ -544,6 +564,19 @@ mod tests {
         assert!(ancestors(1).is_empty());
     }
 
+    /// The row says what runs a script, and says nothing for a bundle: that is the
+    /// panel's own format and needs no label.
+    #[test]
+    fn only_an_app_run_through_something_is_tagged() {
+        let script = AppEntry { runtime: "py".into(), ..Default::default() };
+        assert_eq!(script.tag(), "py");
+        let native = AppEntry {
+            bundle: PathBuf::from("/home/user/Apps/radio-flipctl-aarch64.AppImage"),
+            ..Default::default()
+        };
+        assert_eq!(native.tag(), "");
+    }
+
     /// A launcher is found by what it provides, and its absence is a sentence.
     #[test]
     fn a_runtime_names_its_launcher_or_its_absence() {
@@ -566,6 +599,7 @@ mod tests {
     fn the_launch_line_quotes_the_bundle() {
         let app = AppEntry {
             bundle: PathBuf::from("/home/user/Apps/My Radio.AppImage"),
+            key: "My Radio".into(),
             ..Default::default()
         };
         assert_eq!(app.launch_line(None), "'/home/user/Apps/My Radio.AppImage'");
@@ -581,5 +615,6 @@ mod tests {
         assert_eq!(program, Path::new("/bin/sh"));
         assert_eq!(args[0], Path::new("-c"));
         assert_eq!(args[1], Path::new("'/home/user/Apps/My Radio.AppImage'"));
+        assert!(app.work_dir().ends_with("flipctl/apps/My Radio"));
     }
 }

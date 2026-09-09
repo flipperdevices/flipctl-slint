@@ -54,19 +54,22 @@ one to remember: trixie main has no LLVM 21 and rustc needs it. rustup works too
 and takes precedence when present, since `app::cargo()` looks in `$HOME/.cargo/bin`
 first.
 
-## Apps are AppImages, read without being run
+## Apps are files in ~/Apps, read without being run
 
-An app is one file in `/home/user/Apps`, and `bundle.rs` reads its `app.toml` and icon
-straight out of the squashfs with `backhand`. Three things there are easy to undo by
-accident:
+An app is one file in `/home/user/Apps`: an AppImage, whose `app.toml` and icon
+`bundle.rs` reads straight out of the squashfs with `backhand`, or a script, whose
+manifest `script.rs` lifts out of a `# /// flipctl` block in its head. Three things
+there are easy to undo by accident:
 
-- **Never execute a bundle to learn what it is.** The folder is where a person drops
+- **Never execute either kind to learn what it is.** The folder is where a person drops
   anything, and the scan runs in a unit with GPIO and USB open. `--appimage-extract`
-  would be the easy way and is the wrong one.
+  would be the easy way and is the wrong one; so would running a script for its
+  `__doc__`.
 - **The stamp is size plus mtime to the nanosecond.** squashfs pads to 4K, so two
   bundles of one app differ in content and not in size; seconds were not enough.
-- **`app.toml` at the root is the marker, and `wayland` non-empty is the rule.** A
-  stock AppImage has neither and is skipped once, with a stamp so it is not reopened.
+- **The manifest is the marker, and `wayland` non-empty is the rule.** A stock
+  AppImage and a plain script have neither and are skipped once: a bundle by the stamp
+  beside its cache, a script by a set the process keeps, since it caches nothing.
 
 `tools/appimage/build.sh` makes the bundles on the host, and nothing aarch64 runs
 there: cargo cross in `flipctl-cross`, staging in `flipctl-bundle`, appimagetool's

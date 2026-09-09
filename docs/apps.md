@@ -8,21 +8,27 @@ it draws with flipctl's own widgets.
 
 ## Where an app lives
 
-An app is delivered as one file, an AppImage, in the user's `Apps` folder:
+An app is delivered as one file in the user's `Apps` folder, either an AppImage or a
+script:
 
-    /home/user/Apps/radio-aarch64.AppImage       Internet radio, at the top of the list
-    /home/user/Apps/Network/nmap-aarch64.AppImage inside the Network folder
+    /home/user/Apps/radio-flipctl-aarch64.AppImage       Internet radio, at the top of the list
+    /home/user/Apps/stations.py                  a script, run through its runtime
+    /home/user/Apps/Network/nmap-flipctl-aarch64.AppImage inside the Network folder
 
 `/home` is the one subvolume every profile shares, so the folder survives a factory
 reset and serves every profile. A folder is a group: the Apps list shows how many
 apps are inside, Ok walks into it, Back comes back out, and the list opens at the top
 each time. Nothing is installed to run an app; the file is the whole of it.
 
-What makes a file ours is `app.toml` at the root of its squashfs. A stock AppImage
-dropped into the folder has none: it is not listed, and the log says so once
-(`bundles        Foo: not a flipctl app, skipped`). flipctl reads the manifest and the
-icon out of the image without running it, keeps them under
-`~/.cache/flipctl/bundles/<key>/`, and does not open an unchanged file again.
+What makes a file ours is a manifest: `app.toml` at the root of a bundle's squashfs,
+or a `# /// flipctl` block in a script's head. A file with neither is not listed, and
+the log says so once (`bundles        Foo: not a flipctl app, skipped`). flipctl reads
+the manifest and the icon out of a bundle without running it, keeps them under
+`~/.cache/flipctl/bundles/<key>/`, and does not open an unchanged file again; a script
+is read as text every scan, which costs one `read` of its first 8KB.
+
+Neither kind is ever executed to find out what it is. The folder is where a person
+drops anything, and the scan runs in a unit that can reach the GPIO and the USB bus.
 
 ## The manifest
 
@@ -39,8 +45,38 @@ icon out of the image without running it, keeps them under
 | `status` | flipctl paints its own status strip over the app's frame, for a program that cannot draw one. An app on the framework draws the real bar itself and leaves this off. |
 | `rotate` | `"left"` or `"right"` for a portrait app. |
 | `env` | Extra environment, one `"KEY=value"` per entry. Applied last, so it overrides what the launch sets. |
-| `runtime` | Reserved: the runtime this app is run through, e.g. `"python"`. A bundle declaring the same word in `provides` is the launcher; none exists yet, and an app asking for one is refused with a sentence naming it. |
-| `provides` | Reserved: what a launcher bundle provides. |
+| `runtime` | The runtime this app is run through, e.g. `"python"`. A bundle declaring the same word in `provides` is the launcher that runs it. A script defaults to the runtime its extension implies. An app whose runtime nothing provides is listed and refused with a sentence naming it. |
+| `provides` | The runtime word a launcher bundle answers to, e.g. `"py"`. `apps/python-runtime` is the worked example. |
+
+## A script is an app
+
+A `.py` in the folder carries its manifest in its own head, in the block shape PEP 723
+defines, beside PEP 723's own block naming what it needs installed:
+
+    #!/usr/bin/env python3
+    # /// script
+    # dependencies = ["httpx"]
+    # ///
+    # /// flipctl
+    # name = "Stations"
+    # icon = "stations.png"
+    # audio = true
+    # ///
+    import flipctl
+
+Every manifest field means what it means for a bundle. Two are filled in when the
+block leaves them out: `runtime`, from the extension, and `wayland`, from the file's
+own name, because a script names no command of its own. An icon is a PNG beside it.
+
+`apps/ping.py` is the worked example, and it is the whole app: a file in the tree
+beside the bundle directories, pushed to `~/Apps` as it stands by `--apps`, with
+nothing to build. It draws with the panel's own widgets through the `flipctl` package
+its runtime carries.
+
+What actually starts it is the launcher bundle whose `provides` matches its `runtime`,
+with the script as its argument, in a working directory of the script's own under
+`~/.local/share/flipctl/apps/<key>/`. With no such launcher installed the script is
+still listed, and starting it says which runtime is missing.
 
 ## How a bundle runs
 
@@ -55,7 +91,7 @@ instead, slower and said in the log.
 
 Started anywhere else, `AppRun` finds `FLIPCTL_HOSTED` unset and hands the file over:
 
-    flipctl open /home/user/Apps/radio-aarch64.AppImage
+    flipctl open /home/user/Apps/radio-flipctl-aarch64.AppImage
 
 connects to the running flipctl's socket at `$XDG_RUNTIME_DIR/flipctl.sock`, one line
 each way, and flipctl lists the bundle if it is new, starts it, or brings it to the
@@ -69,9 +105,9 @@ USB serial are open to it (`systemd/README.md` lists what the image ships for th
 
 ## Bundling
 
-    tools/appimage/build.sh apps/radio        target/appimage/radio-aarch64.AppImage
+    tools/appimage/build.sh apps/radio        target/appimage/radio-flipctl-aarch64.AppImage
     tools/appimage/build.sh --all
-    tools/appimage/build.sh --check target/appimage/radio-aarch64.AppImage
+    tools/appimage/build.sh --check target/appimage/radio-flipctl-aarch64.AppImage
     ./build_deploy.sh --cross --panel --apps  push what was built to ~/Apps
 
 The build runs on the x86_64 host and nothing aarch64 executes there: the program is

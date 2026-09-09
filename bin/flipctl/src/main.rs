@@ -250,6 +250,7 @@ mod demo {
                     value: value.as_str().into(),
                     at_start: false,
                     at_end: false,
+                    dim: false,
                 }
             })
             .collect();
@@ -1600,7 +1601,8 @@ fn start_hosted(
         eprintln!("app            front is {} (already running)", entry.name);
         return Some(entry.name.clone());
     }
-    // An app run through a runtime needs the bundle that provides it.
+    // The runtime's bundle, which begin_app! has already insisted on: this is the
+    // launch, so a list that changed since then is the only way it can be missing.
     let via = match flipper_ui::app::launcher_for(apps, entry) {
         Ok(via) => via,
         Err(e) => {
@@ -2044,9 +2046,12 @@ fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow]) -> Vec<AppLabel> {
             AppRow::Folder(name, count) => {
                 AppLabel { label: name.clone(), status: count.to_string(), icon: None }
             }
+            // An app that is run through something says so, in the dim tone the
+            // status column already uses: a script is not the same kind of thing as a
+            // program, and the row is where that belongs.
             AppRow::App(at) => AppLabel {
                 label: apps.get(*at).map_or_else(String::new, |a| a.name.clone()),
-                status: String::new(),
+                status: apps.get(*at).map_or_else(String::new, |a| a.tag().to_string()),
                 icon: apps.get(*at).and_then(|a| a.icon_path()),
             },
         })
@@ -2093,6 +2098,16 @@ fn load_icon(path: &std::path::Path) -> Option<(slint::Image, i32)> {
     Some((slint::Image::from_rgba8(buffer), frames as i32))
 }
 
+/// Where the Apps list says you are: the folders walked into, and nothing at the top.
+///
+/// The same rule the menus follow. The main menu draws no trail because arriving
+/// somewhere you chose from the only screen above it needs no explaining, and the
+/// Apps list is that screen for its folders: empty at the top, a trail inside one.
+#[cfg(feature = "slint")]
+fn app_trail(path: &[String]) -> String {
+    path.iter().map(|folder| format!("> {folder}")).collect::<Vec<_>>().join(" ")
+}
+
 /// Show the list of apps on the shared list body.
 #[cfg(feature = "slint")]
 fn apply_app_list(
@@ -2120,6 +2135,8 @@ fn apply_app_list(
                 value: Default::default(),
                 at_start: false,
                 at_end: false,
+                // The runtime is a label about the app, not a value of it.
+                dim: true,
             }
         })
         .collect();
@@ -2814,7 +2831,21 @@ fn panel(
     macro_rules! begin_app {
         ($at:expr) => {{
             let at: i32 = $at;
-            if let Some(entry) = apps.get(at as usize).cloned() {
+            // The runtime an app is run through has to be there before anything else
+            // happens: checked here rather than at the launch, so the answer is a
+            // question on the panel and not a key that does nothing. Said the way the
+            // unported rows say it, since it is the same kind of answer.
+            let refused = apps.get(at as usize).and_then(|entry| {
+                flipper_ui::app::launcher_for(&apps, entry)
+                    .err()
+                    .map(|why| (entry.name.clone(), why))
+            });
+            if let Some((name, why)) = refused {
+                eprintln!("app            {name} {why}");
+                let mut lines = vec![name];
+                lines.extend(dialog_wrap(&why.split(' ').map(str::to_string).collect::<Vec<_>>()));
+                dialog = Some(Dialog { lines, left: "Back", right: "", act: DialogAct::None });
+            } else if let Some(entry) = apps.get(at as usize).cloned() {
                 let (tx, rx) = std::sync::mpsc::channel();
                 let for_check = entry.clone();
                 std::thread::Builder::new()
@@ -2833,6 +2864,7 @@ fn panel(
                 deps_log.clear();
                 deps_offset = 0;
             }
+            deps.is_some()
         }};
     }
 
@@ -3194,7 +3226,7 @@ fn panel(
                         apps.push(entry);
                         apps.len() - 1
                     }
-                    Err(flipper_ui::bundle::Skip::Stock) => {
+                    Err(flipper_ui::bundle::Skip::NotOurs) => {
                         req.err("not a flipctl app");
                         continue;
                     }
@@ -3245,11 +3277,15 @@ fn panel(
                 app_selected,
                 &EMPTY_BUTTONS,
                 app_scroll,
+                &app_path,
             );
             screen.set_screen(Screen::Apps);
             eprintln!("app            {name} opened from a desktop");
-            begin_app!(at as i32);
-            req.ok(&format!("starting {name}"));
+            if begin_app!(at as i32) {
+                req.ok(&format!("starting {name}"));
+            } else {
+                req.err(&format!("{name} cannot start; the panel says why"));
+            }
         }
 
         #[cfg(feature = "remote")]
@@ -4778,7 +4814,7 @@ fn panel(
                         eprintln!("app            back to the install log");
                         continue;
                     }
-                    begin_app!(at);
+                    let _ = begin_app!(at);
                 } else if key == FlipperKey::View && screen.get_screen() == Screen::Idle {
                     screen.set_screen(Screen::Menu);
                     eprintln!("screen         menu");
@@ -4979,16 +5015,13 @@ fn panel(
             }
         }
 
-        // Only while the deck is open, and only the card being looked at. A card
-        // nobody can see is not worth a capture, and the first refresh lands within a
-        // tenth of a second of it opening, so there is nothing to be gained by
-        // photographing apps into a drawer.
+        // Only while the deck is open, and every card it is showing: the neighbours
+        // are on screen as strips beside the focused one, and a strip of a picture
+        // that stopped moving is exactly what a dead tile looks like. An app with no
+        // card in the deck is not photographed into a drawer.
         #[cfg(feature = "wayland")]
         if switcher.is_some() && carded.elapsed() >= card_watched {
             carded = Instant::now();
-            // Every card the deck is showing, not just the focused one: the
-            // neighbours are on screen as strips beside it, and a strip of a picture
-            // that stopped moving is exactly what a dead tile looks like.
             let shown: Vec<String> = switcher
                 .as_ref()
                 .map(|sw| sw.shown().into_iter().map(str::to_string).collect())

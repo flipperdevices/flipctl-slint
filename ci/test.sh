@@ -23,8 +23,9 @@ echo "== the terminal front end (needs the tui feature) =="
 # way the drawing gets looked at off the device, so it must not break silently.
 cargo test --quiet -p flipper-ui --features tui --examples
 
-echo "== app bundles (needs the bundle feature) =="
+echo "== app bundles and scripts (needs the bundle feature) =="
 cargo test --quiet -p flipper-ui --features bundle --test app
+cargo test --quiet -p flipper-ui --features bundle --lib script::
 
 echo "== the app bundler =="
 if command -v python3 >/dev/null 2>&1; then

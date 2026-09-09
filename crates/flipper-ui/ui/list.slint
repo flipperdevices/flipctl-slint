@@ -23,6 +23,11 @@ export struct ListItem {
     // decides this by matching the status string; here Rust has already parsed it,
     // because Slint has no string predicates to match with.
     chevrons: int,
+    // Whether the status is a label about the row rather than a value of it: the
+    // language an app is written in reads as an aside wherever the cursor is, so it
+    // stays in the dim tone when the row is selected. A value does not: it is what
+    // the row is about, and follows the row's own ink.
+    dim: bool,
     // The text between the chevrons when `chevrons` is non-zero.
     value: string,
     // Suppress a chevron because the value is at that end of its range. The value
@@ -163,9 +168,12 @@ component MenuLine inherits Rectangle {
     in property <string> value;
     in property <bool> at_start;
     in property <bool> at_end;
+    in property <bool> dim;
+    // Pressed is the one state that overrides it: the row is filled with ink, and
+    // grey on black is not a quieter label, it is an unreadable one.
     property <color> status_color: root.pressed
         ? FlipperTheme.white
-        : (root.selected ? FlipperTheme.black : FlipperTheme.status_dim);
+        : (root.selected && !root.dim ? FlipperTheme.black : FlipperTheme.status_dim);
 
     property <bool> active: root.selected || root.pressed;
     property <color> content: root.pressed ? FlipperTheme.white : FlipperTheme.black;
@@ -368,6 +376,7 @@ export component MenuBody inherits Rectangle {
             value: item.value;
             at_start: item.at_start;
             at_end: item.at_end;
+            dim: item.dim;
             arrow_pressed: i == root.selected ? root.arrow_pressed : 0;
         }
 
