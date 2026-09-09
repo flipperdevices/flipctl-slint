@@ -337,9 +337,18 @@ pub struct Switcher {
 }
 
 impl Switcher {
-    /// The card the deck is showing, which is the only one worth photographing.
+    /// The card under the cursor, which is the one a key acts on.
     pub fn focused_name(&self) -> Option<&str> {
         self.cards.get(self.focused).map(|c| c.name.as_str())
+    }
+
+    /// Every card the deck is drawing, focused or not.
+    ///
+    /// The neighbours are on screen as strips beside the focused card, so they are
+    /// worth photographing too: a strip of a picture that stopped moving is what a
+    /// dead tile looks like.
+    pub fn shown(&self) -> Vec<&str> {
+        self.cards.iter().filter(|c| !c.hidden).map(|c| c.name.as_str()).collect()
     }
 
     /// Copy the newest pictures onto the cards of a deck that is already open.

@@ -948,6 +948,16 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
         // The GPU path takes whatever the compositor has, so a still app costs a frame
         // rather than a wait. Damage-waiting stays on the CPU path, which is the one
         // that cannot afford a frame it does not need.
+        //
+        // How long a copy is worth waiting for depends on who asked. The compositor
+        // fulfils one when the output next renders, and an output renders when its app
+        // draws: the app in front is drawing constantly and a stall there costs a frame
+        // at 63Hz, but a card belongs to an app in the background that redraws when it
+        // feels like it. Waiting the front rate for that is how the deck came to show
+        // one new picture in eleven seconds: the request was abandoned and the frame
+        // that arrived a moment later was collected by nobody.
+        let deadline =
+            if streaming { Duration::from_millis(120) } else { Duration::from_millis(1200) };
         let mut next = vec![0u8; usize::from(crate::PANEL_W) * usize::from(crate::PANEL_H)];
         #[cfg(feature = "gpu")]
         let taken = match gpu.as_mut() {
@@ -955,12 +965,11 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
                 // Collect the copy that was asked for last time round, then ask for the
                 // next one straight away, so the compositor's copy overlaps the
                 // conversion and the panel commit rather than following them.
-                let ready =
-                    grab.collect_copy(converter, slot, Duration::from_millis(120), &mut next);
+                let ready = grab.collect_copy(converter, slot, deadline, &mut next);
                 let outcome = match ready {
                     Ok(got) => {
                         slot = 1 - slot;
-                        match grab.request_copy(converter, slot, Duration::from_millis(120)) {
+                        match grab.request_copy(converter, slot, deadline) {
                             Ok(_) => Ok(got),
                             Err(e) => Err(e),
                         }
@@ -974,23 +983,23 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
                         // and the CPU path shows the app meanwhile.
                         eprintln!("wl: GPU capture unusable ({e}), reading on the CPU");
                         gpu = None;
-                        grab.frame(Duration::from_millis(120), &mut next)
+                        grab.frame(deadline, &mut next)
                     }
                 }
             }
             None => {
                 if once && !streaming {
-                    grab.frame_now(Duration::from_millis(120), &mut next)
+                    grab.frame_now(deadline, &mut next)
                 } else {
-                    grab.frame(Duration::from_millis(120), &mut next)
+                    grab.frame(deadline, &mut next)
                 }
             }
         };
         #[cfg(not(feature = "gpu"))]
         let taken = if once && !streaming {
-            grab.frame_now(Duration::from_millis(120), &mut next)
+            grab.frame_now(deadline, &mut next)
         } else {
-            grab.frame(Duration::from_millis(120), &mut next)
+            grab.frame(deadline, &mut next)
         };
         match taken {
             Ok(true) => {

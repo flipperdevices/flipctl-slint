@@ -3005,7 +3005,11 @@ fn panel(
         // deck, or nothing. One IPC call per change, and none when nothing changed.
         #[cfg(feature = "wayland")]
         if let Some(host) = host.as_mut() {
-            let watched = switcher.as_ref().and_then(|sw| sw.focused_name()).map(str::to_string);
+            // Every app the deck is showing, since every one of them is on screen.
+            let watched: Vec<String> = switcher
+                .as_ref()
+                .map(|sw| sw.shown().into_iter().map(str::to_string).collect())
+                .unwrap_or_default();
             for app in wl_apps.iter() {
                 let want = if wl_front.as_deref() == Some(app.name.as_str()) {
                     // An app in front that has drawn the same picture for a while is
@@ -3017,7 +3021,7 @@ fn panel(
                     } else {
                         flipper_ui::sway::Attention::Front
                     }
-                } else if watched.as_deref() == Some(app.name.as_str()) {
+                } else if watched.iter().any(|name| name == &app.name) {
                     flipper_ui::sway::Attention::Card
                 } else {
                     flipper_ui::sway::Attention::Idle
@@ -4620,8 +4624,14 @@ fn panel(
         #[cfg(feature = "wayland")]
         if switcher.is_some() && carded.elapsed() >= card_watched {
             carded = Instant::now();
-            let looked_at = switcher.as_ref().and_then(|sw| sw.focused_name()).map(str::to_string);
-            if let Some(name) = looked_at {
+            // Every card the deck is showing, not just the focused one: the
+            // neighbours are on screen as strips beside it, and a strip of a picture
+            // that stopped moving is exactly what a dead tile looks like.
+            let shown: Vec<String> = switcher
+                .as_ref()
+                .map(|sw| sw.shown().into_iter().map(str::to_string).collect())
+                .unwrap_or_default();
+            for name in shown {
                 if let Some(app) = wl_apps.iter_mut().find(|a| a.name == name) {
                     let took = Instant::now();
                     // Whatever the reader has fetched since last time, then ask for the
