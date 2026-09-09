@@ -5247,7 +5247,7 @@ fn panel(
                 apply_idle(&screen, &idle);
             }
         }
-        if link_poll.elapsed() >= Duration::from_secs(30) {
+        if link_poll.elapsed() >= Duration::from_secs(3) {
             link_poll = Instant::now();
             if idle.refresh_links() {
                 apply_idle(&screen, &idle);

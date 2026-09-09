@@ -308,9 +308,15 @@ impl Idle {
         before != (self.battery_temp, self.cpu_temp, self.power_mw)
     }
 
-    /// Interface addresses. Worth re-reading because a cable or a DHCP renewal
-    /// changes them, but far less often than the sensors: this walks
-    /// /sys/class/net, parses /proc/net/if_inet6 and calls getifaddrs.
+    /// Interface addresses, every few seconds: a cable or a DHCP renewal changes
+    /// them and the panel showing a stale address is worse than the reading is
+    /// expensive. Measured at a few hundred microseconds on the device, which is
+    /// under a tenth of a percent of a core at this cadence, and it repaints only
+    /// when the set actually differs.
+    ///
+    /// One /sys/class/net walk, one `carrier` read per port, one getifaddrs and one
+    /// /proc/net/if_inet6 parse. The kernel could say all of this over rtnetlink
+    /// instead, which `route_watch.rs` already has the socket for.
     pub fn refresh_links(&mut self) -> bool {
         let fresh = links();
         let changed = fresh != self.links;
@@ -457,6 +463,10 @@ fn booted_profile() -> String {
 fn links() -> Vec<Link> {
     let mut out: Vec<Link> = Vec::new();
     let v6 = ipv6_by_interface();
+    // Once for the whole refresh. getifaddrs allocates and returns every address on
+    // the machine, so asking it per interface walked that list four times over to
+    // answer four questions it had already answered.
+    let v4_all = ipv4_by_interface();
     // The same interfaces the Ethernet page lists, plus wireless: hardware with a
     // live link. A machine's bridges, veths and VPN tunnels are not its network, and
     // a port with no address of its own has nothing to say on a screen that exists to
@@ -466,10 +476,9 @@ fn links() -> Vec<Link> {
         if read(dir.join("carrier")).as_deref() != Some("1") {
             continue;
         }
-        let v4 = ipv4_all(&name);
-        if v4.is_empty() {
+        let Some(v4) = v4_all.get(&name).filter(|found| !found.is_empty()) else {
             continue;
-        }
+        };
         // Labelled from the port's own name, by the same function the Ethernet page
         // uses, so the two screens agree about which port is which: end0 is ETH0 on
         // both and the gadget is USB ETH on both. Numbering the rows here instead
@@ -495,9 +504,20 @@ fn links() -> Vec<Link> {
 /// Link-local and global IPv6 per interface, from procfs. The address arrives as
 /// 32 hex digits with no separators.
 fn ipv6_by_interface() -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
+    let mut map: std::collections::HashMap<String, String> = Default::default();
+    // The lowest address, not the first one procfs happens to list. An interface with
+    // more than one has no order promised to it, so taking the first made the row
+    // flip between two addresses from one read to the next; at a three-second
+    // cadence that would be a visible flicker rather than a curiosity. Lowest also
+    // puts a global address ahead of a link-local one, which is the useful way round.
     for (iface, addr) in ipv6_list() {
-        map.entry(iface).or_insert(addr);
+        map.entry(iface)
+            .and_modify(|held| {
+                if addr < *held {
+                    *held = addr.clone();
+                }
+            })
+            .or_insert(addr);
     }
     map
 }
@@ -534,14 +554,19 @@ pub fn ipv6_all(want: &str) -> Vec<String> {
 
 /// Every IPv4 address on one interface, via `getifaddrs`.
 pub fn ipv4_all(want: &str) -> Vec<String> {
+    ipv4_by_interface().remove(want).unwrap_or_default()
+}
+
+/// Every IPv4 address on the machine, by interface, from one `getifaddrs` walk.
+fn ipv4_by_interface() -> std::collections::HashMap<String, Vec<String>> {
     use std::ffi::CStr;
 
+    let mut found: std::collections::HashMap<String, Vec<String>> = Default::default();
     let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
     // SAFETY: getifaddrs allocates the list and we free it below on every path.
     if unsafe { libc::getifaddrs(&mut head) } != 0 {
-        return Vec::new();
+        return found;
     }
-    let mut found = Vec::new();
     let mut cur = head;
     while !cur.is_null() {
         // SAFETY: cur is non-null and getifaddrs guarantees the field layout.
@@ -551,14 +576,17 @@ pub fn ipv4_all(want: &str) -> Vec<String> {
             let name = unsafe { CStr::from_ptr(entry.ifa_name) }.to_string_lossy();
             // SAFETY: sa_family is the first field of every sockaddr variant.
             let family = unsafe { (*entry.ifa_addr).sa_family };
-            if name == want && i32::from(family) == libc::AF_INET {
+            if i32::from(family) == libc::AF_INET {
                 // SAFETY: family says this is a sockaddr_in.
                 let sin = unsafe { &*(entry.ifa_addr as *const libc::sockaddr_in) };
                 // s_addr already holds the address in network order, so read the
                 // bytes as they sit in memory. to_be_bytes() would reverse them on
                 // a little-endian host and turn 192.168.1.241 into 241.1.168.192.
                 let octets = sin.sin_addr.s_addr.to_ne_bytes();
-                found.push(format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3]));
+                found
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3]));
             }
         }
         cur = entry.ifa_next;
