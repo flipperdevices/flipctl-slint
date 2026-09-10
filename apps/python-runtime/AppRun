@@ -47,5 +47,12 @@ set +e
 env PYTHONPATH="$deps$carried${PYTHONPATH:+:$PYTHONPATH}" python3 "$script" "$@" 2> "$log"
 status=$?
 set -e
-[ "$status" -eq 0 ] || cat "$log" >&2
+# Kept only when the run actually failed. Slint warns on stderr about the renderer it
+# fell back to, and a warning left in the log makes the runtime screen report a last
+# error for a script that worked.
+if [ "$status" -eq 0 ]; then
+    : > "$log"
+else
+    cat "$log" >&2
+fi
 exit "$status"
