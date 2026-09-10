@@ -131,7 +131,9 @@ push_apps() {
     # as a tar so a folder here lands as the same folder there. flipctl groups the
     # Apps list by those folders, so the layout is the menu.
     local scripts
-    scripts=$(cd "$here/apps" && find . -name "*.py" -not -path "*/__pycache__/*" \
+    # Found the way flipctl finds them: the block in the head makes a file an app,
+    # whatever its extension, so a new language needs nothing here.
+    scripts=$(cd "$here/apps" && find . -type f -not -path "*/__pycache__/*" \
         | while IFS= read -r f; do
             # A bundle's own sources are not script apps, and its manifest can be any
             # number of directories above the file: python-runtime/flipctl/*.py is
@@ -140,7 +142,13 @@ push_apps() {
             while [ "$d" != "." ] && [ ! -e "$d/app.toml" ]; do d=$(dirname "$d"); done
             # An if, not a test-and-print: the last file found is usually an
             # excluded one, and under set -e a false status there ends the deploy.
-            if [ "$d" = "." ]; then printf '%s\n' "$f"; fi
+            # A folder may carry an icon.png for its own row, which has no block to
+            # find it by: named rather than sniffed, so nothing else in a folder is
+            # swept along.
+            if [ "$d" = "." ] && { [ "$(basename "$f")" = icon.png ] \
+                    || head -c 8192 "$f" | grep -q "/// flipctl"; }; then
+                printf '%s\n' "$f"
+            fi
         done)
     if [ -n "$scripts" ]; then
         found=yes

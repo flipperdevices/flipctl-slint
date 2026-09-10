@@ -2039,13 +2039,29 @@ struct AppLabel {
     icon: Option<std::path::PathBuf>,
 }
 
+/// A folder's own icon, which is a PNG called `icon.png` inside it.
+///
+/// The same shape a bundle's icon has, animated strip and all, so a folder says what
+/// it is the way an app does rather than by a rule written in here about its name.
 #[cfg(feature = "slint")]
-fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow]) -> Vec<AppLabel> {
+fn folder_icon(path: &[String], name: &str) -> Option<std::path::PathBuf> {
+    let mut dir = flipper_ui::bundle::root();
+    for step in path {
+        dir.push(step);
+    }
+    let icon = dir.join(name).join("icon.png");
+    icon.is_file().then_some(icon)
+}
+
+#[cfg(feature = "slint")]
+fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow], path: &[String]) -> Vec<AppLabel> {
     rows.iter()
         .map(|row| match row {
-            AppRow::Folder(name, count) => {
-                AppLabel { label: name.clone(), status: count.to_string(), icon: None }
-            }
+            AppRow::Folder(name, count) => AppLabel {
+                label: name.clone(),
+                status: count.to_string(),
+                icon: folder_icon(path, name),
+            },
             // An app that is run through something says so, in the dim tone the
             // status column already uses: a script is not the same kind of thing as a
             // program, and the row is where that belongs.
@@ -2056,6 +2072,39 @@ fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow]) -> Vec<AppLabel> {
             },
         })
         .collect()
+}
+
+/// The decoded icons, by the file they came from and when it was written.
+///
+/// A list is applied again on every key, and decoding six PNGs each time is work that
+/// answers the same question every time. The mtime is in the key so a redeployed
+/// bundle brings its new icon rather than the one already held.
+#[cfg(feature = "slint")]
+fn icon_cached(path: &std::path::Path) -> Option<(slint::Image, i32)> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    // Thread local rather than static: a Slint image is neither Send nor Sync, and
+    // the list is only ever applied from the thread that draws it.
+    thread_local! {
+        static ICONS: RefCell<HashMap<(std::path::PathBuf, u128), (slint::Image, i32)>> =
+            RefCell::new(HashMap::new());
+    }
+    let stamp = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let key = (path.to_path_buf(), stamp);
+    ICONS.with(|icons| {
+        if let Some(found) = icons.borrow().get(&key) {
+            return Some(found.clone());
+        }
+        let decoded = load_icon(path)?;
+        icons.borrow_mut().insert(key, decoded.clone());
+        Some(decoded)
+    })
 }
 
 /// A row's icon from an app's PNG, the shape the menu's own icons have: 14px wide,
@@ -2115,7 +2164,7 @@ fn apply_app_list(
         .iter()
         .map(|row| {
             let (picture, frames) =
-                row.icon.as_deref().and_then(load_icon).unwrap_or((Default::default(), 1));
+                row.icon.as_deref().and_then(icon_cached).unwrap_or((Default::default(), 1));
             flipper_ui::ui::ListItem {
                 label: row.label.as_str().into(),
                 status: row.status.as_str().into(),
@@ -3267,7 +3316,7 @@ fn panel(
             app_scroll = 0;
             apply_app_list(
                 &screen,
-                &app_labels(&apps, &rows),
+                &app_labels(&apps, &rows, &app_path),
                 app_selected,
                 &EMPTY_BUTTONS,
                 app_scroll,
@@ -4426,7 +4475,7 @@ fn panel(
                 );
                 apply_app_list(
                     &screen,
-                    &app_labels(&apps, &rows),
+                    &app_labels(&apps, &rows, &app_path),
                     app_selected,
                     &EMPTY_BUTTONS,
                     app_scroll,
@@ -4781,7 +4830,7 @@ fn panel(
                         let rows = app_rows(&apps, &app_path);
                         apply_app_list(
                             &screen,
-                            &app_labels(&apps, &rows),
+                            &app_labels(&apps, &rows, &app_path),
                             app_selected,
                             &EMPTY_BUTTONS,
                             app_scroll,
@@ -4837,7 +4886,13 @@ fn panel(
                         demo::Act::Apps => {
                             // Read the folder again: a bundle copied onto the
                             // device between two visits belongs in this list.
+                            let scan = Instant::now();
                             apps = flipper_ui::bundle::discover(&flipper_ui::bundle::root());
+                            eprintln!(
+                                "apps           {} found in {:.1}ms",
+                                apps.len(),
+                                scan.elapsed().as_secs_f32() * 1000.0
+                            );
                             // Opened at the top, whatever folder was last looked in:
                             // the list is entered from the menu, and arriving deep
                             // inside it with no sign of where would read as a bug.
@@ -4847,7 +4902,7 @@ fn panel(
                             let rows = app_rows(&apps, &app_path);
                             apply_app_list(
                                 &screen,
-                                &app_labels(&apps, &rows),
+                                &app_labels(&apps, &rows, &app_path),
                                 app_selected,
                                 &EMPTY_BUTTONS,
                                 app_scroll,
