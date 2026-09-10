@@ -118,9 +118,7 @@ push_apps() {
     local here found app name
     here=$(cd "$(dirname "$0")" && pwd)
     found=no
-    # Both kinds of app, because ~/Apps holds both: the bundles just built, and the
-    # script apps in apps/, which are the file itself and need no build at all.
-    for app in "$here"/target/appimage/*.AppImage "$here"/apps/*.py; do
+    for app in "$here"/target/appimage/*.AppImage; do
         [ -e "$app" ] || continue
         found=yes
         name=$(basename "$app")
@@ -128,6 +126,28 @@ push_apps() {
         run "mkdir -p ~/Apps && cat > ~/Apps/$name.new && chmod 755 ~/Apps/$name.new && mv -f ~/Apps/$name.new ~/Apps/$name" \
             < "$app"
     done
+
+    # Script apps: every .py under apps/ that is not part of a bundle's source, sent
+    # as a tar so a folder here lands as the same folder there. flipctl groups the
+    # Apps list by those folders, so the layout is the menu.
+    local scripts
+    scripts=$(cd "$here/apps" && find . -name "*.py" -not -path "*/__pycache__/*" \
+        | while IFS= read -r f; do
+            # A bundle's own sources are not script apps, and its manifest can be any
+            # number of directories above the file: python-runtime/flipctl/*.py is
+            # the runtime's library, not something to drop in the Apps folder.
+            d=$(dirname "$f")
+            while [ "$d" != "." ] && [ ! -e "$d/app.toml" ]; do d=$(dirname "$d"); done
+            # An if, not a test-and-print: the last file found is usually an
+            # excluded one, and under set -e a false status there ends the deploy.
+            if [ "$d" = "." ]; then printf '%s\n' "$f"; fi
+        done)
+    if [ -n "$scripts" ]; then
+        found=yes
+        printf '%s\n' "$scripts" | sed 's|^\./|== pushing |;s|$| to ~/Apps ==|'
+        printf '%s\n' "$scripts" | tar czf - -C "$here/apps" -T - \
+            | run "mkdir -p ~/Apps && tar xzf - -C ~/Apps"
+    fi
     if [ "$found" = no ]; then
         echo "--apps: nothing under target/appimage; run tools/appimage/build.sh first" >&2
     fi
