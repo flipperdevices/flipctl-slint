@@ -21,7 +21,7 @@ they mean in a crate.
                 selected: root.selected;
                 total: 2;
                 real_frame: true;
-                buttons: ["Back", "", "", "", "Ok"];
+                buttons: ["Close", "", "", "", "Ok"];
             }
         }
     ''')

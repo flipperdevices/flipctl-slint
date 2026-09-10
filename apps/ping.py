@@ -42,7 +42,6 @@ export component App inherits Shell {
 
     DetailBody {
         rows: root.rows;
-        breadcrumb: "Ping";
         buttons: root.buttons;
         // The gauge is sized around its own label, which is an app's to choose.
         fit_gauges: true;
@@ -219,7 +218,7 @@ def main() -> None:
 
     def draw() -> None:
         ui.rows = pinger.rows()
-        ui.buttons = ["Back", "", "", "Host", "Stop" if pinger.running else "Start"]
+        ui.buttons = ["Close", "", "", "Host", "Stop" if pinger.running else "Start"]
 
     @flipctl.on_key(ui)
     def _(key, down):
