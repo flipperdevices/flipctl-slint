@@ -1,0 +1,18 @@
+# The JavaScript runtime, as an app.
+#
+# The same shape as the Python one with another word in `provides`, which is the whole
+# point: a language costs a bundle in the folder, and flipctl knows nothing about
+# either of them. A script named `*.js` asks for `js` because that is its extension.
+name = "JavaScript Runtime"
+provides = "js"
+wayland = "./AppRun"
+# Node is the device's own, as python3 is for the other runtime: what the bundle
+# carries is the drawing stack, not a second interpreter.
+apt = ["nodejs"]
+# flipctl paints the real status bar into the frame, rather than the app drawing a
+# strip of its own with nothing in it.
+status = true
+# Where it goes in the Apps folder. flipctl groups the list by the folders it finds,
+# so this is the deploy's business rather than the manifest's: a runtime is something
+# an app needs, not something to open, and it does not want a row at the top level.
+folder = "Runtimes"

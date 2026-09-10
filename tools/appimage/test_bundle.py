@@ -39,20 +39,26 @@ class Manifests(unittest.TestCase):
         self.assertTrue((python / "AppRun").is_file())
         self.assertTrue((python / "flipctl/__init__.py").is_file())
 
-    def test_the_python_font_table_matches_the_rust_one(self):
-        """The client measures text to wrap it, and it must measure what is drawn.
+    def test_every_client_font_table_matches_the_rust_one(self):
+        """A client measures text to wrap it, and it must measure what is drawn.
 
-        Its advance table is a copy of the generated Rust font, so it can drift. A
-        wrong table wraps a line one word early or one word late, which nobody would
-        notice until a traceback is unreadable on the panel.
+        Each runtime carries its own copy of the generated Rust font's advances, so
+        each can drift. A wrong table wraps a line one word early or one word late,
+        which nobody notices until a traceback is unreadable on the panel.
         """
         rust = (REPO / "crates/flipper-ui/src/font/title.rs").read_text()
         advances = "".join(re.findall(r"advance:\s*(\d+)", rust))
-        client = (REPO / "apps/python-runtime/flipctl/__init__.py").read_text()
-        found = re.search(r'_ADVANCES = "(\d+)"', client)
-        self.assertIsNotNone(found, "the client carries an advance table")
-        self.assertEqual(found.group(1), advances)
         self.assertEqual(len(advances), 95, "ASCII 32..126, one digit each")
+
+        clients = {
+            "apps/python-runtime/flipctl/__init__.py": r'_ADVANCES = "(\d+)"',
+            "apps/js-runtime/flipctl/index.js": r'const ADVANCES = "(\d+)"',
+        }
+        for where, pattern in clients.items():
+            with self.subTest(client=where):
+                found = re.search(pattern, (REPO / where).read_text())
+                self.assertIsNotNone(found, "the client carries an advance table")
+                self.assertEqual(found.group(1), advances)
 
     def test_a_script_app_is_an_app_that_parses(self):
         """A script app has to be both, and neither is checked anywhere else.

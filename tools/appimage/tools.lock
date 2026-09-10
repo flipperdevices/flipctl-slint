@@ -7,9 +7,15 @@
 #
 # uv and the Slint wheel are carried by a runtime bundle rather than used to build
 # one: uv reads the dependencies a script declares, and the wheel is how a script
-# draws with the panel's own widgets. Every published Slint binding is a
+# draws with the panel's own widgets. Every published Slint Python binding is a
 # pre-release, so the hash is what pins it rather than the version.
+#
+# The two slint-node entries are the same thing for JavaScript: the binding, and the
+# prebuilt native addon npm would install as a scoped package of its own. That one is
+# 29MB unpacked and is the reason a JavaScript app needs no compiler on the device.
 appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
 runtime-aarch64 https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-aarch64 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
 uv https://github.com/astral-sh/uv/releases/download/0.12.11/uv-aarch64-unknown-linux-gnu.tar.gz e9933d907fb9cd27d606d819bbded419f2844c0e2efc98225ecfa409288eb28d
 slint-wheel https://files.pythonhosted.org/packages/30/74/0ad0941bbf734bc381f9d21053fb7a0413998f8489feb008e4e0422cb9db/slint-1.17.1b2-cp311-abi3-manylinux_2_31_aarch64.whl a4b0d411e5f26ee590efb6723d289985db7d3fc803d2b020367149ab69ced48b
+slint-node https://registry.npmjs.org/slint-ui/-/slint-ui-1.17.1.tgz 0e7d4e931faee6e077de11cfc6fdef229a52e67103be77ef25e3f120878a1d50
+slint-node-binary https://registry.npmjs.org/@slint-ui/slint-ui-binary-linux-arm64-gnu/-/slint-ui-binary-linux-arm64-gnu-1.17.1.tgz a15ba965924f4a69c7b3daffbfad3d7f7b88cd037388d2f9b98f69bd23def2e8
