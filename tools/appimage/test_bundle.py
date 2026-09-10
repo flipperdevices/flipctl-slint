@@ -57,11 +57,17 @@ class Manifests(unittest.TestCase):
     def test_a_script_app_is_an_app_that_parses(self):
         """A script app has to be both, and neither is checked anywhere else.
 
-        `apps/*.py` is deployed into ~/Apps as it stands: a missing block makes it
-        invisible to the scanner and a syntax error makes it a traceback on the panel.
-        Both are cheaper to catch here than on the device.
+        Every `.py` under `apps/` that is not part of a bundle's own source is
+        deployed into ~/Apps as it stands, at the same path, so a folder here is a
+        folder in the menu. A missing block makes it invisible to the scanner and a
+        syntax error makes it a traceback on the panel, both of which are cheaper to
+        catch here than on the device.
         """
-        scripts = sorted(REPO.glob("apps/*.py"))
+        scripts = sorted(
+            path
+            for path in (REPO / "apps").rglob("*.py")
+            if not any(parent.joinpath("app.toml").exists() for parent in path.parents)
+        )
         self.assertTrue(scripts, "the tree has a script app")
         for path in scripts:
             with self.subTest(script=path.name):
