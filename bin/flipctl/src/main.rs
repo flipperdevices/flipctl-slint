@@ -2058,15 +2058,6 @@ fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow]) -> Vec<AppLabel> {
         .collect()
 }
 
-/// The trail above the app list: the folders walked into, outermost first.
-///
-/// Empty at the top, because Apps is where the list starts and a row saying so
-/// tells nobody anything. A folder entered names itself, the way a submenu does.
-#[cfg(feature = "slint")]
-fn app_trail(path: &[String]) -> String {
-    path.iter().map(|folder| format!("> {folder}")).collect::<Vec<_>>().join(" ")
-}
-
 /// A row's icon from an app's PNG, the shape the menu's own icons have: 14px wide,
 /// the alpha is the shape, and a strip of 14px frames animates while the row is
 /// selected. Decoded here rather than by Slint, whose image decoders this build

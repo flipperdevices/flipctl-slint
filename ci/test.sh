@@ -39,6 +39,13 @@ else
     echo "shellcheck: skipped"
 fi
 
+echo "== the panel binary (the only build that compiles main.rs) =="
+# Every other pass here is a library test, and none of them compile the binary at
+# all: a duplicate function in main.rs survived a rebase, a reformat and several
+# green runs because nothing ever built it. panel() exists only under device+slint,
+# and the deploy uses the full set, so that is what is built.
+cargo build --quiet -p flipctl --features "slint device wayland gpu remote"
+
 echo "== formatting =="
 # rustfmt.toml is the argument about style; this is what keeps it true. A table that
 # is deliberately wider than the limit carries #[rustfmt::skip].
