@@ -891,6 +891,10 @@ impl RawFdCompat for OwnedFd {
 /// not drawing costs nothing and one that is costs a readback.
 fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
     let mut generation = 0u64;
+    // Whether this app has ever put anything on its output, which decides both
+    // whether a blank frame is worth publishing and whether a still screen may be
+    // re-copied without waiting for damage.
+    let mut drew_yet = false;
     // Which of the two buffers the outstanding request belongs to.
     #[cfg(feature = "gpu")]
     let mut slot = 0usize;
@@ -1004,8 +1008,40 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
         } else {
             grab.frame(deadline, &mut next)
         };
+        // A screen that has finished drawing never damages its surface again, so a
+        // copy that waits for damage is never fulfilled and the panel keeps whatever
+        // was on it before the app opened. That is every still screen: a launcher's
+        // facts page, a settings list, anything that draws once and waits for a key.
+        // When the wait comes back empty, take the output as it stands instead.
+        //
+        // Only once the app has actually drawn something, though. Before its first
+        // frame the output is still empty, and taking it as it stands puts a black
+        // frame on the panel in place of whatever the app was opened from, for as long
+        // as the app takes to start: a second, for an interpreter that has a runtime
+        // to mount and a stack to import.
+        let taken = match taken {
+            Ok(false) if drew_yet => grab.frame_now(Duration::from_millis(120), &mut next),
+            other => other,
+        };
+
         match taken {
             Ok(true) => {
+                // The compositor's output is black until the app has drawn into it,
+                // and mapping the window is itself damage, so the first copy of a
+                // just-started app can be the empty output rather than its screen.
+                // Publishing that puts a black panel in front of the person for as
+                // long as the app takes to start. Leading blank frames are dropped
+                // until the app has drawn once; after that anything goes out, because
+                // an app is allowed to draw black.
+                if !drew_yet {
+                    let lit = next.iter().filter(|b| **b != 0).count();
+                    if lit == 0 {
+                        eprintln!("wl: blank frame before the first draw, held back");
+                        continue;
+                    }
+                    eprintln!("wl: first frame has {lit} lit bytes");
+                    drew_yet = true;
+                }
                 // Is there a picture in it at all? Counted only when asked for, since
                 // it is a pass over the frame: FLIPCTL_FRAMELOG=1.
                 if std::env::var_os("FLIPCTL_FRAMELOG").is_some() && generation % 10 == 1 {
