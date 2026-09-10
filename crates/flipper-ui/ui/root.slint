@@ -85,6 +85,12 @@ export component Root inherits Window {
     in property <int> scroll;
     in property <int> total;
     in property <int> tick;
+    // An app that has been started and has not drawn yet. The screen it was opened
+    // from stays underneath a wash with the spinner over it, so a second of an
+    // interpreter starting reads as the machine working rather than as a screen that
+    // stopped. Cleared by the app's first real frame, which then owns the panel.
+    in property <bool> app_starting;
+    in property <int> app_spin;
     in property <bool> pressed;
     in property <bool> real_frame: true;
     in property <[string]> menu_buttons;
@@ -445,5 +451,26 @@ export component Root inherits Window {
         left_label: root.modal_left;
         right_label: root.modal_right;
         pressed_slot: root.modal_pressed_slot;
+    }
+
+    // The same wash and spinner the wifi screen waits with, over the whole body: what
+    // is underneath stays legible as context and plainly not current.
+    if root.app_starting: Rectangle {
+        x: 0;
+        y: FlipperTheme.status_bar_h;
+        width: 100%;
+        height: root.height - FlipperTheme.status_bar_h;
+        background: FlipperTheme.overlay.with-alpha(FlipperTheme.wash_alpha);
+    }
+    if root.app_starting: Image {
+        x: Math.floor((root.width - FlipperTheme.spin_w) / 2 / 1px) * 1px;
+        y: Math.floor((root.height - FlipperTheme.spin_h) / 2 / 1px) * 1px;
+        width: FlipperTheme.spin_w;
+        height: FlipperTheme.spin_h;
+        source: @image-url("../assets/icons/spinner_22x20px.png");
+        source-clip-x: 0;
+        source-clip-y: root.app_spin * (FlipperTheme.spin_h / 1px);
+        source-clip-width: FlipperTheme.spin_w / 1px;
+        source-clip-height: FlipperTheme.spin_h / 1px;
     }
 }

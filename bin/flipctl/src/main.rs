@@ -3167,6 +3167,9 @@ fn panel(
     // must not keep the panel, and "nothing yet" is not the same as "never".
     #[cfg(feature = "wayland")]
     let mut wl_drawn = false;
+    // The spinner shown while an app starts, and which frame of it is up.
+    let mut app_starting = false;
+    let mut app_spin = 0i32;
     // Whether an app had the panel on the previous turn, so the turn it stops having
     // it can be committed in full.
     let mut was_app_panel = false;
@@ -5727,6 +5730,31 @@ fn panel(
             screen.set_tick(tick);
         }
         slint::platform::update_timers_and_animations();
+
+        // An app that has been started and has not drawn yet. Starting one costs about
+        // a second for an interpreter with a runtime to mount and a drawing stack to
+        // import, and the panel would otherwise sit on the screen it was opened from
+        // with nothing to say it is working.
+        #[cfg(feature = "wayland")]
+        {
+            let starting = wl_front.is_some() && !wl_drawn;
+            if starting {
+                // Phase from the launch, not from the process, so the first turn of
+                // the spinner is the moment the app was asked for.
+                let step = wl_since.elapsed().as_millis() / timing::SPIN_FRAME_MS.max(1) as u128;
+                let frame = (step % flipper_ui::theme::metric::SPIN_FRAMES.max(1) as u128) as i32;
+                if frame != app_spin {
+                    app_spin = frame;
+                    screen.set_app_spin(frame);
+                    window.request_redraw();
+                }
+            }
+            if starting != app_starting {
+                app_starting = starting;
+                screen.set_app_starting(starting);
+                window.request_redraw();
+            }
+        }
 
         // Whose picture the panel is showing. An app that has drawn owns it, and our
         // own UI must not commit over it: the status line ticks once a second, which
