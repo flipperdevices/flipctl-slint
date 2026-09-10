@@ -2,9 +2,10 @@
 //!
 //! mpv rather than mpg123, which the prototype used: mpg123 decodes an MP3 stream
 //! in a tenth of the size, but it cannot be asked anything while it does it. mpv
-//! takes a JSON command socket, and that one socket is where three of this app's
-//! rows get their answers: the volume it applies live, the output device it can
-//! move a running stream to, and the station's own now-playing title.
+//! takes a JSON command socket, and that one socket is where two of this app's rows
+//! get their answers: the output device it can move a running stream to, and the
+//! station's own now-playing title. The third, the volume, is the speaker's own gain
+//! and not the player's at all; speaker.rs says why.
 //!
 //! The socket carries JSON lines, so a reply is one line of text with one field
 //! worth reading. That is parsed here by hand rather than with serde: the app has
@@ -36,9 +37,8 @@ pub struct Player {
 }
 
 impl Player {
-    /// Start playing `url`, at `volume` percent, on `device` or on the sink flipctl
-    /// pinned for the app.
-    pub fn start(url: &str, volume: i32, device: Option<&str>) -> std::io::Result<Self> {
+    /// Start playing `url` on `device`, or on the sink flipctl pinned for the app.
+    pub fn start(url: &str, device: Option<&str>) -> std::io::Result<Self> {
         let socket = socket_path();
         // A socket left by a player that was killed rather than stopped would
         // otherwise make mpv refuse to listen, and every question after that would
@@ -52,7 +52,10 @@ impl Player {
             // A stream has no seekable start, and mpv's cache is what turns a
             // stutter in the network into silence rather than a gap.
             .arg("--cache=yes")
-            .arg(format!("--volume={volume}"))
+            // Unity, and it stays there. mpv's volume only attenuates, so anything
+            // below 100 is headroom given away before the amplifier ever sees it;
+            // the volume that matters is the speaker's, in speaker.rs.
+            .arg("--volume=100")
             .arg(format!("--input-ipc-server={}", socket.display()))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -270,10 +273,11 @@ mod live {
     #[test]
     #[ignore = "needs mpv, the network and about ten seconds"]
     fn a_station_plays_and_says_what_it_is_playing() {
-        // Volume zero, so running the suite on somebody's desk is silent. It also
-        // proves --volume is accepted, since mpv reports back what it took.
-        let mut player = Player::start("http://media-ice.musicradio.com/HeartLondonMP3", 0, None)
+        // Muted over the socket rather than started quiet: the app starts mpv at
+        // unity now, and running the suite on somebody's desk should still be silent.
+        let mut player = Player::start("http://media-ice.musicradio.com/HeartLondonMP3", None)
             .expect("start mpv");
+        player.set("volume", "0");
 
         // Wait for sound: `time-pos` appears when audio starts flowing, which is
         // exactly what the app waits for before it claims to be playing.
@@ -286,9 +290,12 @@ mod live {
         let position = player.get("time-pos").expect("no position after ten seconds");
         assert!(position.parse::<f64>().expect("a number") > 0.0, "{position}");
 
+        // The socket still carries a set and a get, which is what the device row
+        // uses; the volume is only the cheapest property to prove it on.
         assert_eq!(player.get("volume").as_deref(), Some("0.000000"));
         player.set("volume", "35");
         assert_eq!(player.get("volume").as_deref(), Some("35.000000"));
+        player.set("volume", "0");
 
         // The station's own title. Not asserted to be anything in particular: it
         // is whatever is on the radio, in whatever alphabet. What is asserted is

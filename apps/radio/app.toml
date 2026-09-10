@@ -5,8 +5,12 @@
 #
 # mpv is the player. mpg123 would do the decoding in a tenth of the size, but mpv
 # answers questions while it plays: it takes a JSON command socket, which is where
-# the volume, the output device and the station's own now-playing title come from.
+# the output device and the station's own now-playing title come from.
 name = "Internet radio"
 wayland = "./target/release/radio-app"
 audio = true
-apt = ["mpv"]
+# wpctl and pw-cli are the volume: it is the speaker's own gain, reached through the
+# sound server rather than through the codec, which the app cannot open. Without them
+# the volume row would move on screen and change nothing, which is worse than an app
+# that says what it needs before it starts.
+apt = ["mpv", "wireplumber", "pipewire-bin"]

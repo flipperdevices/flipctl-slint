@@ -12,6 +12,7 @@
 //! a keypress into a change.
 
 mod mpv;
+mod speaker;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -155,7 +156,9 @@ impl Radio {
         Self {
             city: 0,
             stations: vec![0; CITIES.len()],
-            volume: 50,
+            // What the machine is set to, asked rather than assumed: the row is the
+            // speaker's gain, and a number of our own would be a guess about it.
+            volume: speaker::volume().unwrap_or(50),
             devices: Vec::new(),
             asking: Some(rx),
             device: 0,
@@ -251,11 +254,11 @@ impl Radio {
         self.devices.get(index).map(|(id, _)| id.as_str())
     }
 
+    /// The volume is the speaker's own gain, not the player's, so it moves whether
+    /// anything is playing or not and stays where it was left afterwards.
     fn adjust_volume(&mut self, delta: i32) {
         self.volume = (self.volume + delta).clamp(0, 100);
-        if let Some(player) = self.player.as_ref() {
-            player.set("volume", &self.volume.to_string());
-        }
+        speaker::set_volume(self.volume);
     }
 
     /// Start the current station, replacing whatever was playing.
@@ -269,7 +272,7 @@ impl Radio {
         // two players and two streams on the same speaker.
         self.player = None;
         self.now.clear();
-        match mpv::Player::start(url, self.volume, self.device_id()) {
+        match mpv::Player::start(url, self.device_id()) {
             Ok(player) => {
                 self.player = Some(player);
                 self.playing = Some(station);
