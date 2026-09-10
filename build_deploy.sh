@@ -118,12 +118,20 @@ push_apps() {
     local here found app name
     here=$(cd "$(dirname "$0")" && pwd)
     found=no
+    local id folder rel
     for app in "$here"/target/appimage/*.AppImage; do
         [ -e "$app" ] || continue
         found=yes
         name=$(basename "$app")
-        echo "== pushing $name to ~/Apps =="
-        run "mkdir -p ~/Apps && cat > ~/Apps/$name.new && chmod 755 ~/Apps/$name.new && mv -f ~/Apps/$name.new ~/Apps/$name" \
+        # An app may say which folder of the Apps list it belongs in, which is how the
+        # runtimes stay out of the top level. Read from the source manifest, because
+        # the bundle carries only the keys flipctl itself reads.
+        id=${name%-flipctl-aarch64.AppImage}
+        folder=$(sed -n 's/^folder *= *"\(.*\)"/\1/p' "$here/apps/$id/app.toml" 2>/dev/null | head -1)
+        rel=$name
+        [ -n "$folder" ] && rel="$folder/$name"
+        echo "== pushing $rel to ~/Apps =="
+        run "mkdir -p \"\$HOME/Apps/$folder\" && cat > \"\$HOME/Apps/$rel.new\" && chmod 755 \"\$HOME/Apps/$rel.new\" && mv -f \"\$HOME/Apps/$rel.new\" \"\$HOME/Apps/$rel\"" \
             < "$app"
     done
 

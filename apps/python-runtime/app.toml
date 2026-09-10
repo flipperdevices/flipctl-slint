@@ -11,3 +11,10 @@ icon = "python.png"
 # what offers to install it anywhere it is not: what the bundle carries is the drawing
 # stack and uv, not a second Python.
 apt = ["python3"]
+# flipctl paints the real status bar into the frame, rather than the app drawing a
+# strip of its own with nothing in it.
+status = true
+# Where it goes in the Apps folder. flipctl groups the list by the folders it finds,
+# so this is the deploy's business rather than the manifest's: a runtime is something
+# an app needs, not something to open, and it does not want a row at the top level.
+folder = "Runtimes"
