@@ -167,10 +167,10 @@ def main() -> None:
             ui.total = len(lines)
             ui.offset = state["offset"]
             # Nothing to clear, no button offering to: the slot empties instead.
-            ui.buttons = ["Back", "", "", "Clear" if newest_log() else "", "Runtime"]
+            ui.buttons = ["Close", "", "", "Clear" if newest_log() else "", "Runtime"]
         else:
             ui.rows = facts(here)
-            ui.buttons = ["Back", "", "", "", "Last error"]
+            ui.buttons = ["Close", "", "", "", "Last error"]
 
     @flipctl.on_key(ui)
     def _(key, down):

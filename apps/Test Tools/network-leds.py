@@ -67,7 +67,6 @@ export component App inherits Shell {
         selected: root.selected;
         total: 4;
         real_frame: true;
-        breadcrumb: "> Network LEDs";
         buttons: root.buttons;
     }
 }
@@ -155,7 +154,7 @@ def main() -> None:
             for i, (led, label) in enumerate(ROWS)
         ]
         ui.selected = state["selected"]
-        ui.buttons = ["Back", "All", "", "Restore", "Test"]
+        ui.buttons = ["Close", "All", "", "Restore", "Test"]
 
     async def sweep(leds: list[str]) -> None:
         """Walk the channels, leaving the LEDs back on the trigger afterwards."""
