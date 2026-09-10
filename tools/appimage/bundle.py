@@ -15,6 +15,7 @@ import argparse
 import os
 import shutil
 import stat
+import tarfile
 import sys
 import tomllib
 import zipfile
@@ -145,19 +146,30 @@ def copy_licenses(repo: Path, app_dir: Path, doc: Path, program: str) -> None:
             shutil.copy2(terms, target / terms.name)
 
 
-def stage_staged(app_dir: Path, appdir: Path, tools: Path) -> None:
-    """A runtime bundle: its own AppRun, its own Python, and the pieces it carries.
+def stage_staged(app_dir: Path, appdir: Path, tools: Path, manifest: dict) -> None:
+    """A runtime bundle: its own AppRun, and the drawing stack the language needs.
 
-    The Slint binding and the widget sources are what make a script able to draw, and
-    uv is what reads the dependencies a script declares. Both are pinned in
-    tools.lock and fetched by build.sh, so this only copies.
+    Nothing is compiled here. What each runtime carries is pinned in tools.lock and
+    fetched by build.sh, so this only copies, and which recipe runs is decided by the
+    word the bundle puts in `provides`, which is the same word a script asks for.
     """
+    appdir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(app_dir / "AppRun", appdir / "AppRun")
+    os.chmod(appdir / "AppRun", 0o755)
+
+    provides = manifest.get("provides", "")
+    recipes = {"py": stage_python, "js": stage_node}
+    if provides not in recipes:
+        sys.exit(f"{app_dir}: a staged bundle provides {provides!r}, which has no recipe here")
+    recipes[provides](app_dir, appdir, tools)
+
+
+def stage_python(app_dir: Path, appdir: Path, tools: Path) -> None:
+    """Python: the Slint wheel, uv, and the module a script imports."""
     lib = appdir / "usr" / "lib" / "python"
     lib.mkdir(parents=True)
     (appdir / "usr" / "bin").mkdir(parents=True)
 
-    shutil.copy2(app_dir / "AppRun", appdir / "AppRun")
-    os.chmod(appdir / "AppRun", 0o755)
     for name in ("launcher.py",):
         shutil.copy2(app_dir / name, lib / name)
     shutil.copytree(app_dir / "flipctl", lib / "flipctl")
@@ -172,6 +184,52 @@ def stage_staged(app_dir: Path, appdir: Path, tools: Path) -> None:
 
     shutil.copy2(tools / "uv.bin", appdir / "usr" / "bin" / "uv")
     os.chmod(appdir / "usr" / "bin" / "uv", 0o755)
+
+
+def npm_unpack(tarball: Path, into: Path, only: str = "") -> None:
+    """An npm tarball, whose every member sits under `package/`, unpacked without it.
+
+    `only` takes a single file out by name instead of the lot, which is how the native
+    addon is put beside the loader that looks for it: the binary package carries a
+    package.json of its own, and unpacking that over the wrapper's would replace the
+    manifest node reads.
+    """
+    into.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(tarball) as archive:
+        for member in archive.getmembers():
+            if not member.isfile() or not member.name.startswith("package/"):
+                continue
+            name = member.name[len("package/") :]
+            if only and Path(name).name != only:
+                continue
+            target = into / (Path(name).name if only else name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                continue
+            with source, open(target, "wb") as out:
+                shutil.copyfileobj(source, out)
+
+
+def stage_node(app_dir: Path, appdir: Path, tools: Path) -> None:
+    """JavaScript: Slint's node binding with its native addon, and our own module.
+
+    The addon goes inside the binding's own directory rather than as the scoped
+    package npm would install, because the loader looks there first and it saves
+    carrying a second package.json to point at it.
+    """
+    modules = appdir / "usr" / "lib" / "node" / "node_modules"
+    modules.mkdir(parents=True)
+
+    shutil.copy2(app_dir / "launcher.js", appdir / "usr" / "lib" / "node" / "launcher.js")
+    shutil.copytree(app_dir / "flipctl", modules / "flipctl")
+
+    slint = modules / "slint-ui"
+    npm_unpack(tools / "slint-node", slint)
+    npm_unpack(tools / "slint-node-binary", slint, only="slint-ui.linux-arm64-gnu.node")
+    # A shared object still has to be loadable from a read-only squashfs.
+    for addon in slint.rglob("*.node"):
+        os.chmod(addon, 0o755)
 
 
 def stage_ui(repo: Path, appdir: Path) -> None:
@@ -214,7 +272,7 @@ def stage(app_dir: Path, appdir: Path, binary: Path | None, version: str, repo: 
         apprun.write_text(render_apprun(f'"$APPDIR/usr/bin/{program}" "$@"'))
         os.chmod(apprun, 0o755)
     else:
-        stage_staged(app_dir, appdir, repo / "target/appimage/tools")
+        stage_staged(app_dir, appdir, repo / "target/appimage/tools", manifest)
         stage_ui(repo, appdir)
 
     icon_name = f"{app_id}.png"

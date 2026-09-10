@@ -1,0 +1,42 @@
+#!/bin/sh
+# The JavaScript runtime: its own screen with no argument, a script with one.
+#
+# What the bundle carries is the drawing stack, meaning Slint's Node binding with its
+# native addon and the widget sources, plus the `flipctl` module a script requires.
+# Node itself is the device's, which is why the manifest names nodejs in `apt`.
+set -eu
+APPDIR=${APPDIR:-$(cd "$(dirname "$0")" && pwd)}
+export APPDIR
+export FLIPCTL_UI="$APPDIR/usr/share/flipctl-ui"
+# FemtoVG, not the software renderer our Rust apps compile in: this addon is built
+# with femtovg and skia only, so asking for software prints a warning on every run and
+# falls back here anyway. At 16px the pixel fonts still land on whole pixels, which a
+# capture of the panel confirms, but it is luck rather than a guarantee: a Slint node
+# build carrying renderer-software would make it one.
+export SLINT_BACKEND=winit-femtovg
+carried="$APPDIR/usr/lib/node/node_modules"
+export NODE_PATH="$carried${NODE_PATH:+:$NODE_PATH}"
+
+[ $# -eq 0 ] && exec node "$APPDIR/usr/lib/node/launcher.js"
+
+script=$1
+shift
+
+# What it says as it dies is kept, so the runtime's own screen can show it after the
+# app is gone. Not `exec`: the log is written here and read back on failure, so the
+# journal keeps what it always did and the panel gains somewhere to read it.
+log="$PWD/last-error.log"
+: > "$log"
+set +e
+node "$script" "$@" 2> "$log"
+status=$?
+set -e
+# Kept only when the run actually failed. Slint warns on stderr about the renderer it
+# fell back to, and a warning left in the log makes the runtime screen report a last
+# error for a script that worked.
+if [ "$status" -eq 0 ]; then
+    : > "$log"
+else
+    cat "$log" >&2
+fi
+exit "$status"
