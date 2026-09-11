@@ -2468,6 +2468,12 @@ fn panel(
     let window = FlipperSlintPlatform::install();
     let screen = demo::build();
     screen.show().expect("show");
+    // The bench makes frames by walking the menu selection, so it has to be on the
+    // menu: on the idle dashboard the selection is not drawn, nothing is damaged, and
+    // the run committed two frames and then waited out its timeout.
+    if bench {
+        screen.set_screen(Screen::Menu);
+    }
     // Three cadences, by what actually moves: sensors every 5s as desktop.js
     // does, addresses every 30s because a cable or a lease can change them, and
     // hostname and profile once because the booted subvol cannot change without a
