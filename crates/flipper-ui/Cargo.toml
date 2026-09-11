@@ -14,7 +14,7 @@ description = "Shared UI component library for the Flipper One 256x144 panel"
 default = []
 # DRM/KMS panel sink and raw evdev input. Off by default so host-side tests and
 # the golden-image harness build without touching /dev.
-device = ["drm"]
+device = ["drm", "drm-ffi"]
 # Built-in browser remote view. Default off so flipperos-installer and
 # flipper-boot-menu never pay for it.
 remote = []
@@ -62,6 +62,10 @@ tui = ["dep:cursive"]
 # but has no IPv4 equivalent, and a UI process should not be shelling out to `ip`.
 libc = "0.2"
 drm = { version = "0.14", optional = true }
+# For one ioctl the safe crate cannot express: ADDFB2 with a fourcc its enum has no
+# name for. drm-fourcc 2.2.0 predates DRM_FORMAT_Y8, and the drm crate funnels every
+# framebuffer through that enum, so the Y8 framebuffer is added a layer down.
+drm-ffi = { version = "0.9", optional = true }
 khronos-egl = { version = "6", features = ["dynamic"], optional = true }
 libloading = { version = "0.8", optional = true }
 # For sway's IPC replies. Hand-parsing them cost three bugs: a `num` field on every

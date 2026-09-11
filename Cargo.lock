@@ -1404,6 +1404,7 @@ version = "0.1.0"
 dependencies = [
  "cursive",
  "drm",
+ "drm-ffi",
  "flipper-tokens",
  "i-slint-common",
  "khronos-egl",
