@@ -2045,12 +2045,17 @@ struct AppLabel {
 /// it is the way an app does rather than by a rule written in here about its name.
 #[cfg(feature = "slint")]
 fn folder_icon(path: &[String], name: &str) -> Option<std::path::PathBuf> {
-    let mut dir = flipper_ui::bundle::root();
-    for step in path {
-        dir.push(step);
-    }
-    let icon = dir.join(name).join("icon.png");
-    icon.is_file().then_some(icon)
+    // A folder can be in either root, and so can its icon: the shipped Test Tools
+    // carries one, and a folder of the user's own beside it carries its own. Asked
+    // in the same order a duplicate app is resolved, so the later root answers first.
+    flipper_ui::bundle::roots().iter().rev().find_map(|root| {
+        let mut dir = root.clone();
+        for step in path {
+            dir.push(step);
+        }
+        let icon = dir.join(name).join("icon.png");
+        icon.is_file().then_some(icon)
+    })
 }
 
 #[cfg(feature = "slint")]
@@ -2647,7 +2652,7 @@ fn panel(
     // so a file copied onto the device shows up without restarting this. Discovery
     // is a directory listing and a stat per bundle, which is nothing next to opening
     // a menu: a bundle is opened only the first time it is seen.
-    let mut apps = flipper_ui::bundle::discover(&flipper_ui::bundle::root());
+    let mut apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
     eprintln!(
         "apps           {} found: {:?}",
         apps.len(),
@@ -3261,7 +3266,7 @@ fn panel(
                 continue;
             }
             // A file copied a second ago is listed too.
-            apps = flipper_ui::bundle::discover(&flipper_ui::bundle::root());
+            apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
             let at = match apps.iter().position(|a| a.bundle == path) {
                 Some(at) => at,
                 None => match flipper_ui::bundle::read(&path, &[]) {
@@ -4887,7 +4892,7 @@ fn panel(
                             // Read the folder again: a bundle copied onto the
                             // device between two visits belongs in this list.
                             let scan = Instant::now();
-                            apps = flipper_ui::bundle::discover(&flipper_ui::bundle::root());
+                            apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
                             eprintln!(
                                 "apps           {} found in {:.1}ms",
                                 apps.len(),
