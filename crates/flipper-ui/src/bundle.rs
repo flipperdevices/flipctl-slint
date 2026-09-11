@@ -10,8 +10,10 @@
 //! it is. What was read is kept beside a stamp of the file's size and mtime, and an
 //! unchanged file is not opened again: the steady state is one `stat` per bundle.
 //!
-//! `/home` is shared by every profile, so the folder survives a factory reset, which
-//! is the reason the apps moved there.
+//! There are two folders, not one. The image ships its apps in a folder of its own,
+//! which updates with the profile; the user's `Apps` is where anything they add
+//! goes. `/home` is shared by every profile, so that one
+//! survives a factory reset, which is the reason the apps moved there.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,9 +24,22 @@ use crate::script;
 /// The extension, matched without regard to case.
 pub const EXT: &str = "AppImage";
 
-/// Where the bundles are.
+/// Where the image puts the apps it ships: part of the profile root, so it updates
+/// with a profile reinstall and survives a wiped home.
+pub const SYSTEM: &str = "/usr/share/flipctl/apps";
+
+/// The user's own folder, which is where anything dropped on the device lands.
 pub fn root() -> PathBuf {
     app::home().join("Apps")
+}
+
+/// Both places an app can be, in the order a duplicate is resolved: the shipped one
+/// first, the user's second, so a copy of theirs shadows a copy of ours.
+///
+/// A missing folder is not an error and not worth checking for: the walk of one that
+/// is not there finds nothing, which is the same answer.
+pub fn roots() -> Vec<PathBuf> {
+    vec![PathBuf::from(SYSTEM), root()]
 }
 
 /// Why a file in the folder is not an app.
@@ -50,8 +65,32 @@ pub enum Skip {
 /// The walk itself is plain file handling and stays out of the `bundle` feature, so a
 /// build without a squashfs reader still finds the scripts.
 pub fn discover(root: &Path) -> Vec<AppEntry> {
-    let mut files = Vec::new();
-    walk(root, root, &[], &mut files);
+    discover_all(&[root.to_path_buf()])
+}
+
+/// The same, over several folders merged into one list.
+///
+/// An app is identified by its key, which is its path below the folder it was found
+/// in, so the same app in two roots is one entry and the later root wins. That is
+/// what lets somebody replace a shipped app with their own without touching what
+/// the image put there.
+///
+/// The merge happens before anything is read, rather than by discovering each root
+/// and concatenating: the comment markers scripts are recognised by come from the
+/// runtime bundles, and a runtime the image ships has to be able to name a script
+/// the user wrote.
+pub fn discover_all(roots: &[PathBuf]) -> Vec<AppEntry> {
+    let mut found: std::collections::BTreeMap<String, (PathBuf, Vec<String>)> =
+        std::collections::BTreeMap::new();
+    for root in roots {
+        let mut here = Vec::new();
+        walk(root, root, &[], &mut here);
+        for (path, key, group) in here {
+            found.insert(key, (path, group));
+        }
+    }
+    let files: Vec<(PathBuf, String, Vec<String>)> =
+        found.into_iter().map(|(key, (path, group))| (path, key, group)).collect();
 
     let mut apps = Vec::new();
     for (path, key, group) in &files {

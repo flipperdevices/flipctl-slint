@@ -328,3 +328,69 @@ fn bundles_are_found_in_folders() {
     // separate caches.
     assert!(apps[1].dir.ends_with("net-ping"), "{}", apps[1].dir.display());
 }
+
+/// Two roots are one list: the image's read-only folder and the user's own, merged
+/// before anything is read, so a runtime the image ships can name a script the user
+/// wrote and a copy of theirs replaces a copy of ours.
+#[test]
+fn a_user_app_shadows_the_one_the_image_ships() {
+    let system = apps_folder("two-system");
+    let mine = apps_folder("two-mine");
+
+    // Shipped: a JavaScript runtime and a clock written against it.
+    bundle_with(
+        &system.join("js-flipctl-aarch64.AppImage"),
+        &[("app.toml", b"name = \"JavaScript\"\nwayland = \"./AppRun\"\nprovides = \"js\"\n")],
+        None,
+    );
+    std::fs::write(system.join("clock.js"), "// /// flipctl\n// name = \"Clock\"\n// ///\n")
+        .unwrap();
+
+    let roots = [system.clone(), mine.clone()];
+    let shipped = bundle::discover_all(&roots);
+    assert_eq!(
+        shipped.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+        ["Clock", "JavaScript"],
+        "an app in the read-only root is listed like any other"
+    );
+    // The marker that made the script an app came from a bundle in the other root.
+    assert_eq!(shipped[0].runtime, "js");
+    assert_eq!(
+        app::launcher_for(&shipped, &shipped[0]).unwrap().map(|l| l.name.as_str()),
+        Some("JavaScript")
+    );
+
+    // The user's own clock, at the same place below their folder, is the one listed.
+    std::fs::write(mine.join("clock.js"), "// /// flipctl\n// name = \"My clock\"\n// ///\n")
+        .unwrap();
+    let merged = bundle::discover_all(&roots);
+    assert_eq!(
+        merged.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+        ["JavaScript", "My clock"],
+        "one entry, not two"
+    );
+    let clock = merged.iter().find(|a| a.name == "My clock").expect("the user's copy");
+    assert_eq!(clock.bundle, mine.join("clock.js"), "read from the user's root");
+    assert_eq!(clock.key, "clock", "and keeping the key, so it inherits the work directory");
+}
+
+/// A folder of one name in both roots is one folder, and the apps inside it merge the
+/// same way anything else does.
+#[test]
+fn a_folder_in_both_roots_is_one_folder() {
+    let system = apps_folder("folder-system");
+    let mine = apps_folder("folder-mine");
+    std::fs::create_dir_all(system.join("Test Tools")).unwrap();
+    std::fs::create_dir_all(mine.join("Test Tools")).unwrap();
+    std::fs::write(system.join("Test Tools/leds.py"), "# /// flipctl\n# name = \"LEDs\"\n# ///\n")
+        .unwrap();
+    std::fs::write(mine.join("Test Tools/mine.py"), "# /// flipctl\n# name = \"Mine\"\n# ///\n")
+        .unwrap();
+
+    let apps = bundle::discover_all(&[system, mine]);
+    assert_eq!(apps.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["LEDs", "Mine"]);
+    for app in &apps {
+        assert_eq!(app.group, ["Test Tools"], "both sit in the same group");
+    }
+    assert_eq!(apps[0].key, "Test Tools-leds");
+}
