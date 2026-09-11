@@ -1,9 +1,14 @@
 # The upstream pieces a bundle is made with or carries, pinned: name, URL, sha256.
 # Fetched into target/appimage/tools by build.sh and checked on every run.
 #
+# appimagetool runs on the machine doing the building rather than on the device, so
+# there is one per builder architecture and build.sh picks by uname. The container
+# path always takes the x86_64 one, since the image it runs in is amd64 by name.
+#
 # runtime-aarch64 is the type-2 AppImage runtime that heads every bundle; it is what
 # a static-pie build of AppImage/type2-runtime produces, and appimagetool takes it
-# through --runtime-file. Replacing it with a build of our own is one line here.
+# through --runtime-file. That one is the device's architecture, not the builder's.
+# Replacing it with a build of our own is one line here.
 #
 # uv and the Slint wheel are carried by a runtime bundle rather than used to build
 # one: uv reads the dependencies a script declares, and the wheel is how a script
@@ -13,7 +18,8 @@
 # The two slint-node entries are the same thing for JavaScript: the binding, and the
 # prebuilt native addon npm would install as a scoped package of its own. That one is
 # 29MB unpacked and is the reason a JavaScript app needs no compiler on the device.
-appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+appimagetool-x86_64 https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+appimagetool-aarch64 https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-aarch64.AppImage f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
 runtime-aarch64 https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-aarch64 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
 uv https://github.com/astral-sh/uv/releases/download/0.12.11/uv-aarch64-unknown-linux-gnu.tar.gz e9933d907fb9cd27d606d819bbded419f2844c0e2efc98225ecfa409288eb28d
 slint-wheel https://files.pythonhosted.org/packages/30/74/0ad0941bbf734bc381f9d21053fb7a0413998f8489feb008e4e0422cb9db/slint-1.17.1b2-cp311-abi3-manylinux_2_31_aarch64.whl a4b0d411e5f26ee590efb6723d289985db7d3fc803d2b020367149ab69ced48b
