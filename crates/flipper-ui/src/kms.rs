@@ -5,11 +5,14 @@
 //! buttons are a handful of keys, so none of that tree earns its place in an
 //! initramfs.
 //!
-//! `flipper-one-display.c` advertises `DRM_FORMAT_XRGB8888` only and converts
-//! with `drm_fb_xrgb8888_to_gray8`, so we expand our greyscale frame into a
-//! dumb buffer on commit. Damage is tracked and reported, but the driver
-//! clips to the whole framebuffer and re-transmits all 37152 SPI bytes on every
-//! atomic update, so it currently only lets us skip a commit entirely when
+//! `flipper-one-display.c` takes `DRM_FORMAT_Y8`, the panel's own 8-bit luminance,
+//! so a commit is a row copy of our greyscale frame into the dumb buffer and the
+//! kernel's part is a memcpy. On a kernel without Y8 the sink falls back to
+//! `DRM_FORMAT_XRGB8888` and expands each pixel for the driver to reduce again.
+//! Measured on the same kernel at 33MHz, 300 frames: Y8 commits in 10.0ms, XRGB8888
+//! in 12.8ms, against 9.2ms on the wire. Damage is tracked and reported, but the
+//! driver clips to the whole framebuffer and re-transmits all 37152 SPI bytes on
+//! every atomic update, so it currently only lets us skip a commit entirely when
 //! nothing moved.
 
 use std::fs::{File, OpenOptions};
@@ -19,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use drm::buffer::{Buffer, DrmFourcc};
 use drm::control::dumbbuffer::DumbBuffer;
-use drm::control::{connector, crtc, framebuffer, Device as ControlDevice, FbCmd2Flags, Mode};
+use drm::control::{connector, crtc, framebuffer, Device as ControlDevice, Mode};
 use drm::Device as DrmDevice;
 
 use crate::pixel::Rect;
@@ -41,6 +44,10 @@ impl AsFd for Card {
 impl DrmDevice for Card {}
 impl ControlDevice for Card {}
 
+/// `DRM_FORMAT_Y8`: fourcc `GREY`, 8-bit luminance, one plane. Spelt out because the
+/// drm-fourcc crate flipctl builds against has no name for it yet.
+const Y8: u32 = u32::from_le_bytes(*b"GREY");
+
 pub struct KmsSink {
     /// Whether the panel is somebody else's right now.
     detached: bool,
@@ -49,7 +56,7 @@ pub struct KmsSink {
     connector: connector::Handle,
     mode: Mode,
     buffer: DumbBuffer,
-    /// True when the framebuffer is R8, so a row is copied rather than expanded.
+    /// True when the framebuffer is Y8, so a row is copied rather than expanded.
     greyscale: bool,
     fb: framebuffer::Handle,
     modeset_done: bool,
@@ -116,50 +123,53 @@ impl KmsSink {
 
         let (w, h) = mode.size();
 
-        // XRGB8888 by default, R8 on request.
+        // Y8 when the kernel takes it, XRGB8888 otherwise.
         //
         // The panel is 8-bit greyscale and so is everything this crate renders, so
         // an XRGB8888 buffer means expanding every pixel to 32bpp (147KB of writes
         // per frame) for the driver to reduce it again with a per-pixel conversion,
-        // while R8 makes the commit a row copy.
+        // while a one-byte format makes the commit a row copy and the kernel's part
+        // a memcpy. DRM_FORMAT_Y8 is that format by its right name: luminance, which
+        // is what the panel takes, rather than R8's red channel. The driver advertises
+        // it since `drm/tiny: flipper-one-display: add support for Y8 format`.
         //
-        // The kernel does support R8 now (drm: flipper-one-display: add
-        // DRM_FORMAT_R8 support) and it measurably helps. On this device, one
-        // binary with the format switched by the variable below, 41 samples per
-        // format and two rounds each, commit time was:
+        // A kernel without it fails the ADDFB2 below and the sink falls back to
+        // XRGB8888, so one binary runs on either and is merely slower on the old one.
+        // `FLIPPER_FB_FORMAT=xrgb` forces the fallback, for measuring against it.
         //
-        //     XRGB8888   mean 18.85ms  median 18.90  p90 19.4  max 22.5
-        //     R8         mean 16.20ms  median 16.20  p90 16.3  max 18.5
-        //
-        // 2.6ms of that is the format conversion. The remaining 14.86ms is the SPI
-        // transfer itself, 37152 bytes at 20MHz, which no format can shorten. Worth
-        // knowing that a 60fps frame allows 16.67ms, which XRGB8888 does not fit
-        // and R8 does.
-        //
-        // R8 is what ships now, because with hosted apps the panel is committed from a
-        // greyscale frame on every turn and the expansion is pure waste: 147KB written
-        // for the driver to reduce again. A kernel without R8 fails the ADDFB2 below
-        // and falls back to XRGB8888, so nothing breaks where it is unsupported, and
-        // `FLIPPER_FB_FORMAT=xrgb` forces the old path for comparison.
-        //
-        // R8 has to go through ADDFB2 with an explicit fourcc. Legacy ADDFB carries
-        // only depth and bpp, and the kernel maps 8/8 to C8, a palette format the
-        // driver does not advertise, so the attempt would fail for the wrong reason
-        // and silently never be used.
-        let want_r8 =
+        // The framebuffer is added through the ffi crate rather than the safe one:
+        // the drm crate names formats with an enum that predates Y8, and there is no
+        // way past it. The dumb buffer itself is format-agnostic, one byte per pixel
+        // is one byte per pixel, so it is created with the enum's R8 and the kernel is
+        // told the truth when the framebuffer is made from it.
+        let want_y8 =
             !std::env::var("FLIPPER_FB_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("xrgb"));
 
         let (mut buffer, fb, greyscale) = match card
             .create_dumb_buffer((u32::from(w), u32::from(h)), DrmFourcc::R8, 8)
             .and_then(|b| {
-                if want_r8 {
+                if want_y8 {
                     Ok(b)
                 } else {
                     Err(std::io::Error::other("XRGB8888 asked for"))
                 }
             })
             .and_then(|b| {
-                card.add_planar_framebuffer(&Planar(&b), FbCmd2Flags::empty()).map(|fb| (b, fb))
+                let handle = u32::from(Buffer::handle(&b));
+                let made = drm_ffi::mode::add_fb2(
+                    card.as_fd(),
+                    u32::from(w),
+                    u32::from(h),
+                    Y8,
+                    &[handle, 0, 0, 0],
+                    &[Buffer::pitch(&b), 0, 0, 0],
+                    &[0; 4],
+                    &[0; 4],
+                    0,
+                )?;
+                drm::control::from_u32::<framebuffer::Handle>(made.fb_id)
+                    .ok_or_else(|| std::io::Error::other("kernel returned framebuffer 0"))
+                    .map(|fb| (b, fb))
             }) {
             Ok((b, fb)) => (b, fb, true),
             Err(_) => {
@@ -222,39 +232,12 @@ impl KmsSink {
     }
 }
 
-/// A single-plane view of a dumb buffer, so it can be added with ADDFB2.
-///
-/// `DumbBuffer` implements only `Buffer`, which the legacy ADDFB path takes, and
-/// that path cannot express a fourcc.
-struct Planar<'a>(&'a DumbBuffer);
-
-impl drm::buffer::PlanarBuffer for Planar<'_> {
-    fn size(&self) -> (u32, u32) {
-        Buffer::size(self.0)
-    }
-    fn format(&self) -> DrmFourcc {
-        Buffer::format(self.0)
-    }
-    fn modifier(&self) -> Option<drm::buffer::DrmModifier> {
-        None
-    }
-    fn pitches(&self) -> [u32; 4] {
-        [Buffer::pitch(self.0), 0, 0, 0]
-    }
-    fn handles(&self) -> [Option<drm::buffer::Handle>; 4] {
-        [Some(Buffer::handle(self.0)), None, None, None]
-    }
-    fn offsets(&self) -> [u32; 4] {
-        [0; 4]
-    }
-}
-
 impl KmsSink {
-    /// The framebuffer format in use, for the startup log. R8 means the driver
+    /// The framebuffer format in use, for the startup log. Y8 means the driver
     /// took the panel's own format and the commit is a row copy.
     pub fn format(&self) -> &'static str {
         if self.greyscale {
-            "R8"
+            "Y8"
         } else {
             "XRGB8888"
         }
