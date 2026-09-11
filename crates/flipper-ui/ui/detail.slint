@@ -14,10 +14,12 @@
 import { FlipperTheme } from "@theme";
 import { SoftBar } from "frame.slint";
 import { StatusBar, PanelStatus } from "statusbar.slint";
+import { ChevronStatus } from "list.slint";
 
 // One row. `kind` picks the shape; the unused fields are ignored.
 export struct DetailRow {
-    // 0 label and value, 1 divider, 2 gauge, 3 full-width text.
+    // 0 label and value, 1 divider, 2 gauge, 3 full-width text, 4 a value the
+    // left and right keys change, drawn between the chevrons the settings rows use.
     kind: int,
     label: string,
     value: string,
@@ -38,6 +40,12 @@ export component DetailBody inherits Rectangle {
     // column. Set by a hosted app, where the label is the app's to choose; a
     // first-party screen leaves it off and keeps its fixed geometry.
     in property <bool> fit_gauges;
+    // Which chevron on a kind 4 row is flashing: 0 none, 1 left, 2 right.
+    in property <int> arrow_pressed;
+    // Whether that row's value is at an end of its range: the chevron pointing past
+    // the end is left out, which is how the panel says "no further".
+    in property <bool> at_start;
+    in property <bool> at_end;
 
     in property <int> battery: PanelStatus.battery;
     in property <bool> charging: PanelStatus.charging;
@@ -106,7 +114,7 @@ export component DetailBody inherits Rectangle {
         // Label. Kind 3 is a full-width line with no value; a gauge keeps its
         // label in the same column as every other row so the left edge is one
         // straight line down the screen.
-        if row.kind == 0 || row.kind == 2 || row.kind == 3: Text {
+        if row.kind == 0 || row.kind == 2 || row.kind == 3 || row.kind == 4: Text {
             x: root.left;
             y: 0;
             text: row.label;
@@ -124,6 +132,31 @@ export component DetailBody inherits Rectangle {
             font-size: 16px;
             font-family: "Busy9px";
             color: parent.ink;
+        }
+
+        // An adjustable value. The chevrons are drawn whether or not anything is
+        // selected, because a detail screen has no cursor: the row that takes left
+        // and right is the only one on the screen that does, and chevrons that
+        // appeared on selection would be chevrons that never appeared at all.
+        //
+        // Its own width rather than the row's: ChevronStatus measures in from its
+        // right edge by status_pad_r, which is the menu's margin and not this
+        // screen's, so the width is widened by the difference to put the `>` on the
+        // same line the values above it end on.
+        if row.kind == 4: ChevronStatus {
+            x: 0;
+            y: 0;
+            width: root.right + FlipperTheme.status_pad_r;
+            height: FlipperTheme.item_h;
+            face: 0;
+            text_y: 0;
+            fixed_slot: false;
+            active: true;
+            value: row.value;
+            ink: parent.ink;
+            arrow_pressed: root.arrow_pressed;
+            at_start: root.at_start;
+            at_end: root.at_end;
         }
 
         // A group separator, drawn on the row's centre line so the rows above and

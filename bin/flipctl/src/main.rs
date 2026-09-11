@@ -438,8 +438,10 @@ mod demo {
 mod detail {
     use std::time::Duration;
 
-    use flipper_ui::sysinfo::{self, Battery, Disk, Modem, Route, UpdateStatus};
+    use flipper_ui::boot;
+    use flipper_ui::sysinfo::{self, Battery, Disk, Modem, Route};
     use flipper_ui::ui::DetailRow;
+    use flipper_ui::update::{self, Channel, Image};
     use flipper_ui::watch::Watch;
 
     use super::demo::Detail;
@@ -449,22 +451,6 @@ mod detail {
     const SD_DISK: &str = "/dev/mmcblk0";
     /// QMI control device for the cell-identity calls.
     const QMI_DEV: &str = "/dev/cdc-wdm0";
-    /// The checkout the Update screen compares, and the unit to restart after.
-    ///
-    /// Overridable because the deployed tree is copied with tar, not cloned, so by
-    /// default it is not a git repository at all and the screen reports the
-    /// prototype's own "Cannot read local repo". Pointing these at a real checkout
-    /// makes the screen work without a rebuild.
-    fn update_repo() -> String {
-        std::env::var("FLIPPER_UPDATE_REPO").unwrap_or_else(|_| "/home/user/flipctl-slint".into())
-    }
-    fn update_branch() -> String {
-        std::env::var("FLIPPER_UPDATE_BRANCH").unwrap_or_else(|_| "dev".into())
-    }
-    fn update_unit() -> String {
-        std::env::var("FLIPPER_UPDATE_UNIT").unwrap_or_else(|_| "flipctl.service".into())
-    }
-
     fn row(label: &str, value: &str) -> DetailRow {
         DetailRow { kind: 0, label: label.into(), value: value.into(), percent: 0, dim: false }
     }
@@ -485,6 +471,13 @@ mod detail {
     /// A full-width line with no value column.
     fn text(label: &str) -> DetailRow {
         DetailRow { kind: 3, ..row(label, "") }
+    }
+
+    /// A value the left and right keys change, between the chevrons the settings
+    /// rows use. A detail screen has no cursor, so a screen may have one of these
+    /// and the keys act on it wherever they are pressed.
+    fn chevron(label: &str, value: &str) -> DetailRow {
+        DetailRow { kind: 4, ..row(label, value) }
     }
 
     /// The two disks the Disk info screen shows.
@@ -519,17 +512,162 @@ mod detail {
         Disk(Watch<Disks>),
         Battery(Watch<Battery>),
         Modem(Watch<Modem>),
-        Update(Watch<UpdateStatus>),
+        /// Not a poller either: the channel is a choice, not a measurement, and
+        /// asking what it offers is a read rather than a watch.
+        Update(UpdateScreen),
     }
 
-    /// Progress of an update the user started. Separate from the poller, which
-    /// only ever checks.
+    /// How far an update the user started has got.
+    ///
+    /// There is no `Done`: the last thing a successful update does is hand this
+    /// kernel over to the installer's, so the screen that would show it is gone.
+    /// `Booting` is as far as this ever gets, and seeing it stay is the symptom of
+    /// a kexec that did not take.
     #[derive(Clone, PartialEq, Eq)]
     pub enum Applying {
         No,
-        Running,
-        Done,
+        /// Bytes fetched, and bytes expected when the server said.
+        Fetching(u64, u64),
+        Booting,
         Failed(String),
+    }
+
+    /// The Update screen: the builds the server has, which channel is showing and
+    /// which of its builds is chosen.
+    ///
+    /// The builds are read once, in a thread, because learning a build's channel
+    /// means fetching that build's own manifest and there are twenty of them. Asking
+    /// as the keys moved is what made this screen freeze for seconds a press.
+    pub struct UpdateScreen {
+        pub channel: Channel,
+        /// Which of `on_channel()` is chosen, an index into that filtered list.
+        pub at: usize,
+        builds: std::cell::RefCell<Option<Result<Vec<Image>, String>>>,
+        loading: std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<Vec<Image>, String>>>>,
+        dirty: std::cell::Cell<bool>,
+    }
+
+    impl UpdateScreen {
+        fn open() -> Self {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let started = std::thread::Builder::new()
+                .name("update-list".into())
+                .spawn(move || {
+                    let _ = tx.send(update::catalogue(update::DEPTH));
+                })
+                .is_ok();
+            Self {
+                channel: Channel::default(),
+                at: 0,
+                builds: std::cell::RefCell::new(
+                    (!started).then(|| Err("cannot ask the build server".to_string())),
+                ),
+                loading: std::cell::RefCell::new(started.then_some(rx)),
+                dirty: std::cell::Cell::new(true),
+            }
+        }
+
+        /// Take the catalogue if the thread has finished. Called from the loop, which
+        /// is also what asks whether the screen is dirty.
+        fn collect(&self) {
+            let mut loading = self.loading.borrow_mut();
+            let Some(rx) = loading.as_ref() else { return };
+            match rx.try_recv() {
+                Ok(found) => {
+                    *self.builds.borrow_mut() = Some(found);
+                    *loading = None;
+                    self.dirty.set(true);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(_) => {
+                    *self.builds.borrow_mut() = Some(Err("the build server did not answer".into()));
+                    *loading = None;
+                    self.dirty.set(true);
+                }
+            }
+        }
+
+        /// Still waiting on the first read.
+        pub fn loading(&self) -> bool {
+            self.loading.borrow().is_some()
+        }
+
+        /// The builds on the channel showing, newest first.
+        pub fn on_channel(&self) -> Result<Vec<Image>, String> {
+            match self.builds.borrow().as_ref() {
+                None => Ok(Vec::new()),
+                Some(Err(e)) => Err(e.clone()),
+                Some(Ok(all)) => {
+                    Ok(all.iter().filter(|i| i.branch == self.channel.branch()).cloned().collect())
+                }
+            }
+        }
+
+        /// The build the screen is offering, if there is one.
+        pub fn chosen(&self) -> Option<Image> {
+            self.on_channel().ok()?.get(self.at).cloned()
+        }
+
+        /// Move along this channel's builds. No wrapping: the ends of a list of
+        /// versions are ends, and the chevrons go out at them to say so.
+        pub fn step_version(&mut self, forward: bool) -> bool {
+            let total = self.on_channel().map(|v| v.len()).unwrap_or(0);
+            if total == 0 {
+                return false;
+            }
+            let next =
+                if forward { (self.at + 1).min(total - 1) } else { self.at.saturating_sub(1) };
+            let moved = next != self.at;
+            self.at = next;
+            self.dirty.set(true);
+            moved
+        }
+
+        /// Next channel, back to its newest build.
+        pub fn step_channel(&mut self) {
+            self.channel = self.channel.step(true);
+            self.at = 0;
+            self.dirty.set(true);
+        }
+
+        pub fn at_start(&self) -> bool {
+            self.at == 0
+        }
+
+        pub fn at_end(&self) -> bool {
+            let total = self.on_channel().map(|v| v.len()).unwrap_or(0);
+            total == 0 || self.at + 1 >= total
+        }
+
+        /// Fetch the chosen build and boot it, on a thread: a download is seconds and
+        /// the panel has to keep drawing what it is doing.
+        ///
+        /// The boot is the same call the boot menu makes, so the device tree is
+        /// assembled and this machine's memory node grafted onto it by the one piece
+        /// of code that knows to.
+        pub fn start(&self) -> Option<std::sync::mpsc::Receiver<update::Progress>> {
+            let image = self.chosen()?;
+            let to = self.channel.image_path();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::Builder::new()
+                .name("update-fetch".into())
+                .spawn(move || {
+                    let mut placed = None;
+                    update::fetch(&image, &to, |p| {
+                        if let update::Progress::Ready(path) = &p {
+                            placed = Some(path.clone());
+                        }
+                        let _ = tx.send(p);
+                    });
+                    let Some(path) = placed else { return };
+                    // Returns only when it failed to leave, or on a dry run.
+                    if let Err(e) = boot::boot_image(&path) {
+                        let _ = tx.send(update::Progress::Failed(e));
+                    }
+                })
+                .ok()?;
+            Some(rx)
+        }
     }
 
     impl Live {
@@ -577,14 +715,7 @@ mod detail {
                     Modem::default(),
                     || sysinfo::modem(QMI_DEV),
                 )),
-                // update.js checks once on enter. A `git fetch` is not something to
-                // repeat on a timer, so the interval is long enough to mean "once".
-                Detail::Update => Live::Update(Watch::spawn(
-                    "watch-update",
-                    Duration::from_secs(3600),
-                    UpdateStatus::default(),
-                    || sysinfo::update_check(&update_repo(), &update_branch()),
-                )),
+                Detail::Update => Live::Update(UpdateScreen::open()),
             }
         }
 
@@ -595,7 +726,10 @@ mod detail {
                 Live::Disk(w) => w.take_dirty(),
                 Live::Battery(w) => w.take_dirty(),
                 Live::Modem(w) => w.take_dirty(),
-                Live::Update(w) => w.take_dirty(),
+                Live::Update(u) => {
+                    u.collect();
+                    u.dirty.replace(false)
+                }
             }
         }
 
@@ -608,40 +742,49 @@ mod detail {
                 Live::Disk(w) => disk_rows(&w.get()),
                 Live::Battery(w) => battery_rows(&w.get()),
                 Live::Modem(w) => modem_rows(&w.get()),
-                Live::Update(w) => update_rows(&w.get(), applying),
+                Live::Update(u) => update_rows(u, applying),
             }
         }
 
-        /// Soft-key labels. Only Update has a second action.
+        /// Soft-key labels. Only Update has actions of its own.
         pub fn buttons(&self, applying: &Applying) -> [&'static str; 5] {
             match self {
-                Live::Update(w) => {
-                    let u = w.get();
-                    if *applying == Applying::No && u.available {
-                        ["Back", "", "", "", "Update"]
-                    } else {
-                        ["Back", "", "", "", ""]
-                    }
+                Live::Update(u) if *applying == Applying::No && !u.loading() => {
+                    // The channel is a soft key rather than a second chevron row: a
+                    // detail screen has no cursor, so two adjustable rows would have
+                    // no way to say which one left and right are for.
+                    let update = if u.chosen().is_some() { "Update" } else { "" };
+                    ["Back", "Channel", "", "", update]
                 }
                 _ => ["Back", "", "", "", ""],
             }
         }
 
-        /// Start the update, on its own thread: `git pull` takes seconds.
-        pub fn start_update(&self) -> Option<std::sync::mpsc::Receiver<Result<(), String>>> {
-            let Live::Update(_) = self else { return None };
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::Builder::new()
-                .name("update-apply".into())
-                .spawn(move || {
-                    let _ = tx.send(sysinfo::update_apply(
-                        &update_repo(),
-                        &update_branch(),
-                        &update_unit(),
-                    ));
-                })
-                .ok()?;
-            Some(rx)
+        /// Start the update, if this is the screen that has one to start.
+        pub fn start_update(&self) -> Option<std::sync::mpsc::Receiver<update::Progress>> {
+            let Live::Update(u) = self else { return None };
+            u.start()
+        }
+
+        /// Whether the chevron row, if this screen has one, is at either end.
+        pub fn chevron_ends(&self) -> (bool, bool) {
+            match self {
+                Live::Update(u) => (u.at_start(), u.at_end()),
+                _ => (false, false),
+            }
+        }
+
+        /// Move along the versions, if this is the screen that has any.
+        pub fn step_version(&mut self, forward: bool) -> bool {
+            let Live::Update(u) = self else { return false };
+            u.step_version(forward)
+        }
+
+        /// Next channel, if this is the screen that has one.
+        pub fn step_channel(&mut self) -> bool {
+            let Live::Update(u) = self else { return false };
+            u.step_channel();
+            true
         }
     }
 
@@ -893,59 +1036,58 @@ mod detail {
         (out, top)
     }
 
-    /// Cut `text` to the row width, ending in "..".
+    /// What the screen shows: the version with its chevrons, the channel, a rule, and
+    /// then either the build's facts or how the update is getting on.
     ///
-    /// update.js truncates at a fixed 42 characters because its font is fixed
-    /// pitch at 6px. Busy9px is not, so a character count either overflows or
-    /// wastes room; measuring against the real advance table is the only way to
-    /// fill the row exactly. The budget is the row's own span, margin to margin.
-    fn elide(text: &str) -> String {
-        use flipper_ui::font::ROW;
-        let budget = flipper_ui::theme::PANEL_W - 2 * flipper_ui::theme::metric::MARGIN_H as u16;
-        if ROW.text_width(text) <= budget {
-            return text.to_string();
+    /// While an update runs the version is shown plain, not between chevrons: the
+    /// download already has its URL, and a row that invited a change it could not make
+    /// would be a lie.
+    fn update_rows(u: &UpdateScreen, applying: &Applying) -> Vec<DetailRow> {
+        if u.loading() {
+            return vec![dim("Checking the build server...", "")];
         }
-        let ellipsis = ROW.text_width("..");
-        let mut out = String::new();
-        for c in text.chars() {
-            let mut probe = out.clone();
-            probe.push(c);
-            if ROW.text_width(&probe) + ellipsis > budget {
-                break;
-            }
-            out = probe;
-        }
-        out.push_str("..");
-        out
-    }
-
-    /// update.js, whose seven states this reproduces one for one.
-    fn update_rows(u: &UpdateStatus, applying: &Applying) -> Vec<DetailRow> {
+        let builds = match u.on_channel() {
+            Ok(builds) => builds,
+            Err(why) => return vec![row("Channel", u.channel.name()), divider(), dim(&why, "")],
+        };
+        let Some(image) = builds.get(u.at) else {
+            let none = format!("no {} build to install", u.channel.name());
+            return vec![row("Channel", u.channel.name()), divider(), dim(&none, "")];
+        };
+        let version = if *applying == Applying::No {
+            chevron("Version", &image.version)
+        } else {
+            row("Version", &image.version)
+        };
+        let mut out = vec![version, row("Channel", u.channel.name()), divider()];
         match applying {
-            Applying::Running => return vec![row("Updating...", ""), dim("Do not power off", "")],
-            Applying::Done => return vec![row("Update complete", ""), dim("Restarting...", "")],
-            Applying::Failed(e) => return vec![row("Update failed", ""), dim(e, "")],
-            Applying::No => {}
-        }
-        if !u.checked {
-            return vec![dim("Checking for updates...", "")];
-        }
-        if !u.error.is_empty() {
-            return vec![row("Error", &u.error), dim(&elide(&u.current_commit), "")];
-        }
-        if !u.available {
-            return vec![row("No updates available", ""), dim(&elide(&u.current_commit), "")];
-        }
-        let mut out = vec![row(
-            &format!(
-                "{} new commit{}",
-                u.commits.len(),
-                if u.commits.len() == 1 { "" } else { "s" }
-            ),
-            "",
-        )];
-        for c in &u.commits {
-            out.push(dim(&elide(c), ""));
+            Applying::Fetching(so_far, total) => {
+                let got = update::megabytes(*so_far);
+                let said = if *total > 0 {
+                    format!("{got} of {}", update::megabytes(*total))
+                } else {
+                    got
+                };
+                out.push(row("Downloading", &said));
+                out.push(dim("Do not power off", ""));
+            }
+            Applying::Booting => {
+                out.push(row("Starting the installer", ""));
+                out.push(dim("Do not power off", ""));
+            }
+            Applying::Failed(e) => {
+                out.push(row("Update failed", ""));
+                out.push(dim(e, ""));
+            }
+            Applying::No => {
+                if !image.revision.is_empty() {
+                    out.push(dim("Commit", image.short()));
+                }
+                if image.bytes > 0 {
+                    out.push(dim("Size", &update::megabytes(image.bytes)));
+                }
+                out.push(dim("Reboots into the installer", ""));
+            }
         }
         out
     }
@@ -2141,10 +2283,23 @@ fn png(
                 screen.set_breadcrumb("> Network > Ethernet".into());
                 screen.set_screen(Screen::Ethernet);
             }
+            // The Update screen reads the build server in a thread. A frame of it
+            // saying so is not the frame worth looking at, so this waits for the
+            // answer, bounded: a server that is down still gets its frame.
+            if let detail::Live::Update(u) = &open {
+                let until = std::time::Instant::now() + Duration::from_secs(15);
+                while u.loading() && std::time::Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(50));
+                    open.take_dirty();
+                }
+            }
             let rows = open.rows(&applying);
             screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
             screen.set_detail_offset(select.unwrap_or(0));
             screen.set_detail_buttons(demo::labels(&open.buttons(&applying)));
+            let (at_start, at_end) = open.chevron_ends();
+            screen.set_detail_at_start(at_start);
+            screen.set_detail_at_end(at_end);
             // Routing info and 5G Modem live under Network, the rest under
             // Settings, which is what the real breadcrumb derives from the stack.
             let parent = match want {
@@ -2634,7 +2789,7 @@ fn panel(
     // even though the poller has nothing new.
     let mut detail_dirty = true;
     let mut applying = detail::Applying::No;
-    let mut apply_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>> = None;
+    let mut apply_rx: Option<std::sync::mpsc::Receiver<flipper_ui::update::Progress>> = None;
     // Animated icons advance while a row is selected. Driven here rather than by
     // Slint's animation-tick so the loop knows a repaint is due.
     let mut tick = 0i32;
@@ -3986,6 +4141,25 @@ fn panel(
                     FlipperKey::Escape | FlipperKey::Back => {
                         press.soft(FlipperKey::Escape, 0, Instant::now() + flash);
                     }
+                    // An adjustable row, acted on here rather than after a flash:
+                    // nothing is being opened, so the chevron blinks and the value
+                    // moves at once, as the Wi-Fi page's toggle does. A detail
+                    // screen has no cursor, so these reach the one row that takes
+                    // them wherever they are pressed.
+                    FlipperKey::View if !open.buttons(&applying)[1].is_empty() => {
+                        press.soft(FlipperKey::View, 1, Instant::now() + flash);
+                    }
+                    FlipperKey::Left | FlipperKey::Right => {
+                        let forward = event.key == FlipperKey::Right;
+                        if live.as_mut().is_some_and(|l| l.step_version(forward)) {
+                            arrow = Some((
+                                if forward { 2 } else { 1 },
+                                Instant::now()
+                                    + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
+                            ));
+                            detail_dirty = true;
+                        }
+                    }
                     _ => {}
                 }
                 continue;
@@ -4367,9 +4541,15 @@ fn panel(
                         }
                         FlipperKey::Run => {
                             if let Some(rx) = live.as_ref().and_then(|l| l.start_update()) {
-                                applying = detail::Applying::Running;
+                                applying = detail::Applying::Fetching(0, 0);
                                 apply_rx = Some(rx);
                                 eprintln!("action         update starting");
+                            }
+                        }
+                        // The channel, on the soft key its label sits over.
+                        FlipperKey::View => {
+                            if live.as_mut().is_some_and(|l| l.step_channel()) {
+                                detail_dirty = true;
                             }
                         }
                         _ => {}
@@ -5047,22 +5227,41 @@ fn panel(
                 screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
                 screen.set_detail_offset(detail_offset);
                 screen.set_detail_buttons(demo::labels(&open.buttons(&applying)));
+                let (at_start, at_end) = open.chevron_ends();
+                screen.set_detail_at_start(at_start);
+                screen.set_detail_at_end(at_end);
             }
             if let Some(rx) = apply_rx.as_ref() {
-                match rx.try_recv() {
-                    Ok(Ok(())) => {
-                        applying = detail::Applying::Done;
-                        apply_rx = None;
-                        detail_dirty = true;
+                // Every report the fetch thread has made since the last frame, so a
+                // download that outruns the panel shows its newest number rather
+                // than working through a queue one frame at a time.
+                loop {
+                    match rx.try_recv() {
+                        Ok(flipper_ui::update::Progress::Fetching(so_far, total)) => {
+                            applying = detail::Applying::Fetching(so_far, total);
+                            detail_dirty = true;
+                        }
+                        // On disk. What follows is the kexec, which does not return.
+                        Ok(flipper_ui::update::Progress::Ready(path)) => {
+                            eprintln!("action         update fetched to {}", path.display());
+                            applying = detail::Applying::Booting;
+                            detail_dirty = true;
+                        }
+                        Ok(flipper_ui::update::Progress::Failed(e)) => {
+                            eprintln!("action         update failed: {e}");
+                            applying = detail::Applying::Failed(e);
+                            apply_rx = None;
+                            detail_dirty = true;
+                            break;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        // The thread is gone. On a real update this is the kexec
+                        // having happened, and nothing after it runs.
+                        Err(_) => {
+                            apply_rx = None;
+                            break;
+                        }
                     }
-                    Ok(Err(e)) => {
-                        eprintln!("action         update failed: {e}");
-                        applying = detail::Applying::Failed(e);
-                        apply_rx = None;
-                        detail_dirty = true;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                    Err(_) => apply_rx = None,
                 }
             }
         }

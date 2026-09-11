@@ -1528,6 +1528,36 @@ pub fn boot_now(p: &Profile) -> Result<bool, String> {
     Ok(dry)
 }
 
+/// kexec into a FIT image that is not a profile: the system updater's, from /tmp.
+///
+/// `boot-profile --image` reads the configuration for this board out of the FIT by
+/// `compatible`, takes the kernel, ramdisk and device tree from it, grafts this
+/// machine's memory node onto that tree and hands over with `systemctl kexec`. The
+/// graft is the part not to reimplement: a shipped tree carries no `/memory`, and
+/// without the running one kexec hangs after the handover while a hard reset works,
+/// which reads as the image being broken.
+///
+/// Nothing is read from the boot order and no profile is consulted. There is no
+/// filesystem running this kernel to pivot into, so it always kexecs.
+///
+/// `FLIPCTL_BOOT_DRY_RUN=1` loads the image, unloads it and stays, which is
+/// `Ok(true)`; a real boot does not return at all. The caller has to say so on
+/// screen, because nothing else will.
+pub fn boot_image(image: &std::path::Path) -> Result<bool, String> {
+    let Some(path) = image.to_str() else {
+        return Err("the image path is not text".into());
+    };
+    let dry = std::env::var_os("FLIPCTL_BOOT_DRY_RUN").is_some();
+    let mut args: Vec<&str> = vec!["boot-profile"];
+    if dry {
+        args.push("--dry-run");
+    }
+    args.push("--image");
+    args.push(path);
+    run(&args)?;
+    Ok(dry)
+}
+
 /// Load the image a profile would kexec into, while nobody is pressing anything.
 ///
 /// The loading is the slow half of a kexec boot and none of it is I/O: one syscall

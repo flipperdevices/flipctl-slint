@@ -100,6 +100,10 @@ export component Root inherits Window {
     in property <int> detail_offset;
     in property <[string]> detail_buttons;
     in property <int> detail_pressed_slot: -1;
+    // Whether the chevron row's value is at either end of its range, so that chevron
+    // is not drawn. One pair for the screen: a detail screen has at most one such row.
+    in property <bool> detail_at_start;
+    in property <bool> detail_at_end;
 
     // The Ethernet page.
     in property <[EthLink]> eth_links;
@@ -282,6 +286,9 @@ export component Root inherits Window {
         rows: root.detail_rows;
         breadcrumb: root.breadcrumb;
         offset: root.detail_offset;
+        arrow_pressed: root.arrow_pressed;
+        at_start: root.detail_at_start;
+        at_end: root.detail_at_end;
         buttons: root.detail_buttons;
         pressed_slot: root.detail_pressed_slot;
     }

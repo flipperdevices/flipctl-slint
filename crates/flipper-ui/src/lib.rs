@@ -41,6 +41,7 @@ pub mod sysinfo;
 pub mod system;
 #[cfg(feature = "tui")]
 pub mod tui;
+pub mod update;
 pub mod watch;
 pub mod wifi;
 #[cfg(feature = "wayland")]
