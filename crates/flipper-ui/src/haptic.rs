@@ -61,8 +61,18 @@ struct FfEffect {
 const EFFECT_SIZE: usize = std::mem::size_of::<FfEffect>();
 
 /// `_IOW('E', nr, size)`.
-const fn iow(nr: u32, size: u32) -> libc::c_ulong {
-    ((1 << 30) | (size << 16) | ((b'E' as u32) << 8) | nr) as libc::c_ulong
+///
+/// `libc::Ioctl`, not `c_ulong`: `ioctl(3)` takes its request as `unsigned long`
+/// on glibc and as `int` on musl, and the alias is what lets one source build
+/// against either. Naming the glibc type here is what broke a musl build, and it
+/// broke only here -- every other ioctl in the tree passes a constant libc itself
+/// declares, and those already carry the right type per platform.
+///
+/// The direction bit is 0x40000000, which still fits a signed 32-bit int. A
+/// `_IOWR` helper would not: its 0xc0000000 comes out negative on musl, exactly
+/// as the C macro's does.
+const fn iow(nr: u32, size: u32) -> libc::Ioctl {
+    ((1 << 30) | (size << 16) | ((b'E' as u32) << 8) | nr) as libc::Ioctl
 }
 
 pub struct Haptic {
