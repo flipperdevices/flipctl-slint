@@ -140,7 +140,12 @@ usage: flipctl [--panel [--kms-device PATH]] [--png PATH]
   --select N     with --screen, which row is selected
   --modal        with --png, draw the airplane-block dialog over the screen
   --press SLOT   with --png, draw soft slot SLOT in its pressed state. The real
-                 flash is 30ms, too brief to catch over the remote view";
+                 flash is 30ms, too brief to catch over the remote view
+
+Switches read from the environment, all off unless set:
+  FLIPCTL_KEYLOG    every key, and where it was sent
+  FLIPCTL_PERFLOG   the per-second cost of hosting an app and of taking cards
+  FLIPCTL_FRAMELOG  how much of a captured frame is not black, every tenth one";
 
 #[cfg(feature = "slint")]
 mod demo {
@@ -3103,6 +3108,11 @@ fn panel(
     // delivered. Everywhere else the two are the same thing and are read together.
     let mut pending_remote: Vec<flipper_ui::KeyEvent> = Vec::new();
     let keylog = std::env::var_os("FLIPCTL_KEYLOG").is_some();
+    // The per-second cost probes. Off by default: they are how hosting was measured
+    // and they are worth having, but a line a second for as long as an app is in
+    // front is 86400 a day into a journal on flash, to say a number nobody is reading.
+    // FLIPCTL_PERFLOG=1 turns them back on.
+    let perflog = std::env::var_os("FLIPCTL_PERFLOG").is_some();
     /// What paces one turn of the loop.
     ///
     /// Headless has no SPI transfer to wait on, so without this it spins a core
@@ -3517,6 +3527,153 @@ fn panel(
             );
         }
 
+        // The browser view's retry is machine work too: a port busy at startup frees
+        // up on its own, and waiting for the panel to come back before noticing meant
+        // a long app session ran deaf to the end of it.
+        // A port that was taken at startup will not stay taken: the usual cause is
+        // an older instance still shutting down, and the endpoint carries the two
+        // keys the compositor reserves for us, so keep trying rather than running on
+        // half deaf.
+        #[cfg(feature = "remote")]
+        if web.is_none() && remote.is_some() && rebind.elapsed() >= Duration::from_secs(5) {
+            rebind = Instant::now();
+            let addr = remote.clone().unwrap_or_default();
+            let dir = assets_dir.clone();
+            if let Ok(view) =
+                flipper_ui::remote::RemoteView::bind_with_peer(&addr, dir, peer.clone())
+            {
+                eprintln!("remote view    http://{}/ (bound on retry)", view.addr());
+                web = Some(view);
+            }
+        }
+
+        // Housekeeping that belongs to the machine rather than to the screen, and so
+        // runs whoever owns the panel. It sits above the front-app section because that
+        // section ends in a `continue` once an app is drawing: anything below it is
+        // skipped for as long as an app is in front. A launch waiting on its dependency
+        // check was skipped exactly that way, so `flipctl open` on a second app answered
+        // "starting" and then never started it until a key press took the loop down the
+        // other path.
+        // Every app is a client of one compositor, so a compositor fault is not one
+        // app's problem but all of them at once. Said plainly rather than left as a
+        // panel of dead cards, and the next launch starts a new one.
+        #[cfg(feature = "wayland")]
+        if host.as_mut().is_some_and(|h| !h.alive()) {
+            let lost: Vec<String> = wl_apps.iter().map(|a| a.name.clone()).collect();
+            eprintln!(
+                "host           the compositor died, taking {} with it",
+                if lost.is_empty() { "no apps".into() } else { lost.join(", ") }
+            );
+            for name in &lost {
+                recents.close(name);
+            }
+            wl_apps.clear();
+            host = None;
+            if wl_front.is_some() {
+                wl_front = None;
+                screen.set_screen(launched_from);
+                window.request_redraw();
+            }
+        }
+
+        match deps.take() {
+            Some(Deps::Checking(idx, rx)) => match rx.try_recv() {
+                Ok(m) if m.is_empty() => {
+                    // Nothing missing: start it, no questions.
+                    if let Some(entry) = apps.get(idx as usize) {
+                        {
+                            let _ = entry;
+                            launched_from = Screen::Apps;
+                            #[cfg(feature = "wayland")]
+                            {
+                                wl_front = start_hosted(entry, &apps, &mut host, &mut wl_apps);
+                                wl_since = Instant::now();
+                                wl_drawn = false;
+                                wl_fresh = true;
+                                // As above: a press that predates the app is not a
+                                // request to leave it.
+                                drop_pending = true;
+                                if wl_front.is_some() {
+                                    recents.open(&entry.name, flipper_ui::switcher::Kind::App);
+                                    continue;
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                }
+                Ok(m) => {
+                    eprintln!(
+                        "app            {} needs {}",
+                        apps.get(idx as usize).map_or("?", |a| a.name.as_str()),
+                        m.summary()
+                    );
+                    // Name what is being agreed to: consenting to an install
+                    // without being told what is not consent.
+                    let count = m.apt.len();
+                    let mut lines = vec![format!(
+                        "Install {count} package{}?",
+                        if count == 1 { "" } else { "s" }
+                    )];
+                    lines.extend(dialog_wrap(&m.apt));
+                    dialog = Some(Dialog {
+                        lines,
+                        left: "Cancel",
+                        right: "Install",
+                        act: DialogAct::InstallDeps,
+                    });
+                    deps = Some(Deps::Asking(idx, m));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    deps = Some(Deps::Checking(idx, rx));
+                }
+                Err(_) => {}
+            },
+            Some(Deps::Installing(idx, log_rx, done_rx)) => {
+                while let Ok(line) = log_rx.try_recv() {
+                    deps_log.extend(wrap_log(&line));
+                }
+                match done_rx.try_recv() {
+                    Ok(result) => {
+                        if let Err(e) = &result {
+                            eprintln!("app            install failed: {e}");
+                            // Only when it is not already there: stderr is
+                            // streamed into the log, so the reason for a failed
+                            // apt run has usually been shown once already and the
+                            // title says it failed.
+                            if !deps_log.iter().any(|l| e.contains(l.trim())) {
+                                deps_log.extend(wrap_log(e));
+                            }
+                        }
+                        if deps_detached {
+                            // Done, so the log is worth seeing again: this is where Ready or
+                            // Failed is said, and where the Run key sits. Not over a hosted
+                            // app, though -- taking the panel from something the user is
+                            // using, to announce a build, is worse than letting them come
+                            // back to it through the card.
+                            #[cfg(feature = "wayland")]
+                            let busy = wl_front.is_some();
+                            #[cfg(not(feature = "wayland"))]
+                            let busy = false;
+                            eprintln!(
+                                "app            {} finished while its log was hidden: {}{}",
+                                apps.get(idx as usize).map_or("?", |a| a.name.as_str()),
+                                if result.is_ok() { "ok" } else { "failed" },
+                                if busy { ", staying hidden" } else { ", showing it" }
+                            );
+                            deps_detached = busy;
+                        }
+                        deps = Some(Deps::Done(idx, result));
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        deps = Some(Deps::Installing(idx, log_rx, done_rx));
+                    }
+                    Err(_) => deps = Some(Deps::Done(idx, Err("install thread died".into()))),
+                }
+            }
+            other => deps = other,
+        }
+
         // The host compositor runs with no input devices at all: flipctl holds the
         // buttons, so every press is forwarded, physical and simulated alike. That is
         // the whole of the forwarding policy now, with no allowlist, no held-key rule
@@ -3656,15 +3813,18 @@ fn panel(
             }
 
             // What hosting costs, once a second, because it is the number that decides
-            // whether compositing every app is the right trade.
+            // whether compositing every app is the right trade. Counted always and
+            // said only when asked: the counters are cheap and the line is not.
             if app_frames > 0 && app_counted.elapsed() >= Duration::from_secs(1) {
                 let secs = app_counted.elapsed().as_secs_f32();
-                eprintln!(
-                    "app            {front} {:.1} fps, capture {:.1} ms, fit and commit {:.1} ms",
-                    app_frames as f32 / secs,
-                    app_capture.as_secs_f32() * 1000.0 / app_frames as f32,
-                    app_commit.as_secs_f32() * 1000.0 / app_frames as f32,
-                );
+                if perflog {
+                    eprintln!(
+                        "app            {front} {:.1} fps, capture {:.1} ms, fit and commit {:.1} ms",
+                        app_frames as f32 / secs,
+                        app_capture.as_secs_f32() * 1000.0 / app_frames as f32,
+                        app_commit.as_secs_f32() * 1000.0 / app_frames as f32,
+                    );
+                }
                 app_frames = 0;
                 app_capture = Duration::ZERO;
                 app_commit = Duration::ZERO;
@@ -3760,6 +3920,9 @@ fn panel(
             // hundred and twenty. The wait is short while frames are flowing, because
             // this is also the loop that serves the buttons, and a key cannot wait
             // longer than the frame it is meant to cause.
+            // Nothing below this may be work the loop owes every turn: this `continue`
+            // skips the whole rest of the body, and what has to happen whoever owns the
+            // panel goes in the housekeeping section above instead.
             if leave.is_none() && wl_front.is_some() && wl_drawn {
                 if bench {
                     continue;
@@ -5047,28 +5210,6 @@ fn panel(
             }
         }
 
-        // Every app is a client of one compositor, so a compositor fault is not one
-        // app's problem but all of them at once. Said plainly rather than left as a
-        // panel of dead cards, and the next launch starts a new one.
-        #[cfg(feature = "wayland")]
-        if host.as_mut().is_some_and(|h| !h.alive()) {
-            let lost: Vec<String> = wl_apps.iter().map(|a| a.name.clone()).collect();
-            eprintln!(
-                "host           the compositor died, taking {} with it",
-                if lost.is_empty() { "no apps".into() } else { lost.join(", ") }
-            );
-            for name in &lost {
-                recents.close(name);
-            }
-            wl_apps.clear();
-            host = None;
-            if wl_front.is_some() {
-                wl_front = None;
-                screen.set_screen(launched_from);
-                window.request_redraw();
-            }
-        }
-
         // Only while the deck is open, and every card it is showing: the neighbours
         // are on screen as strips beside the focused one, and a strip of a picture
         // that stopped moving is exactly what a dead tile looks like. An app with no
@@ -5110,13 +5251,15 @@ fn panel(
         #[cfg(feature = "wayland")]
         if card_count > 0 && card_reported.elapsed() >= Duration::from_secs(1) {
             let secs = card_reported.elapsed().as_secs_f32();
-            eprintln!(
-                "cards          {} in {:.1}s, {:.1} ms each, {:.0}% of a core",
-                card_count,
-                secs,
-                card_time.as_secs_f32() * 1000.0 / card_count as f32,
-                card_time.as_secs_f32() * 100.0 / secs,
-            );
+            if perflog {
+                eprintln!(
+                    "cards          {} in {:.1}s, {:.1} ms each, {:.0}% of a core",
+                    card_count,
+                    secs,
+                    card_time.as_secs_f32() * 1000.0 / card_count as f32,
+                    card_time.as_secs_f32() * 100.0 / secs,
+                );
+            }
             card_count = 0;
             card_time = Duration::ZERO;
             card_reported = Instant::now();
@@ -5284,103 +5427,6 @@ fn panel(
 
         // Advance the dependency flow. Each stage hands over on its own channel,
         // so nothing here waits on a subprocess.
-        match deps.take() {
-            Some(Deps::Checking(idx, rx)) => match rx.try_recv() {
-                Ok(m) if m.is_empty() => {
-                    // Nothing missing: start it, no questions.
-                    if let Some(entry) = apps.get(idx as usize) {
-                        {
-                            let _ = entry;
-                            launched_from = Screen::Apps;
-                            #[cfg(feature = "wayland")]
-                            {
-                                wl_front = start_hosted(entry, &apps, &mut host, &mut wl_apps);
-                                wl_since = Instant::now();
-                                wl_drawn = false;
-                                wl_fresh = true;
-                                // As above: a press that predates the app is not a
-                                // request to leave it.
-                                drop_pending = true;
-                                if wl_front.is_some() {
-                                    recents.open(&entry.name, flipper_ui::switcher::Kind::App);
-                                    continue;
-                                }
-                            }
-                            continue;
-                        }
-                    }
-                }
-                Ok(m) => {
-                    eprintln!(
-                        "app            {} needs {}",
-                        apps.get(idx as usize).map_or("?", |a| a.name.as_str()),
-                        m.summary()
-                    );
-                    // Name what is being agreed to: consenting to an install
-                    // without being told what is not consent.
-                    let count = m.apt.len();
-                    let mut lines = vec![format!(
-                        "Install {count} package{}?",
-                        if count == 1 { "" } else { "s" }
-                    )];
-                    lines.extend(dialog_wrap(&m.apt));
-                    dialog = Some(Dialog {
-                        lines,
-                        left: "Cancel",
-                        right: "Install",
-                        act: DialogAct::InstallDeps,
-                    });
-                    deps = Some(Deps::Asking(idx, m));
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    deps = Some(Deps::Checking(idx, rx));
-                }
-                Err(_) => {}
-            },
-            Some(Deps::Installing(idx, log_rx, done_rx)) => {
-                while let Ok(line) = log_rx.try_recv() {
-                    deps_log.extend(wrap_log(&line));
-                }
-                match done_rx.try_recv() {
-                    Ok(result) => {
-                        if let Err(e) = &result {
-                            eprintln!("app            install failed: {e}");
-                            // Only when it is not already there: stderr is
-                            // streamed into the log, so the reason for a failed
-                            // apt run has usually been shown once already and the
-                            // title says it failed.
-                            if !deps_log.iter().any(|l| e.contains(l.trim())) {
-                                deps_log.extend(wrap_log(e));
-                            }
-                        }
-                        if deps_detached {
-                            // Done, so the log is worth seeing again: this is where Ready or
-                            // Failed is said, and where the Run key sits. Not over a hosted
-                            // app, though -- taking the panel from something the user is
-                            // using, to announce a build, is worse than letting them come
-                            // back to it through the card.
-                            #[cfg(feature = "wayland")]
-                            let busy = wl_front.is_some();
-                            #[cfg(not(feature = "wayland"))]
-                            let busy = false;
-                            eprintln!(
-                                "app            {} finished while its log was hidden: {}{}",
-                                apps.get(idx as usize).map_or("?", |a| a.name.as_str()),
-                                if result.is_ok() { "ok" } else { "failed" },
-                                if busy { ", staying hidden" } else { ", showing it" }
-                            );
-                            deps_detached = busy;
-                        }
-                        deps = Some(Deps::Done(idx, result));
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        deps = Some(Deps::Installing(idx, log_rx, done_rx));
-                    }
-                    Err(_) => deps = Some(Deps::Done(idx, Err("install thread died".into()))),
-                }
-            }
-            other => deps = other,
-        }
 
         // The install log is its own screen: it can outlast several frames and has
         // more lines than a dialog can hold.
@@ -5902,23 +5948,6 @@ fn panel(
             if max_frames.is_some_and(|max| frames >= max) {
                 report(frames, &started, render_total, commit_total, commit_worst);
                 return Ok(());
-            }
-        }
-
-        // A port that was taken at startup will not stay taken: the usual cause is
-        // an older instance still shutting down, and the endpoint carries the two
-        // keys the compositor reserves for us, so keep trying rather than running on
-        // half deaf.
-        #[cfg(feature = "remote")]
-        if web.is_none() && remote.is_some() && rebind.elapsed() >= Duration::from_secs(5) {
-            rebind = Instant::now();
-            let addr = remote.clone().unwrap_or_default();
-            let dir = assets_dir.clone();
-            if let Ok(view) =
-                flipper_ui::remote::RemoteView::bind_with_peer(&addr, dir, peer.clone())
-            {
-                eprintln!("remote view    http://{}/ (bound on retry)", view.addr());
-                web = Some(view);
             }
         }
 

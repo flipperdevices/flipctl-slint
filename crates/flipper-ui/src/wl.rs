@@ -895,6 +895,10 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
     // whether a blank frame is worth publishing and whether a still screen may be
     // re-copied without waiting for damage.
     let mut drew_yet = false;
+    // How many of those leading blank frames were dropped, reported once with the
+    // first real one rather than a line each: it is eight or so per launch, and the
+    // count is the whole of what they said.
+    let mut held_back = 0u32;
     // Which of the two buffers the outstanding request belongs to.
     #[cfg(feature = "gpu")]
     let mut slot = 0usize;
@@ -1036,10 +1040,10 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
                 if !drew_yet {
                     let lit = next.iter().filter(|b| **b != 0).count();
                     if lit == 0 {
-                        eprintln!("wl: blank frame before the first draw, held back");
+                        held_back += 1;
                         continue;
                     }
-                    eprintln!("wl: first frame has {lit} lit bytes");
+                    eprintln!("wl: first frame has {lit} lit bytes, {held_back} blank held back");
                     drew_yet = true;
                 }
                 // Is there a picture in it at all? Counted only when asked for, since
