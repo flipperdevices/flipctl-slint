@@ -149,6 +149,95 @@ impl AppEntry {
     pub fn icon_path(&self) -> Option<PathBuf> {
         (!self.icon.is_empty()).then(|| self.dir.join(&self.icon))
     }
+
+    /// Whether the image put this here. A shipped app is the profile's, updates
+    /// with it, and is not the user's to remove.
+    pub fn shipped(&self) -> bool {
+        crate::bundle::shipped(&self.bundle)
+    }
+
+    /// What this app occupies: the file itself, what it has written while running,
+    /// and what flipctl keeps about it.
+    pub fn footprint(&self) -> Footprint {
+        Footprint {
+            file: tree_size(&self.bundle),
+            data: tree_size(&self.work_dir()),
+            cache: tree_size(&crate::bundle::cache_dir(&self.key)),
+        }
+    }
+
+    /// Remove the app: its file, its working directory and its cache.
+    ///
+    /// Only the user's own. A shipped app is refused rather than attempted, because
+    /// the failure would otherwise be a permissions error on a path the person did
+    /// not choose, and the fact worth telling them is that the image owns it.
+    ///
+    /// A script's folder is left alone: it is the user's Apps tree, and may hold
+    /// other apps.
+    pub fn uninstall(&self) -> std::io::Result<()> {
+        if self.shipped() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "part of the image",
+            ));
+        }
+        std::fs::remove_file(&self.bundle)?;
+        for dir in [self.work_dir(), crate::bundle::cache_dir(&self.key)] {
+            if dir.is_dir() {
+                std::fs::remove_dir_all(&dir)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Bytes an app accounts for, in the three places it can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Footprint {
+    /// The AppImage or the script.
+    pub file: u64,
+    /// Its working directory: saves, configuration, whatever it wrote.
+    pub data: u64,
+    /// The manifest and icon flipctl copied out of a bundle.
+    pub cache: u64,
+}
+
+impl Footprint {
+    pub fn total(&self) -> u64 {
+        self.file + self.data + self.cache
+    }
+}
+
+/// Bytes under `path`: the file's own size, or the sum of everything below a
+/// directory. Symlinks are counted as themselves and not followed, so a link out of
+/// the tree cannot make an app look like the disk. A path that is not there is 0,
+/// which is the right answer for a work directory the app never created.
+pub fn tree_size(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return 0 };
+    if !meta.is_dir() {
+        return meta.len();
+    }
+    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    entries.flatten().map(|e| tree_size(&e.path())).sum()
+}
+
+/// A byte count in the few characters a row's right edge allows: whole units, one
+/// decimal only below ten so "1.5 MB" survives and "40 MB" does not become "40.3".
+pub fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else if value < 10.0 {
+        format!("{value:.1} {}", UNITS[unit])
+    } else {
+        format!("{value:.0} {}", UNITS[unit])
+    }
 }
 
 /// A path as one shell word.
@@ -530,6 +619,108 @@ fn run_logged(cmd: &mut Command, log: &mut impl FnMut(String)) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One scratch tree per process, with the data and cache homes pointed into it
+    /// once. Tests run on threads of one process and the environment is shared, so a
+    /// home set per test is a home another test reads half way through; each test
+    /// takes a subdirectory and a key of its own instead.
+    fn scratch(name: &str) -> PathBuf {
+        static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        let root = ROOT.get_or_init(|| {
+            let root = std::env::temp_dir().join(format!("flipper-ui-app-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            std::env::set_var("XDG_DATA_HOME", root.join("data"));
+            std::env::set_var("XDG_CACHE_HOME", root.join("cache"));
+            root
+        });
+        let mine = root.join(name);
+        std::fs::create_dir_all(&mine).unwrap();
+        mine
+    }
+
+    fn entry_at(bundle: PathBuf, key: &str) -> AppEntry {
+        AppEntry {
+            name: "Thing".into(),
+            dir: bundle.parent().unwrap().to_path_buf(),
+            key: key.into(),
+            bundle,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_footprint_counts_the_file_and_what_the_app_left_behind() {
+        let root = scratch("footprint");
+        let file = root.join("Apps/thing.py");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, vec![0u8; 300]).unwrap();
+        let app = entry_at(file, "footprint");
+        assert_eq!(app.footprint(), Footprint { file: 300, data: 0, cache: 0 }, "nothing run yet");
+
+        let work = app.work_dir();
+        std::fs::create_dir_all(work.join("deep")).unwrap();
+        std::fs::write(work.join("save"), vec![0u8; 1000]).unwrap();
+        std::fs::write(work.join("deep/more"), vec![0u8; 24]).unwrap();
+        let cache = crate::bundle::cache_dir(&app.key);
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("app.toml"), vec![0u8; 50]).unwrap();
+        let fp = app.footprint();
+        assert_eq!((fp.file, fp.data, fp.cache), (300, 1024, 50));
+        assert_eq!(fp.total(), 1374);
+    }
+
+    #[test]
+    fn a_symlink_out_of_the_tree_is_not_followed() {
+        let root = scratch("symlink");
+        let dir = root.join("d");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(root.join("big"), vec![0u8; 4096]).unwrap();
+        std::os::unix::fs::symlink(root.join("big"), dir.join("link")).unwrap();
+        assert!(tree_size(&dir) < 4096, "the link's own size, not its target's");
+        assert_eq!(tree_size(&root.join("absent")), 0);
+    }
+
+    #[test]
+    fn uninstall_removes_the_file_and_the_directories_and_nothing_else() {
+        let root = scratch("uninstall");
+        let apps = root.join("Apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        let file = apps.join("thing.py");
+        std::fs::write(&file, b"x").unwrap();
+        std::fs::write(apps.join("other.py"), b"y").unwrap();
+        let app = entry_at(file.clone(), "uninstall");
+        std::fs::create_dir_all(app.work_dir()).unwrap();
+        std::fs::create_dir_all(crate::bundle::cache_dir(&app.key)).unwrap();
+
+        app.uninstall().unwrap();
+        assert!(!file.exists());
+        assert!(!app.work_dir().exists());
+        assert!(!crate::bundle::cache_dir(&app.key).exists());
+        assert!(apps.join("other.py").exists(), "the folder and its other apps stay");
+    }
+
+    #[test]
+    fn a_shipped_app_is_refused_not_attempted() {
+        let app = entry_at(
+            PathBuf::from(crate::bundle::SYSTEM).join("radio-aarch64.fap.AppImage"),
+            "shipped",
+        );
+        assert!(app.shipped());
+        let err = app.uninstall().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(err.to_string(), "part of the image");
+        assert!(!entry_at(PathBuf::from("/home/user/Apps/x.py"), "mine").shipped());
+    }
+
+    #[test]
+    fn sizes_read_in_whole_units() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(900), "900 B");
+        assert_eq!(human_size(1536), "1.5 KB");
+        assert_eq!(human_size(41_716_736), "40 MB");
+        assert_eq!(human_size(1_400_000), "1.3 MB");
+    }
 
     /// A program that is not there says which one, since the log screen is all
     /// the context there is.

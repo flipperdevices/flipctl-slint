@@ -24,7 +24,7 @@ export { ListItem, IdleLink, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetR
 // screens for an app to be shown on: an app draws its own, and what flipctl puts up
 // while one is running is the app's own frame. `app_log` is ours, the log of an
 // install.
-export enum Screen { idle, menu, detail, ethernet, wifi, boot, apps, app_log, text_input, switcher }
+export enum Screen { idle, menu, detail, ethernet, wifi, boot, apps, app_log, text_input, switcher, manager, manager_info }
 
 export component Root inherits Window {
     width: FlipperTheme.panel_w;
@@ -235,7 +235,8 @@ export component Root inherits Window {
 
     // The app list and an app's form are both lists of label/value rows, so they
     // reuse MenuBody rather than duplicating it. Only the model differs.
-    if root.screen == Screen.apps: MenuBody {
+    // The app manager's lists are this same body: two screens, never both up.
+    if root.screen == Screen.apps || root.screen == Screen.manager: MenuBody {
         battery: root.battery;
         charging: root.charging;
         wifi_connected: root.wifi_connected;
@@ -279,7 +280,7 @@ export component Root inherits Window {
         pressed_slot: root.app_pressed_slot;
     }
 
-    if root.screen == Screen.detail: DetailBody {
+    if root.screen == Screen.detail || root.screen == Screen.manager_info: DetailBody {
         battery: root.battery;
         charging: root.charging;
         wifi_connected: root.wifi_connected;

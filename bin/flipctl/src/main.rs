@@ -136,7 +136,8 @@ usage: flipctl [--panel [--kms-device PATH]] [--png PATH]
                  shows by default
   --assets DIR   where device.png lives (default: crates/flipper-ui/assets/remote)
   --png PATH     render one frame headlessly and write an 8-bit greyscale PNG
-  --screen NAME  with --png, render a menu level: main, network or settings
+  --screen NAME  with --png, render a menu level: main, network or settings;
+                 a detail screen by name; or manager and manager-info
   --select N     with --screen, which row is selected
   --modal        with --png, draw the airplane-block dialog over the screen
   --press SLOT   with --png, draw soft slot SLOT in its pressed state. The real
@@ -290,6 +291,9 @@ mod demo {
         /// The app list, which this binary discovers at startup rather than
         /// declaring in the table.
         Apps,
+        /// The app manager: what is installed, what each one occupies, and taking
+        /// one away.
+        Manager,
         /// Reboot. menu.js POSTs /api/system/reboot and pushes no scene.
         Reboot,
         /// Open one of the detail screens.
@@ -439,6 +443,7 @@ mod demo {
             Row { label: "Desktop Computer", icon: 1, frames: 1, stat: Stat::None, act: Act::Unported },
             Row { label: "Boot Menu", icon: 2, frames: 1, stat: Stat::None, act: Act::Boot },
             Row { label: "Apps", icon: 3, frames: 9, stat: Stat::None, act: Act::Apps },
+            Row { label: "App Manager", icon: 3, frames: 9, stat: Stat::None, act: Act::Manager },
             Row { label: "Files", icon: 4, frames: 10, stat: Stat::None, act: Act::Nothing },
             Row { label: "Network", icon: 5, frames: 10, stat: Stat::None, act: Act::Sub(&NETWORK) },
             Row { label: "Testing: flipctl2", icon: 6, frames: 9, stat: Stat::None, act: Act::Flipctl2 },
@@ -1436,6 +1441,13 @@ fn launch_card(
         screen.set_screen(Screen::Apps);
         return;
     }
+    if name == MANAGER_TITLE {
+        // The list itself is redrawn by the housekeeping pass, which is where every
+        // other route back into the manager leaves it too.
+        recents.open(name, kind);
+        screen.set_screen(Screen::Manager);
+        return;
+    }
     let Some(menu) = demo::card_menu(name) else {
         eprintln!("switcher       no screen called {name}");
         recents.close(name);
@@ -1459,6 +1471,12 @@ fn open_screen(
     screen: flipper_ui::ui::Screen,
     stack: &[(&'static demo::Menu, i32, i32)],
 ) -> Option<&'static str> {
+    // The manager is a card of its own rather than a menu, so it is named here
+    // rather than found in the stack. Its info page counts as being on it: the
+    // card leads back to the app you were reading about.
+    if matches!(screen, flipper_ui::ui::Screen::Manager | flipper_ui::ui::Screen::ManagerInfo) {
+        return Some(MANAGER_TITLE);
+    }
     if screen != flipper_ui::ui::Screen::Menu {
         return None;
     }
@@ -2158,6 +2176,92 @@ fn app_trail(path: &[String]) -> String {
     path.iter().map(|folder| format!("> {folder}")).collect::<Vec<_>>().join(" ")
 }
 
+/// The manager's own name, which is also the trail over both of its screens.
+#[cfg(feature = "slint")]
+const MANAGER_TITLE: &str = "App Manager";
+
+/// The manager's list: every installed app, flat, whatever folder it sits in, with
+/// the runtime tag beside it as the Apps list shows it so the two read alike.
+#[cfg(feature = "slint")]
+fn manager_labels(apps: &[flipper_ui::AppEntry]) -> Vec<AppLabel> {
+    apps.iter()
+        .map(|app| AppLabel { label: app.name.clone(), status: app.tag().to_string(), icon: None })
+        .collect()
+}
+
+/// Draw the manager's list body: the Install tab, which has nothing in it yet, or the
+/// View tab with every app. Run is offered only where there is something to run.
+#[cfg(feature = "slint")]
+fn apply_manager(
+    screen: &flipper_ui::ui::Root,
+    apps: &[flipper_ui::AppEntry],
+    install: bool,
+    selected: i32,
+    scroll: i32,
+) {
+    let rows = if install { Vec::new() } else { manager_labels(apps) };
+    let run = if !install && !apps.is_empty() { "Run" } else { "" };
+    let buttons: Vec<String> =
+        ["Install", "View", "", "", run].iter().map(|s| s.to_string()).collect();
+    let tab = if install { "Install" } else { "View" };
+    apply_app_list(screen, &rows, selected, &buttons, scroll, &[MANAGER_TITLE.into(), tab.into()]);
+}
+
+/// Where an app is, as the info page says it: the user's folder it sits in, or the
+/// fact that the image put it there, which is the fact that decides whether it can go.
+#[cfg(feature = "slint")]
+fn manager_location(app: &flipper_ui::AppEntry) -> String {
+    if app.shipped() {
+        return "Part of the image".into();
+    }
+    let mut at = String::from("Apps");
+    for folder in &app.group {
+        at.push('/');
+        at.push_str(folder);
+    }
+    at
+}
+
+/// The info page: what the app is, where it is, and what it occupies, the total first
+/// and the parts under it in the dim tone. Parts that are zero are not rows.
+#[cfg(feature = "slint")]
+fn manager_info_rows(app: &flipper_ui::AppEntry) -> Vec<flipper_ui::ui::DetailRow> {
+    use flipper_ui::app::human_size;
+    let fp = app.footprint();
+    let pair = |label: &str, value: String, dim: bool| flipper_ui::ui::DetailRow {
+        kind: 0,
+        label: label.into(),
+        value: value.as_str().into(),
+        percent: 0,
+        dim,
+    };
+    let kind = if app.runtime.is_empty() {
+        "AppImage".to_string()
+    } else {
+        format!("{} script", app.runtime)
+    };
+    let mut rows = vec![
+        pair("Type", kind, false),
+        pair("Location", manager_location(app), false),
+        flipper_ui::ui::DetailRow {
+            kind: 1,
+            label: "".into(),
+            value: "".into(),
+            percent: 0,
+            dim: false,
+        },
+        pair("Size", human_size(fp.total()), false),
+        pair("App", human_size(fp.file), true),
+    ];
+    if fp.data > 0 {
+        rows.push(pair("Data", human_size(fp.data), true));
+    }
+    if fp.cache > 0 {
+        rows.push(pair("Cache", human_size(fp.cache), true));
+    }
+    rows
+}
+
 /// Show the list of apps on the shared list body.
 #[cfg(feature = "slint")]
 fn apply_app_list(
@@ -2416,6 +2520,25 @@ fn png(
         demo::apply_menu(&screen, menu, &net);
         screen.set_selected(select.unwrap_or(0));
         screen.set_screen(Screen::Menu);
+    }
+    // The app manager, over whatever the Apps folders hold: `manager` is the View
+    // tab with `--select` on a row, `manager-info` that row's info page.
+    if let Some(name) = which.as_deref().filter(|n| matches!(*n, "manager" | "manager-info")) {
+        let apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+        let at = select.unwrap_or(0).max(0) as usize;
+        if name == "manager-info" {
+            if let Some(app) = apps.get(at) {
+                let rows = manager_info_rows(app);
+                screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+                let remove = if app.shipped() { "" } else { "Uninstall" };
+                screen.set_detail_buttons(demo::labels(&["Back", "", "", "", remove]));
+                screen.set_breadcrumb(format!("> {MANAGER_TITLE} > {}", app.name).as_str().into());
+                screen.set_screen(Screen::ManagerInfo);
+            }
+        } else {
+            apply_manager(&screen, &apps, false, at as i32, 0);
+            screen.set_screen(Screen::Manager);
+        }
     }
     // Any detail screen can be rendered on its own, with whatever the host it
     // runs on actually reports.
@@ -2688,6 +2811,16 @@ fn panel(
     // user was.
     let mut before_switcher = Screen::Menu;
     let mut launched_from = Screen::Apps;
+    // The app manager: which tab, which row, and which app the info page is about.
+    // `mgr_dirty` asks for its list to be drawn again on the next turn it is on
+    // screen, which is how it comes back right after an app started from it has run:
+    // the list body is shared with the Apps screen, and whatever was drawn into it
+    // in between is not the manager's.
+    let mut mgr_install = false;
+    let mut mgr_selected = 0i32;
+    let mut mgr_scroll = 0i32;
+    let mut mgr_info: Option<usize> = None;
+    let mut mgr_dirty = false;
     // A key whose release belongs to nobody: the one that opened the deck.
     //
     // The deck acts on releases, so the release of the very press that opened it
@@ -2738,6 +2871,8 @@ fn panel(
         None,
         ClearAirplane,
         InstallDeps,
+        /// Remove the app at this index of the list, once the person has said so.
+        Uninstall(usize),
     }
     let mut dialog: Option<Dialog> = None;
     // What was last pushed to the window, so an unchanged dialog is not pushed
@@ -3583,7 +3718,13 @@ fn panel(
                     if let Some(entry) = apps.get(idx as usize) {
                         {
                             let _ = entry;
-                            launched_from = Screen::Apps;
+                            // Back to whichever list started it: the manager runs apps too.
+                            if screen.get_screen() == Screen::Manager {
+                                launched_from = Screen::Manager;
+                                mgr_dirty = true;
+                            } else {
+                                launched_from = Screen::Apps;
+                            }
                             #[cfg(feature = "wayland")]
                             {
                                 wl_front = start_hosted(entry, &apps, &mut host, &mut wl_apps);
@@ -3672,6 +3813,13 @@ fn panel(
                 }
             }
             other => deps = other,
+        }
+
+        // The manager's list, drawn again when it comes back from behind an app it
+        // started: the body it draws into is the Apps screen's too.
+        if mgr_dirty && screen.get_screen() == Screen::Manager {
+            mgr_dirty = false;
+            apply_manager(&screen, &apps, mgr_install, mgr_selected, mgr_scroll);
         }
 
         // The host compositor runs with no input devices at all: flipctl holds the
@@ -4004,6 +4152,7 @@ fn panel(
                                 continue;
                             }
                             launch_card(&screen, &mut recents, &mut stack, &name, kind, &net_now);
+                            mgr_dirty |= name == MANAGER_TITLE;
                         }
                         Some(flipper_ui::switcher::Action::Kill(name, _)) => {
                             // Dropping the session signals the app's process group, so a
@@ -4233,7 +4382,13 @@ fn panel(
                                 if let Some(entry) = apps.get(idx as usize) {
                                     {
                                         let _ = entry;
-                                        launched_from = Screen::Apps;
+                                        // Back to whichever list started it: the manager runs apps too.
+                                        if screen.get_screen() == Screen::Manager {
+                                            launched_from = Screen::Manager;
+                                            mgr_dirty = true;
+                                        } else {
+                                            launched_from = Screen::Apps;
+                                        }
                                         #[cfg(feature = "wayland")]
                                         {
                                             wl_front =
@@ -4603,6 +4758,73 @@ fn panel(
                 continue;
             }
 
+            // The app manager: two tabs on the soft keys, a list to walk, and the
+            // D-pad's Back to leave. The esc key is Install here rather than Back,
+            // which makes this the one screen where the two differ.
+            if screen.get_screen() == Screen::Manager {
+                let count = if mgr_install { 0 } else { apps.len() as i32 };
+                match event.key {
+                    FlipperKey::Down if count > 0 => {
+                        mgr_selected = (mgr_selected + 1).rem_euclid(count);
+                    }
+                    FlipperKey::Up if count > 0 => {
+                        mgr_selected = (mgr_selected - 1).rem_euclid(count);
+                    }
+                    // A tab acts at once and flashes its own key: nothing is being
+                    // opened, so there is no flash to wait out.
+                    FlipperKey::Escape => {
+                        mgr_install = true;
+                        mgr_selected = 0;
+                        mgr_scroll = 0;
+                        press.only(0, Instant::now() + flash);
+                    }
+                    FlipperKey::View => {
+                        mgr_install = false;
+                        mgr_selected = 0;
+                        mgr_scroll = 0;
+                        press.only(1, Instant::now() + flash);
+                    }
+                    FlipperKey::Ok if count > 0 => {
+                        press.row(FlipperKey::Ok, Instant::now() + flash);
+                    }
+                    FlipperKey::Run if count > 0 => {
+                        press.soft(FlipperKey::Run, 4, Instant::now() + flash);
+                    }
+                    FlipperKey::Back => {
+                        menu_again!();
+                        eprintln!("screen         menu");
+                    }
+                    _ => {}
+                }
+                if screen.get_screen() == Screen::Manager {
+                    let count = if mgr_install { 0 } else { apps.len() as i32 };
+                    let visible = flipper_ui::theme::count::LIST_VISIBLE_ROWS;
+                    mgr_selected = mgr_selected.min((count - 1).max(0));
+                    mgr_scroll = mgr_scroll.clamp(
+                        (mgr_selected - visible + 1).max(0),
+                        mgr_selected.min((count - visible).max(0)),
+                    );
+                    apply_manager(&screen, &apps, mgr_install, mgr_selected, mgr_scroll);
+                }
+                continue;
+            }
+
+            // The manager's info page: Back leaves it, and the run key asks to remove
+            // the app, where the image did not put it there.
+            if screen.get_screen() == Screen::ManagerInfo {
+                let removable = mgr_info.and_then(|i| apps.get(i)).is_some_and(|a| !a.shipped());
+                match event.key {
+                    FlipperKey::Back | FlipperKey::Escape => {
+                        press.soft(FlipperKey::Escape, 0, Instant::now() + flash);
+                    }
+                    FlipperKey::Run if removable => {
+                        press.soft(FlipperKey::Run, 4, Instant::now() + flash);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             // The app list, which is a browse: folders are entered and apps are
             // started.
             if screen.get_screen() == Screen::Apps {
@@ -4857,6 +5079,62 @@ fn panel(
                             right: "",
                             act: DialogAct::None,
                         });
+                    } else if let DialogAct::Uninstall(idx) = d.act {
+                        // Confirmed, or backed out of: Back leaves the info page up.
+                        if let Some(app) = apps.get(idx).cloned().filter(|_| slot == Some(4)) {
+                            // A running app holds its files open and its window on the
+                            // panel; removing it under itself is not what anyone meant.
+                            #[cfg(feature = "wayland")]
+                            let running = wl_apps.iter().any(|a| a.name == app.name);
+                            #[cfg(not(feature = "wayland"))]
+                            let running = false;
+                            if running {
+                                dialog = Some(Dialog {
+                                    lines: vec![
+                                        app.name.clone(),
+                                        "is running: close it first".into(),
+                                    ],
+                                    left: "Back",
+                                    right: "",
+                                    act: DialogAct::None,
+                                });
+                            } else {
+                                match app.uninstall() {
+                                    Ok(()) => {
+                                        eprintln!("apps           {} uninstalled", app.name);
+                                        recents.close(&app.name);
+                                        apps = flipper_ui::bundle::discover_all(
+                                            &flipper_ui::bundle::roots(),
+                                        );
+                                        mgr_info = None;
+                                        mgr_selected =
+                                            mgr_selected.min((apps.len() as i32 - 1).max(0));
+                                        mgr_scroll = 0;
+                                        apply_manager(
+                                            &screen,
+                                            &apps,
+                                            mgr_install,
+                                            mgr_selected,
+                                            mgr_scroll,
+                                        );
+                                        screen.set_screen(Screen::Manager);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("apps           {} kept: {e}", app.name);
+                                        let words: Vec<String> =
+                                            e.to_string().split(' ').map(str::to_string).collect();
+                                        let mut lines = vec![app.name.clone()];
+                                        lines.extend(dialog_wrap(&words));
+                                        dialog = Some(Dialog {
+                                            lines,
+                                            left: "Back",
+                                            right: "",
+                                            act: DialogAct::None,
+                                        });
+                                    }
+                                }
+                            }
+                        }
                     }
                 // A modal's row has shown its press; now do what it says. Every one
                 // of these hands the work to a thread: nmcli takes ten to
@@ -5026,6 +5304,40 @@ fn panel(
                         continue;
                     }
                     let _ = begin_app!(at);
+                } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Manager {
+                    if let Some(app) = apps.get(mgr_selected as usize) {
+                        mgr_info = Some(mgr_selected as usize);
+                        let rows = manager_info_rows(app);
+                        screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+                        screen.set_detail_offset(0);
+                        screen.set_detail_at_start(false);
+                        screen.set_detail_at_end(false);
+                        let remove = if app.shipped() { "" } else { "Uninstall" };
+                        screen.set_detail_buttons(demo::labels(&["Back", "", "", "", remove]));
+                        screen.set_breadcrumb(
+                            format!("> {MANAGER_TITLE} > {}", app.name).as_str().into(),
+                        );
+                        screen.set_screen(Screen::ManagerInfo);
+                        eprintln!("screen         app manager: {}", app.name);
+                    }
+                } else if key == FlipperKey::Run && screen.get_screen() == Screen::Manager {
+                    let _ = begin_app!(mgr_selected);
+                } else if key == FlipperKey::Escape && screen.get_screen() == Screen::ManagerInfo {
+                    mgr_info = None;
+                    apply_manager(&screen, &apps, mgr_install, mgr_selected, mgr_scroll);
+                    screen.set_screen(Screen::Manager);
+                } else if key == FlipperKey::Run && screen.get_screen() == Screen::ManagerInfo {
+                    if let Some((at, app)) = mgr_info
+                        .and_then(|i| apps.get(i).map(|a| (i, a)))
+                        .filter(|(_, a)| !a.shipped())
+                    {
+                        dialog = Some(Dialog {
+                            lines: vec![app.name.clone(), "will be removed".into()],
+                            left: "Back",
+                            right: "Uninstall",
+                            act: DialogAct::Uninstall(at),
+                        });
+                    }
                 } else if key == FlipperKey::View && screen.get_screen() == Screen::Idle {
                     screen.set_screen(Screen::Menu);
                     eprintln!("screen         menu");
@@ -5050,6 +5362,21 @@ fn panel(
                             scroll = 0;
                             demo::apply_menu(&screen, next, &net_now);
                             eprintln!("menu           {}", next.title);
+                        }
+                        demo::Act::Manager => {
+                            // A place a person settles into and comes back to, which
+                            // is what earns a card. It stays in the stack until Close
+                            // or Kill, the same as a tracked submenu.
+                            recents.open(MANAGER_TITLE, flipper_ui::switcher::Kind::Screen);
+                            apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+                            mgr_install = false;
+                            mgr_selected = 0;
+                            mgr_scroll = 0;
+                            mgr_info = None;
+                            apply_manager(&screen, &apps, mgr_install, mgr_selected, mgr_scroll);
+                            screen.set_screen(Screen::Manager);
+                            press.cancel();
+                            eprintln!("screen         app manager");
                         }
                         demo::Act::Apps => {
                             // Read the folder again: a bundle copied onto the
@@ -5308,6 +5635,7 @@ fn panel(
                         continue;
                     }
                     launch_card(&screen, &mut recents, &mut stack, &name, kind, &net_now);
+                    mgr_dirty |= name == MANAGER_TITLE;
                 }
                 Some(flipper_ui::switcher::Action::Close) => {
                     eprintln!("switcher       closing back to {:?} (tick)", before_switcher);

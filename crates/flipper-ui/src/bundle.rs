@@ -42,6 +42,19 @@ pub fn roots() -> Vec<PathBuf> {
     vec![PathBuf::from(SYSTEM), root()]
 }
 
+/// Whether a file is one the image shipped rather than one the user added: the one
+/// distinction that decides what may be deleted.
+pub fn shipped(path: &Path) -> bool {
+    path.starts_with(SYSTEM)
+}
+
+/// Where a bundle's manifest and icon are kept once read, by key. Under the user's
+/// cache, whichever root the bundle itself is in, so a shipped bundle costs the
+/// profile nothing and the cache goes with the home.
+pub fn cache_dir(key: &str) -> PathBuf {
+    app::xdg_home("XDG_CACHE_HOME", ".cache").join("flipctl/bundles").join(key)
+}
+
 /// Why a file in the folder is not an app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Skip {
@@ -184,7 +197,7 @@ mod imp {
 
     /// Where what was read out of a bundle is kept.
     fn cache_dir(key: &str) -> PathBuf {
-        app::xdg_home("XDG_CACHE_HOME", ".cache").join("flipctl/bundles").join(key)
+        super::cache_dir(key)
     }
 
     /// What a file turned out to be, kept beside what was read from it.
