@@ -34,7 +34,12 @@ else
     echo "bundler tests: skipped, no python3"
 fi
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck tools/appimage/build.sh tools/appimage/AppRun.in && echo "shellcheck: clean"
+    # Two lines, not `check && echo`. set -e does not fire for a command that is
+    # not the last in an AND-OR list, so the `&&` form swallowed a failing check
+    # entirely: nothing printed, nothing failed, and the suite went on to say it
+    # was all green. Whatever runs here has to stand on its own.
+    shellcheck tools/appimage/build.sh tools/appimage/AppRun.in
+    echo "shellcheck: clean"
 else
     echo "shellcheck: skipped"
 fi
@@ -59,9 +64,10 @@ echo "== no raw colours or panel dimensions =="
 # CI installs both, so there they are checks and not notices.
 echo "== licensing =="
 if command -v reuse >/dev/null 2>&1; then
-    reuse lint --quiet && echo "REUSE: compliant"
+    reuse lint --quiet
+    echo "REUSE: compliant"
 else
-    echo "REUSE: skipped, no reuse (pip install reuse)"
+    echo "REUSE: skipped, no reuse (pipx install reuse)"
 fi
 if cargo about --version >/dev/null 2>&1; then
     # Regenerate into a temporary file and compare: the point is that the
