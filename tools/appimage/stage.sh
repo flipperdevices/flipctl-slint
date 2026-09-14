@@ -53,7 +53,7 @@ staged=0
 for image in "$BUILT"/*.AppImage; do
     [ -e "$image" ] || continue
     name=$(basename "$image")
-    app=${name%-flipctl-aarch64.AppImage}
+    app=${name%-aarch64.fap.AppImage}
     folder=$(folder_of "$app")
     mkdir -p "$DEST${folder:+/$folder}"
     install -m 755 "$image" "$DEST${folder:+/$folder}/$name"

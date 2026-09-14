@@ -91,7 +91,7 @@ runtime = "python"
 #[test]
 fn a_bundle_is_read_without_being_run() {
     let root = apps_folder("read");
-    let file = root.join("radio-flipctl-aarch64.AppImage");
+    let file = root.join("radio-aarch64.fap.AppImage");
     bundle_with(&file, &[("app.toml", RADIO.as_bytes()), ("radio.png", b"png")], None);
 
     let apps = bundle::discover(&root);
@@ -110,7 +110,7 @@ fn a_bundle_is_read_without_being_run() {
     assert!(a.dir.is_absolute());
     assert!(a.dir.join(app::MANIFEST).is_file(), "the manifest is kept at {}", a.dir.display());
     assert_eq!(std::fs::read(a.icon_path().expect("an icon")).unwrap(), b"png");
-    assert!(a.work_dir().ends_with("flipctl/apps/radio-flipctl-aarch64"));
+    assert!(a.work_dir().ends_with("flipctl/apps/radio-aarch64"));
     let (program, args) = a.command();
     assert_eq!(program, Path::new("/bin/sh"));
     assert_eq!(args[1].to_str().unwrap(), format!("'{}'", file.display()));
@@ -225,7 +225,7 @@ fn a_script_is_listed_beside_a_bundle() {
     assert!(script.work_dir().ends_with("flipctl/apps/stations"));
     // What runs it is the launcher, with the script as its argument.
     let launcher = app::AppEntry {
-        bundle: root.join("python-runtime-flipctl-aarch64.AppImage"),
+        bundle: root.join("python-runtime-aarch64.fap.AppImage"),
         provides: "python".into(),
         ..Default::default()
     };
@@ -274,7 +274,7 @@ fn a_launcher_teaches_flipctl_a_new_language() {
     );
 
     bundle_with(
-        &root.join("js-flipctl-aarch64.AppImage"),
+        &root.join("js-aarch64.fap.AppImage"),
         &[("app.toml", b"name = \"JavaScript\"\nwayland = \"./AppRun\"\nprovides = \"js\"\n")],
         None,
     );
@@ -339,7 +339,7 @@ fn a_user_app_shadows_the_one_the_image_ships() {
 
     // Shipped: a JavaScript runtime and a clock written against it.
     bundle_with(
-        &system.join("js-flipctl-aarch64.AppImage"),
+        &system.join("js-aarch64.fap.AppImage"),
         &[("app.toml", b"name = \"JavaScript\"\nwayland = \"./AppRun\"\nprovides = \"js\"\n")],
         None,
     );

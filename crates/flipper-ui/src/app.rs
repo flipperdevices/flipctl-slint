@@ -571,7 +571,7 @@ mod tests {
         let script = AppEntry { runtime: "py".into(), ..Default::default() };
         assert_eq!(script.tag(), "py");
         let native = AppEntry {
-            bundle: PathBuf::from("/home/user/Apps/radio-flipctl-aarch64.AppImage"),
+            bundle: PathBuf::from("/home/user/Apps/radio-aarch64.fap.AppImage"),
             ..Default::default()
         };
         assert_eq!(native.tag(), "");

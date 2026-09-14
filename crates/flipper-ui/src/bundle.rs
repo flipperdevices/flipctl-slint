@@ -145,8 +145,13 @@ pub fn is_bundle(path: &Path) -> bool {
 
 /// What an app is filed under: its path below the folder with the separators turned
 /// into dashes and the extension dropped, or its stem when it is elsewhere.
+///
+/// A bundle is named `<app>-<arch>.fap.AppImage`, which is two extensions deep, and
+/// `file_stem` takes one off. The `.fap` says what the file is rather than what it
+/// is called, so it comes off too and a work directory is not named after it.
 pub fn key(root: &Path, path: &Path) -> String {
     let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = stem.strip_suffix(".fap").unwrap_or(&stem).to_string();
     let Ok(rel) = path.strip_prefix(root) else {
         return stem;
     };
@@ -502,10 +507,7 @@ mod tests {
     #[test]
     fn a_key_is_the_path_below_the_folder() {
         let root = Path::new("/home/user/Apps");
-        assert_eq!(
-            key(root, &root.join("radio-flipctl-aarch64.AppImage")),
-            "radio-flipctl-aarch64"
-        );
+        assert_eq!(key(root, &root.join("radio-aarch64.fap.AppImage")), "radio-aarch64");
         assert_eq!(key(root, &root.join("net/nmap.AppImage")), "net-nmap");
         assert_eq!(key(root, &root.join("stations.py")), "stations");
         assert_eq!(key(root, Path::new("/tmp/other.AppImage")), "other");

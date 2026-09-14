@@ -126,7 +126,7 @@ push_apps() {
         # An app may say which folder of the Apps list it belongs in, which is how the
         # runtimes stay out of the top level. Read from the source manifest, because
         # the bundle carries only the keys flipctl itself reads.
-        id=${name%-flipctl-aarch64.AppImage}
+        id=${name%-aarch64.fap.AppImage}
         folder=$(sed -n 's/^folder *= *"\(.*\)"/\1/p' "$here/apps/$id/app.toml" 2>/dev/null | head -1)
         rel=$name
         [ -n "$folder" ] && rel="$folder/$name"
