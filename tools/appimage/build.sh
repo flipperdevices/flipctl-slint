@@ -265,7 +265,12 @@ fetch_tools
 case "$1" in
     -h|--help) usage ;;
     --all)
+        # A directory under apps/ is an app when it has a manifest, which is how
+        # stage.sh and build_deploy.sh decide it too. The rest are not: a folder of
+        # script apps like "Test Tools" carries no app.toml of its own, and neither
+        # does a __pycache__ the interpreter left behind.
         for dir in "$HERE"/apps/*/; do
+            [ -f "$dir/app.toml" ] || continue
             build_app "$dir"
         done
         ;;
