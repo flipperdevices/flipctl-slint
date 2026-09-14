@@ -11,9 +11,9 @@ it draws with flipctl's own widgets.
 An app is delivered as one file in the user's `Apps` folder, either an AppImage or a
 script:
 
-    /home/user/Apps/radio-flipctl-aarch64.AppImage       Internet radio, at the top of the list
+    /home/user/Apps/radio-aarch64.fap.AppImage       Internet radio, at the top of the list
     /home/user/Apps/stations.py                  a script, run through its runtime
-    /home/user/Apps/Network/nmap-flipctl-aarch64.AppImage inside the Network folder
+    /home/user/Apps/Network/nmap-aarch64.fap.AppImage inside the Network folder
 
 `/home` is the one subvolume every profile shares, so the folder survives a factory
 reset and serves every profile. A folder is a group: the Apps list shows how many
@@ -91,7 +91,7 @@ instead, slower and said in the log.
 
 Started anywhere else, `AppRun` finds `FLIPCTL_HOSTED` unset and hands the file over:
 
-    flipctl open /home/user/Apps/radio-flipctl-aarch64.AppImage
+    flipctl open /home/user/Apps/radio-aarch64.fap.AppImage
 
 connects to the running flipctl's socket at `$XDG_RUNTIME_DIR/flipctl.sock`, one line
 each way, and flipctl lists the bundle if it is new, starts it, or brings it to the
@@ -105,9 +105,9 @@ USB serial are open to it (`systemd/README.md` lists what the image ships for th
 
 ## Bundling
 
-    tools/appimage/build.sh apps/radio        target/appimage/radio-flipctl-aarch64.AppImage
+    tools/appimage/build.sh apps/radio        target/appimage/radio-aarch64.fap.AppImage
     tools/appimage/build.sh --all
-    tools/appimage/build.sh --check target/appimage/radio-flipctl-aarch64.AppImage
+    tools/appimage/build.sh --check target/appimage/radio-aarch64.fap.AppImage
     ./build_deploy.sh --cross --panel --apps  push what was built to ~/Apps
 
 The build runs on the x86_64 host and nothing aarch64 executes there: the program is

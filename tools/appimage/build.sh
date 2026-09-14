@@ -8,7 +8,7 @@
 # and build_deploy.sh --apps pushes it to ~/Apps on the device.
 #
 # Usage:
-#   tools/appimage/build.sh apps/radio      one app, as radio-flipctl-aarch64.AppImage
+#   tools/appimage/build.sh apps/radio      one app, as radio-aarch64.fap.AppImage
 #   tools/appimage/build.sh --all           every app under apps/
 #   tools/appimage/build.sh --check FILE    list a bundle's squashfs and assert its shape
 #   tools/appimage/build.sh --native ...    the same, using the host's own tools
@@ -209,17 +209,19 @@ build_app() {
     echo "== staging $app =="
     in_bundle python3 "$SRCDIR/tools/appimage/bundle.py" stage "apps/$app" "$OUTDIR/$app/AppDir" \
         "${staged[@]}" --version "$version" --repo "$SRCDIR"
-    # The name carries flipctl and the architecture: a folder holds AppImages from
-    # anywhere, and a person looking at it should be able to tell which are for the
-    # panel. What decides that for flipctl is still the manifest inside.
-    echo "== packing $app-flipctl-aarch64.AppImage =="
-    rm -f "$OUT/$app-flipctl-aarch64.AppImage"
+    # `.fap.AppImage`, after the Flipper Zero's own word for an app: a folder holds
+    # AppImages from anywhere, and the double extension says at a glance which ones
+    # are for the panel rather than for a desktop. The architecture is in the name
+    # for the same reason. What actually decides it for flipctl is still the
+    # manifest inside; this is for the person looking at the folder.
+    echo "== packing $app-aarch64.fap.AppImage =="
+    rm -f "$OUT/$app-aarch64.fap.AppImage"
     in_bundle "$OUTDIR/tools/$TOOL" --appimage-extract-and-run -n --comp zstd \
         --mksquashfs-opt -Xcompression-level --mksquashfs-opt 19 \
         --runtime-file "$OUTDIR/tools/runtime-aarch64" \
-        "$OUTDIR/$app/AppDir" "$OUTDIR/$app-flipctl-aarch64.AppImage" 2>&1 | grep -v "^$" | sed 's/^/  /'
-    (cd "$OUT" && sha256sum "$app-flipctl-aarch64.AppImage" > "$app-flipctl-aarch64.AppImage.sha256")
-    echo "== $(du -h "$OUT/$app-flipctl-aarch64.AppImage" | cut -f1) $OUT/$app-flipctl-aarch64.AppImage =="
+        "$OUTDIR/$app/AppDir" "$OUTDIR/$app-aarch64.fap.AppImage" 2>&1 | grep -v "^$" | sed 's/^/  /'
+    (cd "$OUT" && sha256sum "$app-aarch64.fap.AppImage" > "$app-aarch64.fap.AppImage.sha256")
+    echo "== $(du -h "$OUT/$app-aarch64.fap.AppImage" | cut -f1) $OUT/$app-aarch64.fap.AppImage =="
 }
 
 # The squashfs sits right after the runtime, so its offset is the runtime's size.
