@@ -2953,6 +2953,18 @@ fn panel(
     // and 18% of a core while nothing moved.
     let mut switch_dirty = false;
 
+    // The last frame a hosted app put on the glass, kept only while one owns the
+    // panel.
+    //
+    // A browser that connects is primed with the frame flipctl last drew for
+    // itself, which is right on any of our own screens and wrong under an app: our
+    // buffer still holds whatever was up before the app took over, so a viewer
+    // arriving after an app had gone quiet was shown the starting spinner and
+    // nothing after it. The app's own frames are not in that buffer, so they are
+    // kept here.
+    #[cfg(feature = "remote")]
+    let mut app_frame_seen: Vec<flipper_ui::pixel::Gray8> = Vec::new();
+
     // Frame buffer is allocated once and reused, so the steady state does not
     // allocate. flipctl inherits this requirement; the boot menu and the
     // installer benefit from it.
@@ -3605,12 +3617,23 @@ fn panel(
         if let Some(view) = web.as_mut() {
             // A browser opening mid-idle needs the screen as it stands; nothing
             // has changed, so nothing would otherwise be sent.
-            if view.take_new_viewer() && !frame.is_empty() {
-                eprintln!("remote viewer  connected, sending the current frame");
-                view.commit(
-                    Frame::new(&frame, PANEL_W, PANEL_H),
-                    flipper_ui::Rect::new(0, 0, PANEL_W, PANEL_H),
-                )?;
+            if view.take_new_viewer() {
+                // Whichever of the two is actually on the glass. Under an app that
+                // is the app's last frame; our own buffer holds the screen it
+                // covered, and sending that is how a viewer ended up watching a
+                // spinner over an app that had already started.
+                let showing: &[flipper_ui::pixel::Gray8] =
+                    if app_frame_seen.is_empty() { &frame } else { &app_frame_seen };
+                if !showing.is_empty() {
+                    eprintln!(
+                        "remote viewer  connected, sending the current {} frame",
+                        if app_frame_seen.is_empty() { "panel" } else { "app" }
+                    );
+                    view.commit(
+                        Frame::new(showing, PANEL_W, PANEL_H),
+                        flipper_ui::Rect::new(0, 0, PANEL_W, PANEL_H),
+                    )?;
+                }
             }
             while let Some(event) = view.poll() {
                 // Kept apart from the buttons until the console block has had them:
@@ -4191,6 +4214,13 @@ fn panel(
                             let _ =
                                 view.commit(flipper_ui::Frame::new(ready, PANEL_W, PANEL_H), all);
                         }
+                    }
+                    // Kept for a viewer who has not connected yet. Only while the
+                    // browser view is up at all, since it is a panel-sized copy.
+                    #[cfg(feature = "remote")]
+                    if web.is_some() {
+                        app_frame_seen.clear();
+                        app_frame_seen.extend_from_slice(ready);
                     }
                     app_frames += 1;
                     app_capture += captured;
@@ -6742,6 +6772,12 @@ fn panel(
         // takes whole frames, looks perfectly healthy.
         let taking_back = was_app_panel && !app_owns_panel;
         was_app_panel = app_owns_panel;
+        // Ours again, so the app's last frame is no longer what anybody is looking
+        // at and a viewer arriving now wants our own buffer.
+        #[cfg(feature = "remote")]
+        if !app_owns_panel {
+            app_frame_seen.clear();
+        }
         if taking_back {
             window.request_redraw();
         }
