@@ -10,6 +10,7 @@ pub mod bundle;
 pub mod dropdown;
 #[cfg(feature = "device")]
 pub mod evdev;
+pub mod fetch;
 pub mod font;
 #[cfg(feature = "gpu")]
 pub mod gpu;
