@@ -5179,19 +5179,12 @@ fn panel(
                         }
                         press.only(3, Instant::now() + flash);
                     }
-                    // Install, on the Install tab, which asks about the selected
-                    // row exactly as Ok does: two keys for one action, because the
-                    // bar names it and the row is what it acts on.
-                    FlipperKey::Run if mgr_install => {
-                        if count > 0 {
-                            press.soft(FlipperKey::Run, 4, Instant::now() + flash);
-                        }
-                    }
-                    // View, on the View tab, which is the list already showing. It
-                    // flashes and does nothing, rather than being a dead key under
-                    // a drawn button.
-                    FlipperKey::Run => {
-                        press.only(4, Instant::now() + flash);
+                    // The last slot acts on the selected row, and the bar names what
+                    // that is: Install asks about fetching it, View opens what is
+                    // known about it. Either way it is what Ok does, reached by the
+                    // key the button sits over.
+                    FlipperKey::Run if count > 0 => {
+                        press.soft(FlipperKey::Run, 4, Instant::now() + flash);
                     }
                     FlipperKey::Ok if count > 0 => {
                         press.row(FlipperKey::Ok, Instant::now() + flash);
@@ -5875,7 +5868,9 @@ fn panel(
                             }
                         });
                     }
-                } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Manager {
+                } else if (key == FlipperKey::Ok || key == FlipperKey::Run)
+                    && screen.get_screen() == Screen::Manager
+                {
                     if let Some(app) = apps.get(mgr_selected as usize) {
                         mgr_info = Some(mgr_selected as usize);
                         let rows = manager_info_rows(app);
