@@ -4692,6 +4692,19 @@ fn panel(
                     {
                         press.button(FlipperKey::Run, 4, Instant::now() + flash);
                     }
+                    // A dialog with one button is telling you something rather than
+                    // asking, and Ok is the key a person reaches for to say they
+                    // have read it. It acts on the only button there is.
+                    //
+                    // A dialog with no buttons at all is not one of those: a
+                    // download reports its progress in this frame, and Ok there
+                    // would dismiss the transfer's own display while it ran.
+                    FlipperKey::Ok
+                        if dialog.as_ref().unwrap().right.is_empty()
+                            && !dialog.as_ref().unwrap().left.is_empty() =>
+                    {
+                        press.button(FlipperKey::Escape, 0, Instant::now() + flash);
+                    }
                     _ => {}
                 }
                 continue;
