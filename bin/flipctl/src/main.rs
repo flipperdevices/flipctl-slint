@@ -2890,6 +2890,14 @@ fn panel(
     let mut mgr_scroll = 0i32;
     let mut mgr_info: Option<usize> = None;
     let mut mgr_dirty = false;
+    // The same for the Apps list, and true to start with because that body holds
+    // nothing until somebody walks into it.
+    //
+    // Its rows are only built on the way in, which was fine while the only way to
+    // reach it was to walk there. An app started from the browser has no list
+    // behind it, so closing one handed the screen back to an Apps list that had
+    // never been drawn, and it came back empty.
+    let mut apps_dirty = true;
 
     // What the catalogue offers, and how far along asking is.
     //
@@ -3544,6 +3552,7 @@ fn panel(
             }
             // A file copied a second ago is listed too.
             apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+            apps_dirty = true;
             let at = match apps.iter().position(|a| a.bundle == path) {
                 Some(at) => at,
                 None => match flipper_ui::bundle::read(&path, &[]) {
@@ -3973,6 +3982,7 @@ fn panel(
             view.set_running(Vec::new());
             if view.take_apps_changed() {
                 apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+                apps_dirty = true;
                 if let Shop::Open(offers) = &shop {
                     mgr_offers = offer_labels(offers, &flipper_ui::bundle::roots());
                 }
@@ -4092,6 +4102,7 @@ fn panel(
                     // before: a queue can fail on its second file with its first one
                     // installed, so the lists are rebuilt either way.
                     apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+                    apps_dirty = true;
                     if let Shop::Open(offers) = &shop {
                         mgr_offers = offer_labels(offers, &flipper_ui::bundle::roots());
                     }
@@ -4120,6 +4131,25 @@ fn panel(
                     };
                 }
             }
+        }
+
+        // The Apps list, drawn again once it is the screen: after a rediscovery, or
+        // the first time it is shown at all. Flag-driven rather than every pass,
+        // because handing Slint a fresh model is a change even when the rows are
+        // identical, and doing that on a still screen repaints the panel forever.
+        if apps_dirty && screen.get_screen() == Screen::Apps {
+            apps_dirty = false;
+            let rows = app_rows(&apps, &app_path);
+            app_selected = app_selected.min((rows.len() as i32 - 1).max(0));
+            app_scroll = app_scroll.min(app_selected);
+            apply_app_list(
+                &screen,
+                &app_labels(&apps, &rows, &app_path),
+                app_selected,
+                &EMPTY_BUTTONS,
+                app_scroll,
+                &app_path,
+            );
         }
 
         // The manager's list, drawn again when it comes back from behind an app it
@@ -5575,6 +5605,7 @@ fn panel(
                                         apps = flipper_ui::bundle::discover_all(
                                             &flipper_ui::bundle::roots(),
                                         );
+                                        apps_dirty = true;
                                         // The Install tab marks what is already here,
                                         // so removing something makes its rows wrong:
                                         // the app would still read as installed, with
@@ -5927,6 +5958,7 @@ fn panel(
                             // or Kill, the same as a tracked submenu.
                             recents.open(MANAGER_TITLE, flipper_ui::switcher::Kind::Screen);
                             apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+                            apps_dirty = true;
                             mgr_install = false;
                             mgr_selected = 0;
                             mgr_scroll = 0;
@@ -5949,6 +5981,7 @@ fn panel(
                             // device between two visits belongs in this list.
                             let scan = Instant::now();
                             apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+                            apps_dirty = true;
                             eprintln!(
                                 "apps           {} found in {:.1}ms",
                                 apps.len(),
