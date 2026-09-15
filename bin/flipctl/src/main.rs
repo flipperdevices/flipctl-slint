@@ -248,6 +248,8 @@ mod demo {
                 let (chevrons, value) = chevrons_of(&status);
                 ListItem {
                     label: r.label.into(),
+                    // A menu row is a place, not an app: nothing runs it.
+                    tag: Default::default(),
                     status: status.as_str().into(),
                     icon: r.icon,
                     picture: Default::default(),
@@ -2057,6 +2059,9 @@ fn app_rows(apps: &[flipper_ui::AppEntry], path: &[String]) -> Vec<AppRow> {
 #[derive(Clone)]
 struct AppLabel {
     label: String,
+    /// The short word drawn right after the label, in the status tone: the runtime a
+    /// script is run through. Empty for a bundle, which is run by nothing.
+    tag: String,
     status: String,
     /// The app's own icon, a PNG kept beside its manifest. None for a folder or an
     /// app without one.
@@ -2088,6 +2093,7 @@ fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow], path: &[String]) -
         .map(|row| match row {
             AppRow::Folder(name, count) => AppLabel {
                 label: name.clone(),
+                tag: String::new(),
                 status: count.to_string(),
                 icon: folder_icon(path, name),
             },
@@ -2096,6 +2102,7 @@ fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow], path: &[String]) -
             // program, and the row is where that belongs.
             AppRow::App(at) => AppLabel {
                 label: apps.get(*at).map_or_else(String::new, |a| a.name.clone()),
+                tag: String::new(),
                 status: apps.get(*at).map_or_else(String::new, |a| a.tag().to_string()),
                 icon: apps.get(*at).and_then(|a| a.icon_path()),
             },
@@ -2186,7 +2193,12 @@ const MANAGER_TITLE: &str = "App Manager";
 #[cfg(feature = "slint")]
 fn manager_labels(apps: &[flipper_ui::AppEntry]) -> Vec<AppLabel> {
     apps.iter()
-        .map(|app| AppLabel { label: app.name.clone(), status: app.tag().to_string(), icon: None })
+        .map(|app| AppLabel {
+            label: app.name.clone(),
+            tag: String::new(),
+            status: app.tag().to_string(),
+            icon: None,
+        })
         .collect()
 }
 
@@ -2202,14 +2214,21 @@ fn offer_labels(
 ) -> Vec<AppLabel> {
     offers
         .iter()
-        .map(|offer| AppLabel {
-            label: offer.name.clone(),
-            status: if offer.present(roots) {
+        .map(|offer| {
+            let what = if offer.present(roots) {
                 "installed".to_string()
             } else {
                 flipper_ui::app::human_size(offer.size)
-            },
-            icon: None,
+            };
+            AppLabel {
+                label: offer.name.clone(),
+                // The runtime sits with the name, which is what it is about, rather
+                // than with the size, which it is not. A bundle names none and gets
+                // none, so only a script carries one.
+                tag: offer.runtime.clone(),
+                status: what,
+                icon: None,
+            }
         })
         .collect()
 }
@@ -2220,7 +2239,7 @@ fn offer_labels(
 /// would have been.
 #[cfg(feature = "slint")]
 fn offer_notice(say: &str) -> Vec<AppLabel> {
-    vec![AppLabel { label: say.to_string(), status: String::new(), icon: None }]
+    vec![AppLabel { label: say.to_string(), tag: String::new(), status: String::new(), icon: None }]
 }
 
 /// Draw the manager's list body: the Install tab with what the catalogue offers, or
@@ -2332,6 +2351,7 @@ fn apply_app_list(
                 row.icon.as_deref().and_then(icon_cached).unwrap_or((Default::default(), 1));
             flipper_ui::ui::ListItem {
                 label: row.label.as_str().into(),
+                tag: row.tag.as_str().into(),
                 status: row.status.as_str().into(),
                 icon: 0,
                 picture,
