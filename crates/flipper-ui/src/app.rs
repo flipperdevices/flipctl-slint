@@ -280,7 +280,7 @@ pub fn launcher_for<'a>(
 ///
 /// Only column zero counts, so an assignment inside a table is not mistaken for the
 /// manifest. Both quote styles are accepted, and a trailing comment is ignored.
-fn py_string(src: &str, key: &str) -> Option<String> {
+pub(crate) fn py_string(src: &str, key: &str) -> Option<String> {
     src.lines().filter(|l| !l.starts_with(char::is_whitespace)).find_map(|line| {
         let (k, v) = line.split_once('=')?;
         if k.trim() != key {
@@ -291,6 +291,19 @@ fn py_string(src: &str, key: &str) -> Option<String> {
         let rest = &v[1..];
         let end = rest.find(quote)?;
         Some(rest[..end].to_string())
+    })
+}
+
+/// A module-level whole number, e.g. `size = 31230472`. Unquoted, unlike
+/// [`py_string`], and so read separately rather than parsed out of one.
+pub(crate) fn py_u64(src: &str, key: &str) -> Option<u64> {
+    src.lines().filter(|l| !l.starts_with(char::is_whitespace)).find_map(|line| {
+        let (k, v) = line.split_once('=')?;
+        if k.trim() != key {
+            return None;
+        }
+        let digits: String = v.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().ok()
     })
 }
 

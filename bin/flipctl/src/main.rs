@@ -2054,6 +2054,7 @@ fn app_rows(apps: &[flipper_ui::AppEntry], path: &[String]) -> Vec<AppRow> {
 
 /// What each row reads as: a folder says how many apps are inside it.
 #[cfg(feature = "slint")]
+#[derive(Clone)]
 struct AppLabel {
     label: String,
     status: String,
@@ -2189,20 +2190,70 @@ fn manager_labels(apps: &[flipper_ui::AppEntry]) -> Vec<AppLabel> {
         .collect()
 }
 
-/// Draw the manager's list body: the Install tab, which has nothing in it yet, or the
-/// View tab with every app. Run is offered only where there is something to run.
+/// The Install tab's list: what the catalogue offers, with the size to be fetched
+/// beside each, or the word for one that is already here.
+///
+/// The size is what the entry published rather than anything measured, since nothing
+/// has been downloaded yet, and it is the number the confirmation will repeat.
+#[cfg(feature = "slint")]
+fn offer_labels(
+    offers: &[flipper_ui::catalogue::Listing],
+    roots: &[std::path::PathBuf],
+) -> Vec<AppLabel> {
+    offers
+        .iter()
+        .map(|offer| AppLabel {
+            label: offer.name.clone(),
+            status: if offer.present(roots) {
+                "installed".to_string()
+            } else {
+                flipper_ui::app::human_size(offer.size)
+            },
+            icon: None,
+        })
+        .collect()
+}
+
+/// One unselectable row standing in for a list: the catalogue being fetched, or the
+/// reason there is nothing to show. A row rather than a caption because the list body
+/// draws rows, and a person looking at the tab needs the sentence where the apps
+/// would have been.
+#[cfg(feature = "slint")]
+fn offer_notice(say: &str) -> Vec<AppLabel> {
+    vec![AppLabel { label: say.to_string(), status: String::new(), icon: None }]
+}
+
+/// Draw the manager's list body: the Install tab with what the catalogue offers, or
+/// the View tab with every app. Run is offered only where there is something to run.
 #[cfg(feature = "slint")]
 fn apply_manager(
     screen: &flipper_ui::ui::Root,
     apps: &[flipper_ui::AppEntry],
+    offers: &[AppLabel],
+    // Whether the Install rows are apps or a notice standing in for them. A notice
+    // occupies a row but is not a choice, and drawing the selection frame around it
+    // would say it was one.
+    pickable: bool,
     install: bool,
     selected: i32,
     scroll: i32,
 ) {
-    let rows = if install { Vec::new() } else { manager_labels(apps) };
-    let run = if !install && !apps.is_empty() { "Run" } else { "" };
-    let buttons: Vec<String> =
-        ["Install", "View", "", "", run].iter().map(|s| s.to_string()).collect();
+    let selected = if install && !pickable { -1 } else { selected };
+    let rows = if install { offers.to_vec() } else { manager_labels(apps) };
+    // The bar says what this list can do, which is not the same on both tabs.
+    //
+    // On View the right-hand pair are the two lists, Install being the one you are
+    // not on. On Install there is nothing left to switch to, so the word changes
+    // job: it moves to the last slot and becomes the action, the same one Ok does
+    // on the selected row. Which list you are on is the trail's business, above.
+    let buttons: Vec<String> = if install {
+        ["Close", "", "", "", "Install"]
+    } else {
+        ["Close", "", "", "Install", "View"]
+    }
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let tab = if install { "Install" } else { "View" };
     apply_app_list(screen, &rows, selected, &buttons, scroll, &[MANAGER_TITLE.into(), tab.into()]);
 }
@@ -2522,21 +2573,39 @@ fn png(
         screen.set_screen(Screen::Menu);
     }
     // The app manager, over whatever the Apps folders hold: `manager` is the View
-    // tab with `--select` on a row, `manager-info` that row's info page.
-    if let Some(name) = which.as_deref().filter(|n| matches!(*n, "manager" | "manager-info")) {
+    // tab with `--select` on a row, `manager-info` that row's info page, and
+    // `manager-install` the Install tab against whatever `FLIPCTL_APPS_URL` names.
+    //
+    // The catalogue is fetched here and waited for, which the render loop may never
+    // do: this render is one frame and then the process ends, so there is nothing to
+    // keep responsive and no thread worth starting.
+    if let Some(name) =
+        which.as_deref().filter(|n| matches!(*n, "manager" | "manager-info" | "manager-install"))
+    {
         let apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
         let at = select.unwrap_or(0).max(0) as usize;
-        if name == "manager-info" {
+        if name == "manager-install" {
+            let (offers, pickable) = match flipper_ui::catalogue::fetch_index() {
+                Ok(offers) => (offer_labels(&offers, &flipper_ui::bundle::roots()), true),
+                Err(e) => (offer_notice(&e), false),
+            };
+            // Scrolled far enough to show the selected row, so a list longer than the
+            // screen can be checked past its first page.
+            let visible = flipper_ui::theme::count::LIST_VISIBLE_ROWS as usize;
+            let scroll = (at + 1).saturating_sub(visible);
+            apply_manager(&screen, &apps, &offers, pickable, true, at as i32, scroll as i32);
+            screen.set_screen(Screen::Manager);
+        } else if name == "manager-info" {
             if let Some(app) = apps.get(at) {
                 let rows = manager_info_rows(app);
                 screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
                 let remove = if app.shipped() { "" } else { "Uninstall" };
-                screen.set_detail_buttons(demo::labels(&["Back", "", "", "", remove]));
+                screen.set_detail_buttons(demo::labels(&["Back", "", "", "Run", remove]));
                 screen.set_breadcrumb(format!("> {MANAGER_TITLE} > {}", app.name).as_str().into());
                 screen.set_screen(Screen::ManagerInfo);
             }
         } else {
-            apply_manager(&screen, &apps, false, at as i32, 0);
+            apply_manager(&screen, &apps, &[], false, false, at as i32, 0);
             screen.set_screen(Screen::Manager);
         }
     }
@@ -2821,6 +2890,55 @@ fn panel(
     let mut mgr_scroll = 0i32;
     let mut mgr_info: Option<usize> = None;
     let mut mgr_dirty = false;
+
+    // What the catalogue offers, and how far along asking is.
+    //
+    // Asked once, in a thread, the first time the Install tab is opened, because it
+    // is a network round trip and the render loop cannot wait on one. Not asked at
+    // startup either: most of the time nobody opens the tab, and a device with no
+    // network should not spend twenty seconds of every boot finding that out.
+    enum Shop {
+        /// Nobody has opened the tab yet.
+        Closed,
+        /// A thread is fetching the index.
+        Opening(std::sync::mpsc::Receiver<Result<Vec<flipper_ui::catalogue::Listing>, String>>),
+        /// What is on offer.
+        Open(Vec<flipper_ui::catalogue::Listing>),
+        /// Asked, and the answer was no. Why is on the notice row that replaced the
+        /// list, so it is not held twice.
+        Shut,
+    }
+    let mut shop = Shop::Closed;
+    // The Install tab's rows, rebuilt when the catalogue arrives or an install
+    // finishes rather than on every draw: building them stats every file, and
+    // whether they can be chosen at all.
+    let mut mgr_offers: Vec<AppLabel> = Vec::new();
+    let mut mgr_pickable = false;
+
+    // What an install sends back as it runs. One thread takes the whole queue, so a
+    // script and the runtime it needs are one operation that either finishes or does
+    // not, rather than two a person has to sequence.
+    enum Step {
+        /// Starting on this one, of a queue this long.
+        Begin(String, usize, usize),
+        /// Bytes so far and bytes expected, for the file in hand.
+        Fetching(u64, u64),
+        Failed(String),
+        /// Every file in the queue arrived and passed its checksum.
+        Done,
+    }
+    /// An install under way: what it is fetching and how far it has got.
+    struct Installing {
+        /// The name on the dialog, which is the file being fetched right now.
+        name: String,
+        /// Which of how many, so a two-file install says so.
+        at: usize,
+        of: usize,
+        so_far: u64,
+        total: u64,
+        rx: std::sync::mpsc::Receiver<Step>,
+    }
+    let mut installing: Option<Installing> = None;
     // A key whose release belongs to nobody: the one that opened the deck.
     //
     // The deck acts on releases, so the release of the very press that opened it
@@ -2873,6 +2991,8 @@ fn panel(
         InstallDeps,
         /// Remove the app at this index of the list, once the person has said so.
         Uninstall(usize),
+        /// Fetch the catalogue entry at this index, and whatever it needs with it.
+        Install(usize),
     }
     let mut dialog: Option<Dialog> = None;
     // What was last pushed to the window, so an unchanged dialog is not pushed
@@ -3718,8 +3838,11 @@ fn panel(
                     if let Some(entry) = apps.get(idx as usize) {
                         {
                             let _ = entry;
-                            // Back to whichever list started it: the manager runs apps too.
-                            if screen.get_screen() == Screen::Manager {
+                            // Back to whichever list started it. The manager starts
+                            // apps from an app's info page, and Back belongs on the
+                            // list rather than on the page it was pressed from.
+                            if matches!(screen.get_screen(), Screen::Manager | Screen::ManagerInfo)
+                            {
                                 launched_from = Screen::Manager;
                                 mgr_dirty = true;
                             } else {
@@ -3815,11 +3938,140 @@ fn panel(
             other => deps = other,
         }
 
+        // The catalogue, whenever the thread that asked for it has an answer. Here
+        // rather than in the key handler because it arrives on its own schedule and
+        // the tab is showing a notice until it does.
+        if let Shop::Opening(rx) = &shop {
+            use std::sync::mpsc::TryRecvError;
+            match rx.try_recv() {
+                Ok(Ok(offers)) => {
+                    eprintln!("apps           catalogue: {} on offer", offers.len());
+                    mgr_offers = offer_labels(&offers, &flipper_ui::bundle::roots());
+                    mgr_pickable = true;
+                    shop = Shop::Open(offers);
+                    mgr_dirty = true;
+                }
+                Ok(Err(e)) => {
+                    eprintln!("apps           catalogue: {e}");
+                    mgr_offers = offer_notice(&e);
+                    mgr_pickable = false;
+                    shop = Shop::Shut;
+                    mgr_dirty = true;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    mgr_offers = offer_notice("the app catalogue did not answer");
+                    mgr_pickable = false;
+                    shop = Shop::Shut;
+                    mgr_dirty = true;
+                }
+            }
+        }
+
+        // An install under way. The dialog it was confirmed in is also where it
+        // reports, so the question turns into progress in place.
+        if let Some(inst) = &mut installing {
+            use flipper_ui::app::human_size;
+            use std::sync::mpsc::TryRecvError;
+            let mut ended = None;
+            loop {
+                match inst.rx.try_recv() {
+                    Ok(Step::Begin(name, at, of)) => {
+                        inst.name = name;
+                        inst.at = at;
+                        inst.of = of;
+                        inst.so_far = 0;
+                    }
+                    Ok(Step::Fetching(so_far, total)) => {
+                        inst.so_far = so_far;
+                        inst.total = total;
+                    }
+                    Ok(Step::Failed(e)) => {
+                        ended = Some(Err(e));
+                        break;
+                    }
+                    Ok(Step::Done) => {
+                        ended = Some(Ok(()));
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        ended = Some(Err("the install stopped".into()));
+                        break;
+                    }
+                }
+            }
+            match ended {
+                None => {
+                    let which = if inst.of > 1 {
+                        format!("{} ({} of {})", inst.name, inst.at + 1, inst.of)
+                    } else {
+                        inst.name.clone()
+                    };
+                    dialog = Some(Dialog {
+                        lines: vec![
+                            which,
+                            format!(
+                                "{} of {}",
+                                human_size(inst.so_far),
+                                human_size(inst.total.max(inst.so_far))
+                            ),
+                        ],
+                        left: "",
+                        right: "",
+                        act: DialogAct::None,
+                    });
+                }
+                Some(outcome) => {
+                    let name = inst.name.clone();
+                    installing = None;
+                    // Whatever happened, something may now be on disk that was not
+                    // before: a queue can fail on its second file with its first one
+                    // installed, so the lists are rebuilt either way.
+                    apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+                    if let Shop::Open(offers) = &shop {
+                        mgr_offers = offer_labels(offers, &flipper_ui::bundle::roots());
+                    }
+                    mgr_dirty = true;
+                    dialog = match outcome {
+                        Ok(()) => {
+                            eprintln!("apps           {name} installed");
+                            // Said rather than implied. The row behind this changes
+                            // to "installed" either way, but a download that ends in
+                            // the dialog simply vanishing reads as one that gave up.
+                            Some(Dialog {
+                                lines: vec![name, "installed".into()],
+                                left: "Back",
+                                right: "",
+                                act: DialogAct::None,
+                            })
+                        }
+                        Err(e) => {
+                            eprintln!("apps           {name} not installed: {e}");
+                            let words: Vec<String> =
+                                e.split(' ').map(str::to_string).collect::<Vec<_>>();
+                            let mut lines = vec![name];
+                            lines.extend(dialog_wrap(&words));
+                            Some(Dialog { lines, left: "Back", right: "", act: DialogAct::None })
+                        }
+                    };
+                }
+            }
+        }
+
         // The manager's list, drawn again when it comes back from behind an app it
         // started: the body it draws into is the Apps screen's too.
         if mgr_dirty && screen.get_screen() == Screen::Manager {
             mgr_dirty = false;
-            apply_manager(&screen, &apps, mgr_install, mgr_selected, mgr_scroll);
+            apply_manager(
+                &screen,
+                &apps,
+                &mgr_offers,
+                mgr_pickable,
+                mgr_install,
+                mgr_selected,
+                mgr_scroll,
+            );
         }
 
         // The host compositor runs with no input devices at all: flipctl holds the
@@ -4382,8 +4634,12 @@ fn panel(
                                 if let Some(entry) = apps.get(idx as usize) {
                                     {
                                         let _ = entry;
-                                        // Back to whichever list started it: the manager runs apps too.
-                                        if screen.get_screen() == Screen::Manager {
+                                        // Back to whichever list started it, which for
+                                        // the manager is the list and not the info page.
+                                        if matches!(
+                                            screen.get_screen(),
+                                            Screen::Manager | Screen::ManagerInfo
+                                        ) {
                                             launched_from = Screen::Manager;
                                             mgr_dirty = true;
                                         } else {
@@ -4762,7 +5018,17 @@ fn panel(
             // D-pad's Back to leave. The esc key is Install here rather than Back,
             // which makes this the one screen where the two differ.
             if screen.get_screen() == Screen::Manager {
-                let count = if mgr_install { 0 } else { apps.len() as i32 };
+                // A notice is a row but not a choice, so the Install tab counts only
+                // what is actually on offer.
+                let count = if mgr_install {
+                    if mgr_pickable {
+                        mgr_offers.len() as i32
+                    } else {
+                        0
+                    }
+                } else {
+                    apps.len() as i32
+                };
                 match event.key {
                     FlipperKey::Down if count > 0 => {
                         mgr_selected = (mgr_selected + 1).rem_euclid(count);
@@ -4770,25 +5036,61 @@ fn panel(
                     FlipperKey::Up if count > 0 => {
                         mgr_selected = (mgr_selected - 1).rem_euclid(count);
                     }
-                    // A tab acts at once and flashes its own key: nothing is being
-                    // opened, so there is no flash to wait out.
+                    // Close leaves and takes the card with it, which is what makes
+                    // it different from Back: backing out of the manager is not
+                    // closing it, any more than backing out of an app stops the app.
                     FlipperKey::Escape => {
+                        press.soft(FlipperKey::Escape, 0, Instant::now() + flash);
+                    }
+                    // A tab acts at once and flashes its own key: nothing is being
+                    // opened, so there is no flash to wait out. Only from View:
+                    // the Install tab has no button on this slot.
+                    FlipperKey::Edit if !mgr_install => {
                         mgr_install = true;
                         mgr_selected = 0;
                         mgr_scroll = 0;
-                        press.only(0, Instant::now() + flash);
+                        // Opening the tab is what asks the server, and pressing
+                        // Install again on a tab that failed asks it again. A device
+                        // whose network comes up a moment later is the ordinary case
+                        // here, so there has to be a way to ask twice; a thread
+                        // already running is left alone rather than joined by a
+                        // second one.
+                        if matches!(shop, Shop::Closed | Shop::Shut) {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(flipper_ui::catalogue::fetch_index());
+                            });
+                            shop = Shop::Opening(rx);
+                            mgr_offers = offer_notice("Looking for apps");
+                            mgr_pickable = false;
+                        }
+                        press.only(3, Instant::now() + flash);
                     }
-                    FlipperKey::View => {
-                        mgr_install = false;
-                        mgr_selected = 0;
-                        mgr_scroll = 0;
-                        press.only(1, Instant::now() + flash);
+                    // Install, on the Install tab, which asks about the selected
+                    // row exactly as Ok does: two keys for one action, because the
+                    // bar names it and the row is what it acts on.
+                    FlipperKey::Run if mgr_install => {
+                        if count > 0 {
+                            press.soft(FlipperKey::Run, 4, Instant::now() + flash);
+                        }
+                    }
+                    // View, on the View tab, which is the list already showing. It
+                    // flashes and does nothing, rather than being a dead key under
+                    // a drawn button.
+                    FlipperKey::Run => {
+                        press.only(4, Instant::now() + flash);
                     }
                     FlipperKey::Ok if count > 0 => {
                         press.row(FlipperKey::Ok, Instant::now() + flash);
                     }
-                    FlipperKey::Run if count > 0 => {
-                        press.soft(FlipperKey::Run, 4, Instant::now() + flash);
+                    // Back out of Install to the list it was reached from, and out
+                    // of View to the menu. Without the first step the Install tab
+                    // would be somewhere you can only leave by leaving the manager.
+                    FlipperKey::Back if mgr_install => {
+                        mgr_install = false;
+                        mgr_selected = 0;
+                        mgr_scroll = 0;
+                        press.only(0, Instant::now() + flash);
                     }
                     FlipperKey::Back => {
                         menu_again!();
@@ -4797,14 +5099,27 @@ fn panel(
                     _ => {}
                 }
                 if screen.get_screen() == Screen::Manager {
-                    let count = if mgr_install { 0 } else { apps.len() as i32 };
+                    // Recounted: a tab key has just changed which list this is.
+                    let count = match (mgr_install, mgr_pickable) {
+                        (true, true) => mgr_offers.len() as i32,
+                        (true, false) => 0,
+                        (false, _) => apps.len() as i32,
+                    };
                     let visible = flipper_ui::theme::count::LIST_VISIBLE_ROWS;
                     mgr_selected = mgr_selected.min((count - 1).max(0));
                     mgr_scroll = mgr_scroll.clamp(
                         (mgr_selected - visible + 1).max(0),
                         mgr_selected.min((count - visible).max(0)),
                     );
-                    apply_manager(&screen, &apps, mgr_install, mgr_selected, mgr_scroll);
+                    apply_manager(
+                        &screen,
+                        &apps,
+                        &mgr_offers,
+                        mgr_pickable,
+                        mgr_install,
+                        mgr_selected,
+                        mgr_scroll,
+                    );
                 }
                 continue;
             }
@@ -4816,6 +5131,11 @@ fn panel(
                 match event.key {
                     FlipperKey::Back | FlipperKey::Escape => {
                         press.soft(FlipperKey::Escape, 0, Instant::now() + flash);
+                    }
+                    // Starting the app is the info page's business now: the list
+                    // screen's five slots are spoken for by Close and the two tabs.
+                    FlipperKey::Edit => {
+                        press.soft(FlipperKey::Edit, 3, Instant::now() + flash);
                     }
                     FlipperKey::Run if removable => {
                         press.soft(FlipperKey::Run, 4, Instant::now() + flash);
@@ -5079,6 +5399,72 @@ fn panel(
                             right: "",
                             act: DialogAct::None,
                         });
+                    } else if let DialogAct::Install(idx) = d.act {
+                        // Confirmed, or backed out of. The queue is the runtime first
+                        // and the app second, so a script is never on the device
+                        // ahead of the thing that starts it.
+                        if let Some(offer) = match &shop {
+                            Shop::Open(o) => o.get(idx),
+                            _ => None,
+                        }
+                        .filter(|_| slot == Some(4))
+                        {
+                            use flipper_ui::catalogue::{needs, Needs};
+                            let offers = match &shop {
+                                Shop::Open(offers) => offers.as_slice(),
+                                _ => &[],
+                            };
+                            let mut queue = Vec::new();
+                            if let Needs::Runtime(runtime) = needs(offer, &apps, offers) {
+                                queue.push(runtime.clone());
+                            }
+                            queue.push(offer.clone());
+                            let total: u64 = queue.iter().map(|q| q.size).sum();
+                            let of = queue.len();
+                            let first = queue[0].name.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            let root = flipper_ui::bundle::root();
+                            std::thread::spawn(move || {
+                                for (i, item) in queue.iter().enumerate() {
+                                    let _ = tx.send(Step::Begin(item.name.clone(), i, of));
+                                    let mut failed = None;
+                                    flipper_ui::catalogue::install(item, &root, |p| {
+                                        match p {
+                                            flipper_ui::fetch::Progress::Fetching(so_far, all) => {
+                                                let _ = tx.send(Step::Fetching(so_far, all));
+                                            }
+                                            flipper_ui::fetch::Progress::Failed(e) => {
+                                                failed = Some(e)
+                                            }
+                                            flipper_ui::fetch::Progress::Ready(_) => {}
+                                        };
+                                    });
+                                    if let Some(e) = failed {
+                                        let _ = tx.send(Step::Failed(e));
+                                        return;
+                                    }
+                                }
+                                let _ = tx.send(Step::Done);
+                            });
+                            eprintln!("apps           installing {first}");
+                            installing = Some(Installing {
+                                name: first.clone(),
+                                at: 0,
+                                of,
+                                so_far: 0,
+                                total,
+                                rx,
+                            });
+                            // The same dialog frame carries the progress, so the
+                            // question becomes the answer in place rather than
+                            // closing and reopening under the person's hands.
+                            dialog = Some(Dialog {
+                                lines: vec![first, "starting".into()],
+                                left: "",
+                                right: "",
+                                act: DialogAct::None,
+                            });
+                        }
                     } else if let DialogAct::Uninstall(idx) = d.act {
                         // Confirmed, or backed out of: Back leaves the info page up.
                         if let Some(app) = apps.get(idx).cloned().filter(|_| slot == Some(4)) {
@@ -5106,6 +5492,14 @@ fn panel(
                                         apps = flipper_ui::bundle::discover_all(
                                             &flipper_ui::bundle::roots(),
                                         );
+                                        // The Install tab marks what is already here,
+                                        // so removing something makes its rows wrong:
+                                        // the app would still read as installed, with
+                                        // no way offered to get it back.
+                                        if let Shop::Open(offers) = &shop {
+                                            mgr_offers =
+                                                offer_labels(offers, &flipper_ui::bundle::roots());
+                                        }
                                         mgr_info = None;
                                         mgr_selected =
                                             mgr_selected.min((apps.len() as i32 - 1).max(0));
@@ -5113,11 +5507,22 @@ fn panel(
                                         apply_manager(
                                             &screen,
                                             &apps,
+                                            &mgr_offers,
+                                            mgr_pickable,
                                             mgr_install,
                                             mgr_selected,
                                             mgr_scroll,
                                         );
                                         screen.set_screen(Screen::Manager);
+                                        // The list it returns to is one row shorter,
+                                        // which is evidence but not an answer: the
+                                        // dialog says which app went.
+                                        dialog = Some(Dialog {
+                                            lines: vec![app.name.clone(), "uninstalled".into()],
+                                            left: "Back",
+                                            right: "",
+                                            act: DialogAct::None,
+                                        });
                                     }
                                     Err(e) => {
                                         eprintln!("apps           {} kept: {e}", app.name);
@@ -5304,6 +5709,58 @@ fn panel(
                         continue;
                     }
                     let _ = begin_app!(at);
+                } else if (key == FlipperKey::Ok || key == FlipperKey::Run)
+                    && screen.get_screen() == Screen::Manager
+                    && mgr_install
+                {
+                    // The Install tab: what it costs and what it drags along, asked
+                    // before a byte is fetched rather than reported afterwards.
+                    use flipper_ui::app::human_size;
+                    use flipper_ui::catalogue::{needs, Needs};
+                    let offers = match &shop {
+                        Shop::Open(offers) => offers.as_slice(),
+                        _ => &[],
+                    };
+                    if let Some(offer) = offers.get(mgr_selected as usize) {
+                        let roots = flipper_ui::bundle::roots();
+                        dialog = Some(if offer.present(&roots) {
+                            Dialog {
+                                lines: vec![offer.name.clone(), "is already installed".into()],
+                                left: "Back",
+                                right: "",
+                                act: DialogAct::None,
+                            }
+                        } else {
+                            match needs(offer, &apps, offers) {
+                                Needs::Nothing => Dialog {
+                                    lines: vec![offer.name.clone(), human_size(offer.size)],
+                                    left: "Back",
+                                    right: "Install",
+                                    act: DialogAct::Install(mgr_selected as usize),
+                                },
+                                Needs::Runtime(runtime) => Dialog {
+                                    lines: vec![
+                                        offer.name.clone(),
+                                        format!("needs {}", runtime.name),
+                                        human_size(offer.size + runtime.size),
+                                    ],
+                                    left: "Back",
+                                    right: "Install",
+                                    act: DialogAct::Install(mgr_selected as usize),
+                                },
+                                Needs::Unavailable(runtime) => Dialog {
+                                    lines: vec![
+                                        offer.name.clone(),
+                                        format!("needs the {runtime} runtime"),
+                                        "which is not on offer".into(),
+                                    ],
+                                    left: "Back",
+                                    right: "",
+                                    act: DialogAct::None,
+                                },
+                            }
+                        });
+                    }
                 } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Manager {
                     if let Some(app) = apps.get(mgr_selected as usize) {
                         mgr_info = Some(mgr_selected as usize);
@@ -5313,18 +5770,36 @@ fn panel(
                         screen.set_detail_at_start(false);
                         screen.set_detail_at_end(false);
                         let remove = if app.shipped() { "" } else { "Uninstall" };
-                        screen.set_detail_buttons(demo::labels(&["Back", "", "", "", remove]));
+                        screen.set_detail_buttons(demo::labels(&["Back", "", "", "Run", remove]));
                         screen.set_breadcrumb(
                             format!("> {MANAGER_TITLE} > {}", app.name).as_str().into(),
                         );
                         screen.set_screen(Screen::ManagerInfo);
                         eprintln!("screen         app manager: {}", app.name);
                     }
-                } else if key == FlipperKey::Run && screen.get_screen() == Screen::Manager {
-                    let _ = begin_app!(mgr_selected);
+                } else if key == FlipperKey::Escape && screen.get_screen() == Screen::Manager {
+                    // Close, which is the one that takes the card with it. Back
+                    // leaves the manager where it was, the way backing out of an app
+                    // leaves the app running.
+                    recents.close(MANAGER_TITLE);
+                    mgr_info = None;
+                    menu_again!();
+                    eprintln!("screen         menu (app manager closed)");
+                } else if key == FlipperKey::Edit && screen.get_screen() == Screen::ManagerInfo {
+                    if let Some(at) = mgr_info {
+                        let _ = begin_app!(at as i32);
+                    }
                 } else if key == FlipperKey::Escape && screen.get_screen() == Screen::ManagerInfo {
                     mgr_info = None;
-                    apply_manager(&screen, &apps, mgr_install, mgr_selected, mgr_scroll);
+                    apply_manager(
+                        &screen,
+                        &apps,
+                        &mgr_offers,
+                        mgr_pickable,
+                        mgr_install,
+                        mgr_selected,
+                        mgr_scroll,
+                    );
                     screen.set_screen(Screen::Manager);
                 } else if key == FlipperKey::Run && screen.get_screen() == Screen::ManagerInfo {
                     if let Some((at, app)) = mgr_info
@@ -5373,7 +5848,15 @@ fn panel(
                             mgr_selected = 0;
                             mgr_scroll = 0;
                             mgr_info = None;
-                            apply_manager(&screen, &apps, mgr_install, mgr_selected, mgr_scroll);
+                            apply_manager(
+                                &screen,
+                                &apps,
+                                &mgr_offers,
+                                mgr_pickable,
+                                mgr_install,
+                                mgr_selected,
+                                mgr_scroll,
+                            );
                             screen.set_screen(Screen::Manager);
                             press.cancel();
                             eprintln!("screen         app manager");

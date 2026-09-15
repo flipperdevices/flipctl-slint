@@ -399,7 +399,13 @@ export component MenuBody inherits Rectangle {
 
     // Selector outline, painted on top of the rows and the dividers. Two pixels
     // taller than the row and inset by one so it sits centred over it.
-    if !root.real_frame: Rectangle {
+    //
+    // A negative `selected` is no selection at all, for a list whose rows are not
+    // choices: the app manager's Install tab puts one row up saying why it has
+    // nothing to offer, and a frame around that would say it could be pressed.
+    // Without this the outline is simply positioned one row above the first, which
+    // lands it over the breadcrumb.
+    if !root.real_frame && root.selected >= 0: Rectangle {
         x: FlipperTheme.selector_x;
         y: root.selector_y;
         width: root.selector_w;
@@ -409,7 +415,7 @@ export component MenuBody inherits Rectangle {
         border-color: FlipperTheme.black;
         background: transparent;
     }
-    if root.real_frame: SelectorFrame {
+    if root.real_frame && root.selected >= 0: SelectorFrame {
         x: FlipperTheme.selector_x;
         y: root.selector_y;
         frame_w: root.selector_w;
