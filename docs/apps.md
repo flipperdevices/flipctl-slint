@@ -12,7 +12,7 @@ An app is delivered as one file in the user's `Apps` folder, either an AppImage 
 script:
 
     /home/user/Apps/radio-aarch64.fap.AppImage       Internet radio, at the top of the list
-    /home/user/Apps/stations.py                  a script, run through its runtime
+    /home/user/Apps/stations.fap.py                  a script, run through its runtime
     /home/user/Apps/Network/nmap-aarch64.fap.AppImage inside the Network folder
 
 `/home` is the one subvolume every profile shares, so the folder survives a factory
@@ -68,7 +68,7 @@ Every manifest field means what it means for a bundle. Two are filled in when th
 block leaves them out: `runtime`, from the extension, and `wayland`, from the file's
 own name, because a script names no command of its own. An icon is a PNG beside it.
 
-`apps/ping.py` is the worked example, and it is the whole app: a file in the tree
+`apps/ping.fap.py` is the worked example, and it is the whole app: a file in the tree
 beside the bundle directories, pushed to `~/Apps` as it stands by `--apps`, with
 nothing to build. It draws with the panel's own widgets through the `flipctl` package
 its runtime carries.

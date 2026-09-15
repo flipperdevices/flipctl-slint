@@ -11,8 +11,8 @@
 //! ```toml
 //! [[app]]
 //! name = "Breathing LED"
-//! path = "Test Tools/breathing-led.py"
-//! url = "https://example/breathing-led.py"
+//! path = "Test Tools/breathing-led.fap.py"
+//! url = "https://example/breathing-led.fap.py"
 //! runtime = "python"
 //! size = 9021
 //! sha256 = "..."
@@ -44,7 +44,7 @@ pub const INDEX: &str =
 pub struct Listing {
     /// What to call it on the screen.
     pub name: String,
-    /// Where it goes, relative to the apps folder: `Test Tools/breathing-led.py`.
+    /// Where it goes, relative to the apps folder: `Test Tools/breathing-led.fap.py`.
     pub path: String,
     /// Where to get it. Not derived from `path`: the bytes need not be laid out the
     /// way the device lays them out, and release assets are a flat namespace.
@@ -256,8 +256,8 @@ sha256 = "aaaa"
 
 [[app]]
 name = "Breathing LED"
-path = "Test Tools/breathing-led.py"
-url = "https://example/breathing-led.py"
+path = "Test Tools/breathing-led.fap.py"
+url = "https://example/breathing-led.fap.py"
 runtime = "python"
 size = 9021
 sha256 = "bbbb"
@@ -342,17 +342,17 @@ sha256 = "cccc"
 
     #[test]
     fn a_good_path_lands_under_the_root() {
-        let at = listing("Test Tools/breathing-led.py").dest(Path::new("/home/user/Apps"));
-        assert_eq!(at, Some(PathBuf::from("/home/user/Apps/Test Tools/breathing-led.py")));
+        let at = listing("Test Tools/breathing-led.fap.py").dest(Path::new("/home/user/Apps"));
+        assert_eq!(at, Some(PathBuf::from("/home/user/Apps/Test Tools/breathing-led.fap.py")));
         let at = listing("radio.AppImage").dest(Path::new("/home/user/Apps"));
         assert_eq!(at, Some(PathBuf::from("/home/user/Apps/radio.AppImage")));
     }
 
     #[test]
     fn the_folder_and_the_file_come_out_of_the_path() {
-        let app = listing("Test Tools/breathing-led.py");
+        let app = listing("Test Tools/breathing-led.fap.py");
         assert_eq!(app.folder(), "Test Tools");
-        assert_eq!(app.file_name(), "breathing-led.py");
+        assert_eq!(app.file_name(), "breathing-led.fap.py");
         let top = listing("radio.AppImage");
         assert_eq!(top.folder(), "");
         assert_eq!(top.file_name(), "radio.AppImage");
@@ -362,7 +362,7 @@ sha256 = "cccc"
     fn only_a_bundle_is_made_executable() {
         assert!(listing("radio-aarch64.fap.AppImage").is_bundle());
         assert!(listing("Media/radio.appimage").is_bundle());
-        assert!(!listing("Test Tools/breathing-led.py").is_bundle());
+        assert!(!listing("Test Tools/breathing-led.fap.py").is_bundle());
         assert!(!listing("uptime.js").is_bundle());
     }
 

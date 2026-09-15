@@ -17,7 +17,7 @@
 //! **The block is what makes a file an app, not its name.** flipctl knows no
 //! languages: it looks for the block behind a handful of comment markers, and what
 //! runs the file is the `runtime` the block names, or the file's own extension when
-//! it names none. So `stations.py` asks for `py` and `clock.js` asks for `js`, a
+//! it names none. So `stations.fap.py` asks for `py` and `clock.fap.js` asks for `js`, a
 //! launcher bundle answers by declaring the same word in `provides`, and a language
 //! nobody has thought of yet costs a launcher in the folder rather than a new
 //! flipctl.
@@ -77,7 +77,11 @@ pub fn read(
         return Err(Skip::NotOurs);
     };
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    // `.fap` marks the file as one of ours, the way it does on a bundle, and is no
+    // part of the name: a `ping.fap.py` that names itself nothing is `ping`, not
+    // `ping.fap`. Stripped here as well as in the key, which does the same to a bundle.
     let fallback = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let fallback = fallback.strip_suffix(".fap").unwrap_or(&fallback).to_string();
     // The defaults go after the block, and the scanner takes the first match at column
     // zero, so anything the block says wins. `wayland` is what makes a manifest an app
     // and a script has no command of its own to name: what runs it is the launcher.

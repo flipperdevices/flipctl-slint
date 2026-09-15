@@ -526,6 +526,26 @@ mod tests {
         assert_eq!(key(root, Path::new("/tmp/other.AppImage")), "other");
     }
 
+    /// `.fap` marks a file as one of ours whatever it is written in, so a script
+    /// carries it exactly as a bundle does and it is no part of the key either.
+    #[test]
+    fn the_marker_is_no_part_of_a_key() {
+        let root = Path::new("/home/user/Apps");
+        assert_eq!(key(root, &root.join("ping.fap.py")), "ping");
+        assert_eq!(key(root, &root.join("uptime.fap.js")), "uptime");
+        assert_eq!(
+            key(root, &root.join("Test Tools/breathing-led.fap.py")),
+            "Test Tools-breathing-led"
+        );
+        // Nothing here knows a language: the marker comes off whatever follows it, so
+        // a runtime nobody has written yet needs no change to this.
+        assert_eq!(key(root, &root.join("clock.fap.lua")), "clock");
+        assert_eq!(key(root, &root.join("backup.fap.sh")), "backup");
+        assert_eq!(key(root, &root.join("thing.fap.AppImage")), "thing");
+        // A script that goes without it keys the same way it always did.
+        assert_eq!(key(root, &root.join("Test Tools/eth-led.py")), "Test Tools-eth-led");
+    }
+
     /// A folder holds both kinds, and only the bundles are read as squashfs. What a
     /// script is at all is the launchers' business, not this module's.
     #[test]
