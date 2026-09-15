@@ -3938,6 +3938,46 @@ fn panel(
             other => deps = other,
         }
 
+        // The browser page can install and remove too, and it is a different thread
+        // with no idea what is on the panel. It is told what is running, so it
+        // refuses to delete one of those, and it says when it has changed the
+        // folder, so the list here is looked at again rather than going stale.
+        #[cfg(feature = "remote")]
+        if let Some(view) = web.as_ref() {
+            #[cfg(feature = "wayland")]
+            view.set_running(wl_apps.iter().map(|a| a.name.clone()).collect());
+            #[cfg(not(feature = "wayland"))]
+            view.set_running(Vec::new());
+            if view.take_apps_changed() {
+                apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+                if let Shop::Open(offers) = &shop {
+                    mgr_offers = offer_labels(offers, &flipper_ui::bundle::roots());
+                }
+                mgr_dirty = true;
+                eprintln!("apps           {} found after a change from the page", apps.len());
+            }
+        }
+
+        // An app the page asked to start. Taken out of the borrow first, because
+        // starting one touches half the loop's state, and then run through exactly
+        // the path a key press takes: the runtime check and the question about
+        // missing packages are the same whoever pressed it.
+        #[cfg(feature = "remote")]
+        {
+            let from_page = web.as_ref().and_then(|view| view.take_launch());
+            if let Some(key) = from_page {
+                match apps.iter().position(|a| a.key == key) {
+                    Some(at) => {
+                        eprintln!("apps           starting {key} from the page");
+                        let _ = begin_app!(at as i32);
+                    }
+                    None => {
+                        eprintln!("apps           the page asked for {key}, which is not here")
+                    }
+                }
+            }
+        }
+
         // The catalogue, whenever the thread that asked for it has an answer. Here
         // rather than in the key handler because it arrives on its own schedule and
         // the tab is showing a notice until it does.
