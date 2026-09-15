@@ -95,6 +95,10 @@ menu_line_w         = 224   # MenuLine.js DEFAULT_W
 icon_pad            = 3     # MenuLine.js ICON_PAD
 icon_text_gap       = 4     # MenuLine.js TEXT_GAP
 text_draw_y         = 3     # MenuLine.js TEXT_DRAW_Y, puts cap top at line y+6
+# Gap between a row's label and the short word about it that follows: the runtime a
+# script is run through. Wider than the icon gap, so the pair reads as a name and an
+# aside rather than as two words of one name.
+label_tag_gap       = 6
 status_pad_r        = 5     # MenuLine.js STATUS_PAD_R
 
 # Gap between each chevron and the value in a "< ON >" status. MenuLine.js pins

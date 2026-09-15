@@ -9,6 +9,10 @@ import { StatusBar, PanelStatus } from "statusbar.slint";
 
 export struct ListItem {
     label: string,
+    // A short word about the row, drawn right after the label in the status tone: the
+    // runtime a script is run through. Not the status, which is the row's value and
+    // sits at the other edge.
+    tag: string,
     // Plain right-aligned status, used when `chevrons` is 0.
     status: string,
     // 0 none, else 1-based index into the icon table below.
@@ -149,6 +153,7 @@ export component ChevronStatus inherits Rectangle {
 //     the old Medium, so the prototype passes activeLabelYNudge: -1.
 component MenuLine inherits Rectangle {
     in property <string> label;
+    in property <string> tag;
     in property <string> status;
     in property <bool> selected;
     in property <bool> pressed;
@@ -214,7 +219,7 @@ component MenuLine inherits Rectangle {
         colorize: root.content;
     }
 
-    Text {
+    label_ref := Text {
         x: FlipperTheme.icon_pad + 14px + FlipperTheme.icon_text_gap;
         y: root.active
             ? FlipperTheme.text_draw_y - 1px
@@ -223,6 +228,21 @@ component MenuLine inherits Rectangle {
         font-size: 16px;
         font-family: root.active ? "Born2bSportyV2" : "Busy9px";
         color: root.content;
+    }
+
+    // Placed off the label's measured width, because that width changes with the row:
+    // the label swaps face when it is active and the tag has to follow it. Held back
+    // by one, as every measurement here is; see statusbar.slint.
+    //
+    // It keeps Busy9px and the status tone whatever the row is doing, for the reason
+    // the status does: it is an aside about the row, not part of what the row says.
+    if root.tag != "": Text {
+        x: label_ref.x + (label_ref.width - 1px) + FlipperTheme.label_tag_gap;
+        y: FlipperTheme.text_draw_y;
+        text: root.tag;
+        font-size: 16px;
+        font-family: "Busy9px";
+        color: root.pressed ? FlipperTheme.white : FlipperTheme.status_dim;
     }
 
     if root.chevrons == 0: Text {
@@ -365,6 +385,7 @@ export component MenuBody inherits Rectangle {
         MenuLine {
             width: parent.width;
             label: item.label;
+            tag: item.tag;
             status: item.status;
             icon: item.icon;
             picture: item.picture;

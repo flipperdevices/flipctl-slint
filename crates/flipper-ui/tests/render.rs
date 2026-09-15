@@ -25,6 +25,8 @@ fn item(label: &str, status: &str, icon: i32, frames: i32) -> ListItem {
     };
     ListItem {
         label: label.into(),
+        // The rows these screens draw are menu rows; only an app list tags one.
+        tag: Default::default(),
         status: status.into(),
         icon,
         picture: Default::default(),

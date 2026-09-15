@@ -470,15 +470,13 @@ fn apps_json() -> String {
             }
             at
         };
-        let tag = app.tag();
-        let size = human_size(app.footprint().total());
-        let size = if tag.is_empty() { size } else { format!("{size}  {tag}") };
         out.push_str(&format!(
-            "{{\"name\":\"{}\",\"key\":\"{}\",\"location\":\"{}\",\"size\":\"{}\",\"shipped\":{}}}",
+            "{{\"name\":\"{}\",\"key\":\"{}\",\"location\":\"{}\",\"size\":\"{}\",\"runtime\":\"{}\",\"shipped\":{}}}",
             escape(&app.name),
             escape(&app.key),
             escape(&at),
-            escape(&size),
+            escape(&human_size(app.footprint().total())),
+            escape(app.tag()),
             app.shipped()
         ));
     }
@@ -490,11 +488,12 @@ fn apps_json() -> String {
                 out.push(',');
             }
             out.push_str(&format!(
-                "{{\"name\":\"{}\",\"path\":\"{}\",\"folder\":\"{}\",\"size\":\"{}\",\"installed\":{}}}",
+                "{{\"name\":\"{}\",\"path\":\"{}\",\"folder\":\"{}\",\"size\":\"{}\",\"runtime\":\"{}\",\"installed\":{}}}",
                 escape(&offer.name),
                 escape(&offer.path),
                 escape(offer.folder()),
                 escape(&human_size(offer.size)),
+                escape(&offer.runtime),
                 offer.present(&roots)
             ));
         }
