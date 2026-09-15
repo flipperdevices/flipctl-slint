@@ -57,18 +57,27 @@
   }
   .show .zone { background: rgba(255,130,0,.35); border: 1px solid rgba(255,255,255,.85); }
   .show .zone span { display: block; }
+  /* Two rows: the link above, the controls below. The link is a way out of this
+     page rather than one of its controls, so it does not sit in their line. */
   #hud {
     position: fixed; top: 8px; left: 8px; z-index: 10;
     background: #1D2026; padding: 6px 10px; border-radius: 5px;
-    display: flex; gap: 12px; align-items: center; user-select: none;
+    display: flex; flex-direction: column; gap: 4px;
+    align-items: flex-start; user-select: none;
   }
+  #hud-controls { display: flex; gap: 12px; align-items: center; }
   #hud label { cursor: pointer; }
+  #hud a { color: #FF8200; text-decoration: none; }
+  #hud a:hover { text-decoration: underline; }
   #stat { font-variant-numeric: tabular-nums; opacity: .7; }
 </style>
 
 <div id="hud">
-  <label><input type="checkbox" id="toggle"> Show controls</label>
-  <span id="stat">connecting</span>
+  <a href="apps">Application Manager</a>
+  <div id="hud-controls">
+    <label><input type="checkbox" id="toggle"> Show controls</label>
+    <span id="stat">connecting</span>
+  </div>
 </div>
 
 <div id="wrap">

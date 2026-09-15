@@ -1,0 +1,256 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Application Manager</title>
+<style>
+  :root {
+    --ground: #14171C;
+    --card: #1D2026;
+    --line: #2B2F37;
+    --ink: #fff;
+    --dim: #8A9099;
+    --amber: #FF8200;
+    --bad: #FF6B6B;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; min-height: 100%;
+    background: var(--ground);
+    font: 13px/1.5 system-ui, sans-serif; color: var(--ink);
+  }
+  header {
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    padding: 16px 20px; border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  a { color: var(--amber); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  #stat { color: var(--dim); margin-left: auto; }
+  #stat.bad { color: var(--bad); }
+
+  /* Two columns on a screen with room, stacked on a phone. The device itself is
+     often looked at from one, so this page has to survive 400px. */
+  main {
+    display: grid; gap: 16px; padding: 16px 20px 32px;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    align-items: start;
+  }
+  section { background: var(--card); border-radius: 6px; overflow: hidden; }
+  h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--dim); margin: 0; padding: 12px 14px;
+    border-bottom: 1px solid var(--line); font-weight: 600;
+  }
+  h2 .count { color: var(--ink); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px; border-bottom: 1px solid var(--line);
+  }
+  li:last-child { border-bottom: 0; }
+  .name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .tag {
+    flex: none; color: var(--dim); font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .where { display: block; color: var(--dim); font-size: 11px; }
+  .have { color: var(--amber); }
+  button {
+    flex: none; font: inherit; font-size: 12px; cursor: pointer;
+    background: transparent; color: var(--amber);
+    border: 1px solid var(--amber); border-radius: 4px; padding: 2px 10px;
+  }
+  button:hover:not(:disabled) { background: var(--amber); color: #000; }
+  button.remove { color: var(--dim); border-color: var(--line); }
+  button.remove:hover:not(:disabled) { background: var(--bad); border-color: var(--bad); color: #000; }
+  button:disabled { opacity: .45; cursor: default; }
+  /* A button's slot is held even where there is no button, so the sizes down the
+     column stay in one line rather than stepping around the rows that have one. */
+  .noop { flex: none; width: 0; }
+  .actions { flex: none; display: flex; gap: 6px; }
+  /* The filter sits inside the section head, so it belongs to the list it filters
+     rather than to the page. */
+  .find {
+    width: 100%; font: inherit; font-size: 12px;
+    background: var(--ground); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 4px 8px; margin-top: 8px;
+  }
+  .find::placeholder { color: var(--dim); }
+  .find:focus { outline: none; border-color: var(--amber); }
+  .empty, .error { padding: 14px; color: var(--dim); }
+  .error { color: var(--bad); }
+</style>
+
+<header>
+  <h1>Application Manager</h1>
+  <a href="/">Panel view</a>
+  <span id="stat"></span>
+</header>
+
+<main>
+  <section>
+    <h2>Installed <span class="count" id="n-installed"></span>
+      <input class="find" id="find-installed" type="search" placeholder="Filter" autocomplete="off">
+    </h2>
+    <ul id="installed"></ul>
+  </section>
+  <section>
+    <h2>Available <span class="count" id="n-offered"></span>
+      <input class="find" id="find-offered" type="search" placeholder="Filter" autocomplete="off">
+    </h2>
+    <ul id="offered"></ul>
+  </section>
+</main>
+
+<script>
+// The two lists are whatever the device reports: what it found in its apps
+// folders, and what the catalogue on the server offers it. Nothing here decides
+// which is which, so this page cannot disagree with the panel.
+const el = (id) => document.getElementById(id);
+
+// Every button is disabled while one of them is working. An install and a remove
+// running at once would each rediscover the apps folder mid-change, and the page
+// would then redraw from whichever finished second.
+let busy = false;
+// The last answer, kept so filtering redraws from it rather than asking the
+// device again: a keystroke should not cost a catalogue fetch.
+let latest = { installed: [], offered: [] };
+
+function say(text, bad) {
+  const stat = el('stat');
+  stat.textContent = text;
+  stat.className = bad ? 'bad' : '';
+}
+
+// Case-insensitive, and over the folder as well as the name, so "test tools"
+// finds what is filed there and "runtime" finds both of them.
+function matches(app, needle) {
+  if (!needle) return true;
+  const hay = (app.name + ' ' + (app.location || app.folder || '')).toLowerCase();
+  return hay.includes(needle);
+}
+
+function row(app, tag, tagClass, actions) {
+  const li = document.createElement('li');
+  const n = document.createElement('span');
+  n.className = 'name';
+  n.textContent = app.name;
+  const where = app.location || app.folder;
+  if (where) {
+    const w = document.createElement('span');
+    w.className = 'where';
+    w.textContent = where;
+    n.appendChild(w);
+  }
+  const t = document.createElement('span');
+  t.className = 'tag' + (tagClass ? ' ' + tagClass : '');
+  t.textContent = tag;
+  li.append(n, t);
+
+  const box = document.createElement('span');
+  box.className = actions.length ? 'actions' : 'noop';
+  for (const action of actions) {
+    const b = document.createElement('button');
+    b.textContent = action.label;
+    if (action.label === 'Remove') b.className = 'remove';
+    b.disabled = busy;
+    b.addEventListener('click', () => act(action, b, app.name));
+    box.appendChild(b);
+  }
+  li.appendChild(box);
+  return li;
+}
+
+async function act(action, button, name) {
+  if (busy) return;
+  busy = true;
+  for (const b of document.querySelectorAll('button')) b.disabled = true;
+  button.textContent = action.doing;
+  say(action.doing + ' ' + name);
+  let answer;
+  try {
+    const res = await fetch(action.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(action.body),
+    });
+    answer = await res.json();
+  } catch (e) {
+    answer = { ok: false, said: 'the device stopped answering' };
+  }
+  busy = false;
+  say(answer.said, !answer.ok);
+  // Starting an app is a request to watch it: the panel view is where it appears,
+  // and staying here would leave you reading a list while the thing you asked for
+  // is on the other page. Only when it actually started; a refusal belongs on the
+  // page that has the button.
+  if (action.watch && answer.ok) {
+    location.href = '/';
+    return;
+  }
+  await load();
+}
+
+function fill(list, items, note, bad) {
+  list.textContent = '';
+  if (!items.length) {
+    const li = document.createElement('li');
+    li.className = bad ? 'error' : 'empty';
+    li.textContent = note;
+    list.appendChild(li);
+    return;
+  }
+  for (const item of items) list.appendChild(item);
+}
+
+function render() {
+  const wantL = el('find-installed').value.trim().toLowerCase();
+  const installed = (latest.installed || []).filter((a) => matches(a, wantL));
+  fill(
+    el('installed'),
+    installed.map((a) =>
+      row(a, a.size, '', [
+        { label: 'Run', doing: 'Starting', url: 'apps/run', body: { key: a.key }, watch: true },
+      ].concat(a.shipped ? [] : [
+        { label: 'Remove', doing: 'Removing', url: 'apps/remove', body: { key: a.key } },
+      ]))
+    ),
+    wantL ? 'nothing matches' : 'nothing installed'
+  );
+  el('n-installed').textContent = installed.length;
+
+  const wantR = el('find-offered').value.trim().toLowerCase();
+  const offered = (latest.offered || []).filter((a) => matches(a, wantR));
+  fill(
+    el('offered'),
+    offered.map((a) =>
+      row(a, a.installed ? 'installed' : a.size, a.installed ? 'have' : '',
+        a.installed ? [] : [
+          { label: 'Install', doing: 'Installing', url: 'apps/install', body: { path: a.path } },
+        ])
+    ),
+    // The reason lives in the column it emptied, rather than in the header too.
+    latest.error || (wantR ? 'nothing matches' : 'nothing on offer'),
+    Boolean(latest.error)
+  );
+  el('n-offered').textContent = latest.error ? '' : offered.length;
+}
+
+async function load() {
+  try {
+    const res = await fetch('apps.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    latest = await res.json();
+  } catch (e) {
+    say('the device did not answer', true);
+    return;
+  }
+  render();
+}
+
+for (const id of ['find-installed', 'find-offered']) {
+  el(id).addEventListener('input', render);
+}
+load();
+</script>

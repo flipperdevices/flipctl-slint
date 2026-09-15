@@ -15,7 +15,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -42,6 +42,10 @@ const MAX_FPS: u64 = 30;
 /// bounds what an unauthenticated caller can make us allocate. Named because a
 /// bare 256 next to a panel-sized buffer reads like a width.
 const MAX_INPUT_BODY: usize = 256; // not-a-panel-dimension
+
+/// Cap on a POST body naming one app to install or remove. A path under the apps
+/// folder, so larger than a key event and still nothing worth allocating for.
+const MAX_ACTION_BODY: usize = 1024; // not-a-panel-dimension
 
 const HEADER: usize = 8;
 
@@ -93,6 +97,27 @@ struct Shared {
     last: Mutex<Option<StoredFrame>>,
     generation: AtomicU64,
     viewers: AtomicUsize,
+    /// What the panel currently has running, refreshed by the render loop.
+    ///
+    /// The page can remove an app, and removing one that is running is refused
+    /// here for the same reason it is refused on the panel: the process holds its
+    /// files open and its window on the glass. Only the loop knows what is
+    /// running, so it says so rather than this side guessing.
+    running: Mutex<Vec<String>>,
+    /// An app the page has asked to start, by key, waiting for the loop to take it.
+    ///
+    /// Not started here: launching means checking the runtime, offering to install
+    /// what is missing, and hosting the window, none of which this thread can do.
+    /// The loop runs it through the same path a key press does. One slot, because
+    /// the panel shows one app at a time and a queue of them would be a queue of
+    /// screens nobody asked for.
+    launch: Mutex<Option<String>>,
+    /// Set when the page has installed or removed something.
+    ///
+    /// The loop keeps its own list of apps and would otherwise go on offering one
+    /// that has just been deleted from underneath it. It clears this when it has
+    /// looked again.
+    apps_changed: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -134,6 +159,9 @@ impl RemoteView {
             viewers: AtomicUsize::new(0),
             viewer_queues: Mutex::new(Vec::new()),
             last: Mutex::new(None),
+            running: Mutex::new(Vec::new()),
+            launch: Mutex::new(None),
+            apps_changed: AtomicBool::new(false),
         });
         let (tx, events) = mpsc::channel();
 
@@ -145,6 +173,29 @@ impl RemoteView {
         }
 
         Ok(Self { shared, events, addr: local, last_viewers: 0 })
+    }
+
+    /// Tell the page what is running, so it refuses to remove one of them.
+    ///
+    /// Called from the render loop, which is the only place that knows. Cheap
+    /// enough to call every pass: it replaces a short vector of names.
+    pub fn set_running(&self, names: Vec<String>) {
+        if let Ok(mut running) = self.shared.running.lock() {
+            *running = names;
+        }
+    }
+
+    /// The app the page asked to start, if any. Taking it clears it.
+    pub fn take_launch(&self) -> Option<String> {
+        self.shared.launch.lock().ok().and_then(|mut slot| slot.take())
+    }
+
+    /// Whether the page has installed or removed something since this was asked.
+    ///
+    /// Taking it clears it, so the loop rediscovers once per change rather than
+    /// once per pass forever after.
+    pub fn take_apps_changed(&self) -> bool {
+        self.shared.apps_changed.swap(false, Ordering::Relaxed)
     }
 
     pub fn addr(&self) -> std::net::SocketAddr {
@@ -275,6 +326,7 @@ fn serve(
     let shared_js = include_str!("remote.js");
     let device_page = include_str!("page.html");
     let compare_page = include_str!("compare.html");
+    let apps_page = include_str!("apps.html");
 
     match (method.as_str(), path) {
         // The panel in its device photo is the default view; the side-by-side
@@ -298,6 +350,23 @@ fn serve(
             "application/javascript; charset=utf-8",
             shared_js.as_bytes(),
             0,
+        ),
+        // The app manager, as a page: what the device has installed beside what the
+        // catalogue offers it. A reader, not a second set of controls; installing is
+        // still the panel's business.
+        ("GET", "/apps") | ("GET", "/apps.html") => {
+            write_response(&mut stream, "200 OK", "text/html; charset=utf-8", apps_page.as_bytes())
+        }
+        // Both lists, answered from the same code the panel reads them with.
+        //
+        // The catalogue is a network round trip, taken on this connection's own
+        // thread: a viewer waits for their page, and nothing the panel is doing
+        // waits for them.
+        ("GET", "/apps.json") => write_response(
+            &mut stream,
+            "200 OK",
+            "application/json; charset=utf-8",
+            apps_json().as_bytes(),
         ),
         ("GET", "/diff") | ("GET", "/compare") => write_response(
             &mut stream,
@@ -338,6 +407,32 @@ fn serve(
             ),
         },
         ("GET", "/stream") => stream_frames(stream, shared),
+        // Install and remove, each naming one app and answering when it is done.
+        //
+        // Synchronous, on this connection's thread: an install is a download the
+        // page is waiting for, and a status it can show beats a job id it would
+        // have to poll for. Nothing the panel is doing waits on either.
+        ("POST", "/apps/install") | ("POST", "/apps/remove") | ("POST", "/apps/run") => {
+            let mut body = vec![0; content_length.min(MAX_ACTION_BODY)];
+            reader.read_exact(&mut body)?;
+            let said = String::from_utf8_lossy(&body);
+            let done = match (path, field(&said, "path"), field(&said, "key")) {
+                ("/apps/install", Some(want), _) => install_one(shared, &want),
+                ("/apps/remove", _, Some(want)) => remove_one(shared, &want),
+                ("/apps/run", _, Some(want)) => run_one(shared, &want),
+                _ => Err("no app was named".into()),
+            };
+            let answer = match &done {
+                Ok(said) => format!("{{\"ok\":true,\"said\":\"{}\"}}", escape(said)),
+                Err(why) => format!("{{\"ok\":false,\"said\":\"{}\"}}", escape(why)),
+            };
+            write_response(
+                &mut stream,
+                "200 OK",
+                "application/json; charset=utf-8",
+                answer.as_bytes(),
+            )
+        }
         ("POST", "/input") => {
             let mut body = vec![0; content_length.min(MAX_INPUT_BODY)];
             reader.read_exact(&mut body)?;
@@ -348,6 +443,198 @@ fn serve(
         }
         _ => write_response(&mut stream, "404 Not Found", "text/plain", b"not found"),
     }
+}
+
+/// Both app lists as JSON: what is installed, and what the catalogue offers.
+///
+/// Written by hand rather than derived, which is how the manifests behind both of
+/// these are read too: the document is two fixed shapes, and deriving it would put
+/// the crate's only serialisation dependency here.
+fn apps_json() -> String {
+    use crate::app::human_size;
+
+    let roots = crate::bundle::roots();
+    let installed = crate::bundle::discover_all(&roots);
+    let mut out = String::from("{\"installed\":[");
+    for (i, app) in installed.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let at = if app.shipped() {
+            String::from("Part of the image")
+        } else {
+            let mut at = String::from("Apps");
+            for folder in &app.group {
+                at.push('/');
+                at.push_str(folder);
+            }
+            at
+        };
+        let tag = app.tag();
+        let size = human_size(app.footprint().total());
+        let size = if tag.is_empty() { size } else { format!("{size}  {tag}") };
+        out.push_str(&format!(
+            "{{\"name\":\"{}\",\"key\":\"{}\",\"location\":\"{}\",\"size\":\"{}\",\"shipped\":{}}}",
+            escape(&app.name),
+            escape(&app.key),
+            escape(&at),
+            escape(&size),
+            app.shipped()
+        ));
+    }
+    out.push_str("],\"offered\":[");
+    let offered = crate::catalogue::fetch_index();
+    if let Ok(offers) = &offered {
+        for (i, offer) in offers.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&format!(
+                "{{\"name\":\"{}\",\"path\":\"{}\",\"folder\":\"{}\",\"size\":\"{}\",\"installed\":{}}}",
+                escape(&offer.name),
+                escape(&offer.path),
+                escape(offer.folder()),
+                escape(&human_size(offer.size)),
+                offer.present(&roots)
+            ));
+        }
+    }
+    out.push(']');
+    if let Err(why) = &offered {
+        out.push_str(&format!(",\"error\":\"{}\"", escape(why)));
+    }
+    out.push('}');
+    out
+}
+
+/// Install the catalogue entry with this path, and whatever it needs with it.
+///
+/// The same queue the panel builds: the runtime first, so a script is never on the
+/// device ahead of what starts it. Progress goes nowhere, because the page is
+/// waiting on the answer rather than watching a bar.
+fn install_one(shared: &Arc<Shared>, path: &str) -> Result<String, String> {
+    let offers = crate::catalogue::fetch_index()?;
+    let offer = offers
+        .iter()
+        .find(|o| o.path == path)
+        .ok_or_else(|| "the catalogue does not offer that".to_string())?;
+    let roots = crate::bundle::roots();
+    let installed = crate::bundle::discover_all(&roots);
+
+    let mut queue = Vec::new();
+    match crate::catalogue::needs(offer, &installed, &offers) {
+        crate::catalogue::Needs::Runtime(runtime) => queue.push(runtime.clone()),
+        crate::catalogue::Needs::Unavailable(runtime) => {
+            return Err(format!("needs the {runtime} runtime, which is not on offer"));
+        }
+        crate::catalogue::Needs::Nothing => {}
+    }
+    queue.push(offer.clone());
+
+    let root = crate::bundle::root();
+    for item in &queue {
+        let mut failed = None;
+        crate::catalogue::install(item, &root, |p| {
+            if let crate::fetch::Progress::Failed(why) = p {
+                failed = Some(why);
+            }
+        });
+        // Set either way: a queue that fails on its second file has its first one
+        // installed, and the panel has to hear about that too.
+        shared.apps_changed.store(true, Ordering::Relaxed);
+        if let Some(why) = failed {
+            return Err(why);
+        }
+    }
+    Ok(match queue.len() {
+        1 => format!("{} installed", offer.name),
+        _ => format!("{} installed, with {}", offer.name, queue[0].name),
+    })
+}
+
+/// Remove the installed app with this key.
+///
+/// Refused for an app the image shipped, which `uninstall` decides, and for one
+/// that is running, which only the render loop knows.
+fn remove_one(shared: &Arc<Shared>, key: &str) -> Result<String, String> {
+    let roots = crate::bundle::roots();
+    let apps = crate::bundle::discover_all(&roots);
+    let app = apps.iter().find(|a| a.key == key).ok_or_else(|| "no such app".to_string())?;
+    let running = shared.running.lock().map(|r| r.contains(&app.name)).unwrap_or(false);
+    if running {
+        return Err(format!("{} is running: close it first", app.name));
+    }
+    app.uninstall().map_err(|e| e.to_string())?;
+    shared.apps_changed.store(true, Ordering::Relaxed);
+    Ok(format!("{} uninstalled", app.name))
+}
+
+/// Ask the panel to start the installed app with this key.
+///
+/// Checked here and started there: the name is resolved now so a stale page gets
+/// told, and the launch itself is left to the loop, which is where the runtime
+/// check, the dependency question and the hosting live.
+fn run_one(shared: &Arc<Shared>, key: &str) -> Result<String, String> {
+    let apps = crate::bundle::discover_all(&crate::bundle::roots());
+    let app = apps.iter().find(|a| a.key == key).ok_or_else(|| "no such app".to_string())?;
+    if shared.running.lock().map(|r| r.contains(&app.name)).unwrap_or(false) {
+        return Ok(format!("{} is already running", app.name));
+    }
+    match shared.launch.lock() {
+        Ok(mut slot) => {
+            *slot = Some(key.to_string());
+            Ok(format!("{} starting", app.name))
+        }
+        Err(_) => Err("the panel is not listening".to_string()),
+    }
+}
+
+/// One `"key":"value"` out of a small JSON object.
+///
+/// The bodies here are two fields written by our own page, so this reads a string
+/// by name and understands the escapes `JSON.stringify` produces, rather than
+/// being a parser. It is the counterpart of [`escape`].
+fn field(body: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let at = body.find(&needle)? + needle.len();
+    let rest = body[at..].trim_start().strip_prefix(':')?.trim_start();
+    let mut chars = rest.strip_prefix('"')?.chars();
+    let mut out = String::new();
+    loop {
+        match chars.next()? {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                'b' => out.push('\u{8}'),
+                'f' => out.push('\u{c}'),
+                'u' => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                }
+                c => out.push(c),
+            },
+            c => out.push(c),
+        }
+    }
+}
+
+/// A string as the body of a JSON string, without its quotes.
+fn escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Fetch the prototype's current screen.
