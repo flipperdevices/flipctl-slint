@@ -28,8 +28,9 @@
 //! before the server was understood and is still the way to point the screen at a
 //! build by hand.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
+
+pub use crate::fetch::{megabytes, Progress};
 
 /// Where the artefacts are published.
 pub const SERVER: &str = "https://dl-linux-images.flipp.dev";
@@ -191,20 +192,16 @@ fn read_build(build: &str, name: &str) -> Option<Image> {
     })
 }
 
-/// One GET, as text. Seconds rather than minutes: a screen is waiting on this, and a
-/// build server that has gone away should say so while somebody is still looking.
+/// One GET, as text, said the way this screen says it: every failure here is the
+/// build server not answering, and a screen waiting on a manifest has nothing more
+/// useful to tell somebody than which server went quiet.
 fn get(url: &str) -> Result<String, String> {
-    let out = std::process::Command::new("curl")
-        .arg("-fsSL")
-        .arg("--max-time")
-        .arg("20")
-        .arg(url)
-        .output()
-        .map_err(|e| format!("curl: {e}"))?;
-    if !out.status.success() {
-        return Err("the build server did not answer".into());
-    }
-    String::from_utf8(out.stdout).map_err(|_| "the manifest is not text".into())
+    crate::fetch::get(url).map_err(|_| "the build server did not answer".to_string())
+}
+
+/// Fetch `image` to `to`, reporting as it goes.
+pub fn fetch(image: &Image, to: &Path, say: impl FnMut(Progress)) {
+    crate::fetch::download(&image.url, image.bytes, &image.sha256, to, say)
 }
 
 /// What `channel` is currently offering, from the build server.
@@ -391,103 +388,6 @@ mod json {
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         digits.parse().ok()
     }
-}
-
-/// How far a download has got, as the thread doing it reports it.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum Progress {
-    /// Bytes so far and, when the server said, bytes expected.
-    Fetching(u64, u64),
-    /// On disk at this path, ready to boot.
-    Ready(PathBuf),
-    Failed(String),
-}
-
-/// Fetch `image` to `to`, reporting as it goes.
-///
-/// Written to a `.part` beside the target and renamed at the end, so an interrupted
-/// download cannot be mistaken for an image: the name exists only once the bytes are
-/// all there. curl rather than an HTTP crate, for the same reason the rest of this
-/// binary shells out: the alternative is TLS, certificates and redirects as
-/// dependencies, for one GET.
-pub fn fetch(image: &Image, to: &Path, mut say: impl FnMut(Progress)) {
-    let part = to.with_extension("part");
-    let _ = std::fs::remove_file(&part);
-    let mut child = match std::process::Command::new("curl")
-        .arg("-fsSL")
-        .arg("--output")
-        .arg(&part)
-        .arg("--write-out")
-        .arg("%{size_download}")
-        .arg(&image.url)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => return say(Progress::Failed(format!("curl: {e}"))),
-    };
-
-    // Watched from here rather than read from curl: curl's own progress goes to a
-    // terminal, and the file's size is the same number without parsing anything.
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut out = String::new();
-                if let Some(mut pipe) = child.stdout.take() {
-                    let _ = pipe.read_to_string(&mut out);
-                }
-                if !status.success() {
-                    let _ = std::fs::remove_file(&part);
-                    return say(Progress::Failed(format!("download failed ({status})")));
-                }
-                if let Err(e) = verify(&part, &image.sha256) {
-                    let _ = std::fs::remove_file(&part);
-                    return say(Progress::Failed(e));
-                }
-                if let Err(e) = std::fs::rename(&part, to) {
-                    return say(Progress::Failed(format!("cannot place the image: {e}")));
-                }
-                return say(Progress::Ready(to.to_path_buf()));
-            }
-            Ok(None) => {
-                let so_far = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-                say(Progress::Fetching(so_far, image.bytes));
-                std::thread::sleep(std::time::Duration::from_millis(250));
-            }
-            Err(e) => return say(Progress::Failed(format!("curl: {e}"))),
-        }
-    }
-}
-
-/// Check what arrived against the hash the manifest published.
-///
-/// Checked before the file is given its real name, so a corrupt download is never a
-/// thing that could be booted. Nothing is verified when the manifest published no
-/// hash, which is the `FLIPCTL_UPDATE_URL` case: a URL typed by hand comes with no
-/// claim about what is at the other end.
-///
-/// sha256sum rather than a crate, for the same reason curl is doing the download.
-fn verify(file: &Path, want: &str) -> Result<(), String> {
-    if want.is_empty() {
-        return Ok(());
-    }
-    let out = std::process::Command::new("sha256sum")
-        .arg(file)
-        .output()
-        .map_err(|e| format!("sha256sum: {e}"))?;
-    let said = String::from_utf8_lossy(&out.stdout);
-    let got = said.split_whitespace().next().unwrap_or("");
-    if got.eq_ignore_ascii_case(want) {
-        Ok(())
-    } else {
-        Err("the download does not match its checksum".into())
-    }
-}
-
-/// A size for the screen, in the few characters a row's right edge allows.
-pub fn megabytes(bytes: u64) -> String {
-    format!("{:.0}MB", bytes as f64 / 1_048_576.0)
 }
 
 #[cfg(test)]
