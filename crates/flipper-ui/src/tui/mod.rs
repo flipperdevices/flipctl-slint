@@ -27,6 +27,7 @@ use std::io::{IsTerminal, Write};
 use std::os::fd::FromRawFd;
 use std::sync::{Arc, Mutex, Once};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use cursive::reexports::crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use cursive::view::Nameable;
@@ -55,10 +56,21 @@ pub enum TerminalEvent {
 struct Termios(libc::termios);
 
 /// Everything the reset sequence has to undo: the alternate screen, a hidden cursor,
-/// mouse reporting, and every graphic attribute. Crossterm's teardown sends neither
+/// every mouse mode and every graphic attribute. Crossterm's teardown sends neither
 /// SGR 0 nor anything after leaving the alternate screen, so without this a cell left
-/// on a white background colours whatever prints next.
-const RESET: &str = "\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[0m";
+/// on a white background colours whatever prints next. On the paths where the
+/// backend's own teardown never runs (the panic hook, a loop that would not stop) it
+/// is the whole of it, so it carries every mouse mode and not a couple of them.
+const RESET: &str =
+    "\x1b[?1049l\x1b[?25h\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[0m";
+
+/// Every mouse mode cursive's backend turns on, in the order crossterm undoes them.
+///
+/// Sent as soon as the backend is up, because nothing on either screen reads a mouse:
+/// the terminal is a key map and the panel has buttons. Never on is also the only way
+/// it is reliably off at the end: a pointer moved across a window whose menu has gone
+/// types escape sequences into whatever has the console next.
+const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
 static SAVED: Mutex<Option<Termios>> = Mutex::new(None);
 static HOOK: Once = Once::new();
@@ -366,9 +378,19 @@ impl Terminal {
             return;
         };
         let _ = self.cb.send(Box::new(|siv: &mut Cursive| siv.quit()));
-        let _ = thread.join();
+        // Waited for, not joined, so the backend's teardown still lands before the
+        // reset below and a loop that will not end cannot keep the console. Crossterm
+        // blocks in a read until an escape sequence it has started is complete, so a
+        // line that dropped a byte parks it for good, and what follows a stop here is
+        // a kexec: a terminal left in the alternate screen is where the next kernel
+        // writes its log.
+        if ended(&thread, STOP_WAIT) {
+            let _ = thread.join();
+        } else {
+            crate::logline!("tui            the event loop did not stop; resetting anyway");
+        }
         restore_termios();
-        // After the join, so it lands once the backend has left the alternate screen.
+        // After the wait, so it lands once the backend has left the alternate screen.
         let mut out = std::io::stdout();
         let _ = out.write_all(RESET.as_bytes());
         let _ = out.flush();
@@ -381,6 +403,29 @@ impl Drop for Terminal {
     }
 }
 
+/// How long a stop waits for the event loop before giving the console back anyway.
+///
+/// Long enough that the ordinary end (a poll interval, then the backend's teardown) is
+/// never cut short, and short enough not to hold up a handover already under way on its
+/// own thread.
+const STOP_WAIT: Duration = Duration::from_millis(250);
+
+/// Whether the thread finished within the time given.
+///
+/// `is_finished` rather than a channel: the loop's last act is to send `Closed`, which
+/// the caller may already have taken. The backend is dropped before the thread body
+/// returns, so a finished thread is one that has given the screen back.
+fn ended(thread: &JoinHandle<()>, within: Duration) -> bool {
+    let deadline = Instant::now() + within;
+    while !thread.is_finished() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    true
+}
+
 /// The cursive thread: build the screen, hand the sink back, run until told to stop.
 fn run(tx: Sender<TerminalEvent>, ready: Sender<CbSink>) {
     let mut siv = cursive::CursiveRunnable::new(|| {
@@ -391,9 +436,16 @@ fn run(tx: Sender<TerminalEvent>, ready: Sender<CbSink>) {
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        cursive::backends::crossterm::Backend::init_with_stdout_file(unsafe {
+        let backend = cursive::backends::crossterm::Backend::init_with_stdout_file(unsafe {
             File::from_raw_fd(fd)
-        })
+        })?;
+        // The backend turned mouse reporting on as it opened; turn it straight back
+        // off. Ordered after the init, which writes and flushes its own sequence
+        // before returning, and on the same terminal by a different descriptor.
+        let mut out = std::io::stdout();
+        let _ = out.write_all(MOUSE_OFF.as_bytes());
+        let _ = out.flush();
+        Ok(backend)
     });
 
     // The terminal's own colours, not cursive's blue: this shares a screen with a
@@ -423,7 +475,35 @@ fn run(tx: Sender<TerminalEvent>, ready: Sender<CbSink>) {
 
 #[cfg(test)]
 mod tests {
-    use super::RESET;
+    use super::{ended, MOUSE_OFF, RESET, STOP_WAIT};
+    use std::time::Duration;
+
+    /// What cursive's crossterm backend switches on when it opens: normal tracking,
+    /// button-event tracking, any-event tracking, rxvt coordinates, SGR coordinates.
+    /// Any of them left on is a pointer typing into the console; 1003 is the one that
+    /// reports a mouse that is merely moving.
+    const ENABLED: [&str; 5] =
+        ["\x1b[?1000h", "\x1b[?1002h", "\x1b[?1003h", "\x1b[?1015h", "\x1b[?1006h"];
+
+    #[test]
+    fn every_mouse_mode_the_backend_enables_is_switched_off() {
+        for on in ENABLED {
+            let off = on.replace('h', "l");
+            assert!(MOUSE_OFF.contains(&off), "{on} is never undone");
+            assert!(RESET.contains(&off), "the reset leaves {on} on");
+        }
+    }
+
+    #[test]
+    fn a_stop_does_not_wait_for_a_thread_that_never_ends() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let parked = std::thread::spawn(move || {
+            let _ = rx.recv();
+        });
+        assert!(!ended(&parked, Duration::from_millis(20)), "a parked loop is not an ended one");
+        drop(tx);
+        assert!(ended(&parked, STOP_WAIT), "and one that returns is seen to");
+    }
 
     #[test]
     fn the_reset_clears_every_attribute_last() {

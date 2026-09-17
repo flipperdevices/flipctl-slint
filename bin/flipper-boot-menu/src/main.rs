@@ -228,6 +228,26 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
             }
             apply(&ui, &view, kb.as_ref(), &warning);
             window.request_redraw();
+            match tui.take() {
+                // The console is given back at the handover rather than held to the
+                // end, and before the takeover reaches the panel rather than after:
+                // the boot is already running on its own thread, and a kexec that
+                // lands first leaves the terminal in the alternate screen with the
+                // menu painted on it, which is where the next kernel then logs.
+                //
+                // Whatever the alternate screen is showing is thrown away when it
+                // closes, so the line that says what is booting has to be printed after
+                // it, in cooked mode, where it stays above the next kernel's log.
+                Some(terminal) if booting => {
+                    terminal.stop();
+                    println!("Booting {}", view.booting);
+                }
+                Some(terminal) => {
+                    terminal.show(view);
+                    tui = Some(terminal);
+                }
+                None => {}
+            }
             if !booting || !takeover_committed {
                 if let Some(damage) = render_into(&window, &mut frame) {
                     sink.commit(Frame::new(&frame, PANEL_W, PANEL_H), damage)?;
@@ -242,21 +262,6 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
                         "boot menu      takeover drawn; the panel is left alone from here"
                     );
                 }
-            }
-            match tui.take() {
-                // The console is given back at the handover rather than held to the
-                // end. Whatever the alternate screen is showing is thrown away when it
-                // closes, so the line that says what is booting has to be printed after
-                // it, in cooked mode, where it stays above the next kernel's log.
-                Some(terminal) if booting => {
-                    terminal.stop();
-                    println!("Booting {}", view.booting);
-                }
-                Some(terminal) => {
-                    terminal.show(view);
-                    tui = Some(terminal);
-                }
-                None => {}
             }
         }
 
