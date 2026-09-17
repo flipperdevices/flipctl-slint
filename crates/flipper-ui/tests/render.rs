@@ -873,3 +873,53 @@ fn ethernet_cards_hold_their_geometry() {
         support::assert_golden(name, &surface);
     }
 }
+
+/// The bars have to mean something.
+///
+/// Five of them, lit in proportion to the quality ModemManager reports. A fixed
+/// sprite would say only "there is a modem", which is all the bar could say while
+/// nothing was reading the modem, and is the thing most likely to be left behind by
+/// accident once something does.
+#[test]
+fn modem_bars_follow_the_signal() {
+    let window = FlipperSlintPlatform::install();
+    let screen = Root::new().expect("create Root");
+    screen.set_screen(Screen::Menu);
+    list_screen(&screen, false);
+    screen.set_modem_available(true);
+    screen.show().expect("show");
+
+    let stride = usize::from(theme::PANEL_W);
+    let mut lit = |quality: i32| -> usize {
+        screen.set_modem_quality(quality);
+        slint::platform::update_timers_and_animations();
+        let frame = render_frame(&window).expect("a quality change repaints");
+        let pixels: &[flipper_ui::Gray8] = &frame;
+        // The five bars differ in height but share their bottom row, and an unlit one
+        // is painted in the ground, so the colour at that row is the whole test.
+        (0..5).filter(|i| pixels[9 * stride + 2 + i * 2].0 == 255).count()
+    };
+
+    // Swept rather than spot-checked, and never twice at the same value: the frame is
+    // only repainted when something changed.
+    let sweep: Vec<(i32, usize)> = [100, 0, 1, 20, 21, 40, 41, 60, 61, 80, 81, 99]
+        .into_iter()
+        .map(|quality| (quality, lit(quality)))
+        .collect();
+    let at = |want: i32| sweep.iter().find(|(q, _)| *q == want).expect("swept").1;
+
+    assert_eq!(at(0), 0, "no signal lights no bars: {sweep:?}");
+    assert_eq!(at(100), 5, "full signal lights all five: {sweep:?}");
+    assert!(at(1) >= 1, "any signal at all lights a bar: {sweep:?}");
+
+    // Monotonic, which is what "proportional" has to mean for something drawn in five
+    // steps: more signal is never fewer bars.
+    let mut ordered: Vec<(i32, usize)> = sweep.clone();
+    ordered.sort_by_key(|(quality, _)| *quality);
+    for pair in ordered.windows(2) {
+        assert!(pair[0].1 <= pair[1].1, "bars went backwards over {pair:?}: {sweep:?}");
+    }
+
+    // And it uses the range rather than sitting at one end.
+    assert!(at(41) >= 2 && at(41) <= 3, "half signal is about half the bars: {sweep:?}");
+}

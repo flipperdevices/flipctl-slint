@@ -63,7 +63,6 @@ field_label   = "#6d6d6d"   # desktop.js field labels: Temperature, Hostname:, I
 # bg = eee / fg = black.
 bar_bg        = "#000000"
 bar_fg        = "#ffffff"
-bar_dim       = "#cccccc"   # empty 5G signal bars
 # The boot menu's header, which the auto-start progress bar sweeps black over.
 header_bg     = "#d9d9d9"   # boot_menu.js header fill
 bar_bg_light  = "#eeeeee"   # Desktop override

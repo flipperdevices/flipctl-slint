@@ -54,7 +54,6 @@ export component StatusBar inherits Rectangle {
     // ground with dark ink.
     in property <color> ground: FlipperTheme.bar_bg;
     in property <color> ink: FlipperTheme.bar_fg;
-    in property <color> dim: FlipperTheme.bar_dim;
 
     width: 100%;
     height: FlipperTheme.status_bar_h;
@@ -72,6 +71,12 @@ export component StatusBar inherits Rectangle {
 
     // Five bars, 1px wide on a 2px pitch, heights 3 to 7, sharing a bottom edge.
     // `filled` is ceil(quality / 20), so any signal at all lights the first bar.
+    //
+    // An unlit bar is painted in the ground rather than in a dimmer ink, so four bars
+    // reads as four. Drawn dim it was still a bar: at 204 against the strip's 255 the
+    // step is too small to see on glass, and a full-strength signal looked the same as
+    // a four-fifths one. The ground rather than a literal colour, because Desktop
+    // overrides the pair and a fixed white would be the lit colour there.
     if root.modem_available: Rectangle {
         x: 2px;
         y: root.top;
@@ -83,7 +88,7 @@ export component StatusBar inherits Rectangle {
             y: (7 - bar) * 1px;
             width: 1px;
             height: bar * 1px;
-            background: i < Math.ceil(root.modem_quality / 20) ? root.ink : root.dim;
+            background: i < Math.ceil(root.modem_quality / 20) ? root.ink : root.ground;
         }
     }
 

@@ -97,6 +97,7 @@ fn read(path: impl AsRef<Path>) -> Option<String> {
 fn read_status() -> Status {
     let (battery, charging) = read_battery();
     let (wifi_connected, wifi_quality) = read_wifi();
+    let modem = modem::latest();
     Status {
         battery,
         charging,
@@ -104,8 +105,8 @@ fn read_status() -> Status {
         wifi_quality,
         ethernet: read_ethernet(),
         modem_available: modem_present(),
-        access_tech: "--",
-        modem_quality: 0,
+        access_tech: modem.tech,
+        modem_quality: modem.quality,
     }
 }
 
@@ -241,18 +242,29 @@ fn is_gadget(name: &str) -> bool {
 
 /// Whether a cellular modem exists at all.
 ///
-/// Presence only. The tech label and signal bars need a modem to develop
-/// against, and this board has none (`mmcli -L` reports no modems), so reading
-/// them is left until there is hardware to verify against rather than written
-/// blind. With no modem the prototype hides the whole block, which is what
-/// `modem_available: false` reproduces.
+/// Presence only. The tech label and the bars need the modem to be registered on a
+/// network, which is ModemManager's to answer and not sysfs's, so they are left at
+/// `--` and zero here rather than guessed at.
+///
+/// Asked of the driver rather than of the name. The kernel calls the interface
+/// `wwan0` and udev renames it for where the device sits, so a Quectel on USB ends up
+/// as `wwu1u4i3`: matching names meant keeping a list of prefixes and losing a real
+/// modem to a spelling nobody had thought of. `DEVTYPE` is the driver's own word for
+/// what the interface is, it is there before the rename and unchanged after it, and
+/// wireless says `wlan` while plain ethernet says nothing at all.
+///
+/// `ppp` stays a name test: a dial-up link is a modem too, and it has no device in
+/// sysfs to ask.
 fn modem_present() -> bool {
     let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
         return false;
     };
     entries.flatten().any(|e| {
-        let name = e.file_name().to_string_lossy().to_string();
-        name.starts_with("wwan") || name.starts_with("wwp") || name.starts_with("ppp")
+        if e.file_name().to_string_lossy().starts_with("ppp") {
+            return true;
+        }
+        std::fs::read_to_string(e.path().join("uevent"))
+            .is_ok_and(|said| said.lines().any(|line| line.trim() == "DEVTYPE=wwan"))
     })
 }
 
@@ -594,4 +606,128 @@ fn ipv4_by_interface() -> std::collections::HashMap<String, Vec<String>> {
     // SAFETY: head came from getifaddrs and is freed exactly once.
     unsafe { libc::freeifaddrs(head) };
     found
+}
+
+/// The modem's own numbers, which sysfs does not carry.
+///
+/// Signal quality and the access technology belong to the modem, and on this system
+/// ModemManager is what has them: they arrive over D-Bus, or through `mmcli`, and
+/// neither belongs on the render loop that reads the rest of the bar. So a thread
+/// asks every few seconds and leaves the answer here, and the status read takes it
+/// with a lock and no syscall at all.
+///
+/// The thread starts on the first reading rather than at startup, so a build that
+/// never draws a status bar never spawns it.
+mod modem {
+    use std::sync::{Mutex, Once, OnceLock};
+    use std::time::Duration;
+
+    /// How often the modem is asked.
+    ///
+    /// Not as often as the bar is drawn, and no faster than this is worth spending.
+    /// Signal quality is not in sysfs and cannot be: it lives in the modem's
+    /// firmware, reachable only over its control channel, and the kernel's qmi_wwan
+    /// is a pipe for the data path that never decodes a QMI message. So each reading
+    /// is ModemManager, through two processes, while the bar moves in fifths and
+    /// ModemManager refreshes the number on a schedule of its own.
+    const EVERY: Duration = Duration::from_secs(5);
+
+    #[derive(Copy, Clone, PartialEq, Debug)]
+    pub struct Reading {
+        /// One of the labels the bar draws, or `--` when the modem is not registered
+        /// and there is no technology to name.
+        pub tech: &'static str,
+        /// 0..=100, as ModemManager reports it.
+        pub quality: i32,
+    }
+
+    impl Default for Reading {
+        fn default() -> Self {
+            Self { tech: "--", quality: 0 }
+        }
+    }
+
+    fn cell() -> &'static Mutex<Reading> {
+        static LATEST: OnceLock<Mutex<Reading>> = OnceLock::new();
+        LATEST.get_or_init(|| Mutex::new(Reading::default()))
+    }
+
+    pub fn latest() -> Reading {
+        static STARTED: Once = Once::new();
+        STARTED.call_once(|| {
+            std::thread::spawn(watch);
+        });
+        cell().lock().map(|held| *held).unwrap_or_default()
+    }
+
+    fn watch() {
+        // The index is kept between readings. It only moves when the modem
+        // re-enumerates, which is a SIM change or a replug, so asking for it every
+        // time was a process spent to be told the same number. Losing it is how a
+        // re-enumeration is noticed: the next reading looks it up again.
+        let mut index: Option<String> = None;
+        loop {
+            if index.is_none() {
+                index = find_index();
+            }
+            let fresh = index.as_deref().and_then(read_from).unwrap_or_else(|| {
+                index = None;
+                Reading::default()
+            });
+            if let Ok(mut held) = cell().lock() {
+                *held = fresh;
+            }
+            std::thread::sleep(EVERY);
+        }
+    }
+
+    /// One `key : value` line's value, from mmcli's machine-readable output.
+    fn value<'a>(out: &'a str, key: &str) -> Option<&'a str> {
+        out.lines().find_map(|line| {
+            let (name, said) = line.split_once(':')?;
+            (name.trim() == key).then(|| said.trim())
+        })
+    }
+
+    fn mmcli(args: &[&str]) -> Option<String> {
+        let out = std::process::Command::new("mmcli").args(args).output().ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Which modem to ask for, as mmcli numbers them.
+    fn find_index() -> Option<String> {
+        let list = mmcli(&["-L", "--output-keyvalue"])?;
+        let path = value(&list, "modem-list.value[1]")?;
+        path.rsplit('/').next().map(str::to_string)
+    }
+
+    /// One reading, or `None` when that modem is no longer there to answer.
+    fn read_from(index: &str) -> Option<Reading> {
+        let out = mmcli(&["-m", index, "--output-keyvalue"])?;
+        let quality = value(&out, "modem.generic.signal-quality.value")
+            .and_then(|q| q.parse::<i32>().ok())
+            .unwrap_or(0)
+            .clamp(0, 100);
+        Some(Reading { tech: label(value(&out, "modem.generic.access-technologies")), quality })
+    }
+
+    /// The bar has room for a word, not for a list. ModemManager names every
+    /// technology the modem is using at once, newest first, so the first one it
+    /// recognises is the one worth showing.
+    fn label(said: Option<&str>) -> &'static str {
+        let Some(said) = said else {
+            return "--";
+        };
+        for part in said.split(',').map(str::trim) {
+            let named = match part {
+                "5gnr" => "5G",
+                "lte" => "LTE",
+                "umts" | "hspa" | "hspa-plus" | "hsupa" | "hsdpa" => "3G",
+                "gsm" | "gprs" | "edge" | "gsm-compact" => "2G",
+                _ => continue,
+            };
+            return named;
+        }
+        "--"
+    }
 }
