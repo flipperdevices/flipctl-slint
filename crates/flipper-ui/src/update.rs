@@ -15,11 +15,12 @@
 //! Finding one is two GETs. The build server publishes a `manifest.json` beside every
 //! directory it serves, which is what its own listing pages are generated from:
 //!
-//!   * `<server>/u-boot/manifest.json` lists the builds as `{name, mtime}`, newest
-//!     last once sorted. The name is the whole hash-joined directory, ending in `/`.
-//!   * `<server>/u-boot/<name>manifest.json` is that build: its number and timestamp,
-//!     a `sourcestamps` entry per codebase carrying the branch and revision it was
-//!     built from, and a `files` list of `{path, size, sha256}`.
+//!   * `<server>/falcon-installer/manifest.json` lists the builds as `{name, mtime}`,
+//!     newest last once sorted. The name is the whole hash-joined directory, ending
+//!     in `/`.
+//!   * `<server>/falcon-installer/<name>manifest.json` is that build: its number and
+//!     timestamp, a `sourcestamps` entry per codebase carrying the branch and
+//!     revision it was built from, and a `files` list of `{path, size, sha256}`.
 //!
 //! One file out of that list is wanted, `flipper-one/installer-falcon.itb`, and its
 //! sha256 comes with it, so what was downloaded is checked rather than hoped about.
@@ -35,15 +36,22 @@ pub use crate::fetch::{megabytes, Progress};
 /// Where the artefacts are published.
 pub const SERVER: &str = "https://dl-linux-images.flipp.dev";
 /// The builder whose output carries the installer, and so the directory to look in.
-pub const BUILDER: &str = "u-boot";
+///
+/// It was `u-boot` up to that builder's build 669. From its 670th the installer is
+/// built on its own, numbered from one again, and `u-boot` publishes no `.itb` at
+/// all: a screen still reading that builder walks back past every build since and
+/// keeps offering 669 forever.
+pub const BUILDER: &str = "falcon-installer";
 /// The one file out of a build that this boots. A build publishes thirteen for this
 /// board alone -- loaders, idbloader, the boot menu's own FIT -- and none of the rest
 /// is an update.
 pub const IMAGE: &str = "flipper-one/installer-falcon.itb";
-/// The codebase whose branch a channel is. It is the one that decides what an image
-/// contains, so it is the one worth filtering on; every other codebase in a build is
-/// pinned by it.
-const CHANNEL_CODEBASE: &str = "buildscripts";
+/// The codebase whose branch a channel is. It is the installer's own, which is what
+/// this builder builds and so what decides what the image contains. Not
+/// `buildscripts`, which pins the rest of a build but sits on `dev` even in a build
+/// made from a branch of the installer: filtering on that would offer somebody's
+/// test branch as a nightly.
+const CHANNEL_CODEBASE: &str = "installer";
 /// How far back to look for a build on the chosen channel before giving up. The
 /// builds are every push, so a channel with nothing recent is a channel with nothing.
 const LOOK_BACK: usize = 25;
@@ -57,8 +65,9 @@ const LOOK_BACK: usize = 25;
 /// nothing at one end of two choices is worse than a cycle.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum Channel {
-    /// Every push to the branch the work happens on. Today this is the only one the
-    /// server has ever built: every published build is on `dev`.
+    /// Every push to the branch the work happens on. Builds off a working branch of
+    /// the installer are published too, and belong to neither channel, so they are
+    /// passed over rather than offered here.
     #[default]
     Nightly,
     /// A branch cut for release. Nothing is built on it yet, and the screen says so
@@ -128,9 +137,10 @@ impl Image {
     }
 }
 
-/// How many builds to read. The server holds two hundred, each needing a GET of its
-/// own to learn its branch, and nobody installs the hundredth most recent thing.
-/// Twenty covers a few days of pushes on every channel at once.
+/// How many builds to read. The server keeps every build the builder has ever made,
+/// each needing a GET of its own to learn its branch, and nobody installs the
+/// hundredth most recent thing. Twenty covers a few days of pushes on every channel
+/// at once.
 pub const DEPTH: usize = 20;
 
 /// Every recent build, newest first, each already knowing its channel.
@@ -397,11 +407,11 @@ mod tests {
     /// Verbatim from the server, trimmed to three entries. The outer manifest is what
     /// the listing pages are generated from.
     const LISTING: &str = r#"{
- "build": { "builder": "uboot" },
+ "build": { "builder": "falcon-installer" },
  "directories": [
-  { "name": "u=0ff9d9cc__installer=b1863991/", "mtime": "2026-08-24T14:06:11.505000+00:00" },
-  { "name": "u=e995d0eb__installer=604e6dbc/", "mtime": "2026-09-11T11:41:27.000000+00:00" },
-  { "name": "u=1f5af61b__installer=b1863991/", "mtime": "2026-09-01T09:02:00.000000+00:00" }
+  { "name": "scripts=ed023961__installer=97d90960/", "mtime": "2026-09-16T18:25:35.373000+00:00" },
+  { "name": "scripts=95f6cb10__installer=6f7cc4e7/", "mtime": "2026-09-17T09:45:37.638000+00:00" },
+  { "name": "scripts=ed023961__installer=6f7cc4e7/", "mtime": "2026-09-17T08:10:01.334000+00:00" }
  ]
 }"#;
 
@@ -410,19 +420,20 @@ mod tests {
     /// strings.
     const BUILD: &str = r#"{
  "build": {
-  "builder": "uboot",
-  "number": 627,
-  "url": "https://linux-images.flipp.dev/#/builders/6/builds/627",
-  "timestamp": "2026-09-11T11:41:04Z"
+  "builder": "falcon-installer",
+  "number": 3,
+  "url": "https://linux-images.flipp.dev/#/builders/19/builds/3",
+  "timestamp": "2026-09-17T09:45:27Z"
  },
  "sourcestamps": [
-  { "codebase": "buildscripts", "branch": "dev", "revision": "c8b8af87b2455e2d" },
-  { "codebase": "linux-mainline", "branch": "flipper-devel", "revision": "cf84c6019d" }
+  { "codebase": "buildscripts", "branch": "dev", "revision": "95f6cb1021d45ac4" },
+  { "codebase": "installer", "branch": "dev", "revision": "6f7cc4e7eb16264f" },
+  { "codebase": "linux-mainline", "branch": "flipper-devel", "revision": "4f4c1e72eb" }
  ],
  "files": [
-  { "path": "evb/installer-falcon.itb", "size": 41487872, "sha256": "aaaa" },
-  { "path": "flipper-one/installer-falcon.itb", "size": 41716736, "sha256": "96ac92a8706663b0" },
-  { "path": "flipper-one/u-boot-rockchip.bin", "size": 9964032, "sha256": "037a82f8" }
+  { "path": "evb/installer-falcon.itb", "size": 17492992, "sha256": "aaaa" },
+  { "path": "flipper-one/installer-falcon.itb", "size": 17721344, "sha256": "0b89ad46d461e757" },
+  { "path": "flipper-one/installer-falcon-loader.bin", "size": 18002140, "sha256": "e93d32fa" }
  ]
 }"#;
 
@@ -430,11 +441,12 @@ mod tests {
     fn the_builds_are_read_out_of_the_listing() {
         let records = json::records(LISTING, "directories");
         assert_eq!(records.len(), 3);
-        assert_eq!(json::string(records[1], "name").unwrap(), "u=e995d0eb__installer=604e6dbc/");
+        let second = json::string(records[1], "name").unwrap();
+        assert_eq!(second, "scripts=95f6cb10__installer=6f7cc4e7/");
         // The times sort as text, which is what picking the newest relies on.
         let mut times: Vec<_> = records.iter().map(|r| json::string(r, "mtime").unwrap()).collect();
         times.sort();
-        assert!(times.last().unwrap().starts_with("2026-09-11"));
+        assert!(times.last().unwrap().starts_with("2026-09-17"));
     }
 
     #[test]
@@ -445,8 +457,8 @@ mod tests {
             .iter()
             .find(|r| json::string(r, "path").as_deref() == Some(IMAGE))
             .expect("the board's installer");
-        assert_eq!(json::number(ours, "size"), Some(41_716_736));
-        assert_eq!(json::string(ours, "sha256").unwrap(), "96ac92a8706663b0");
+        assert_eq!(json::number(ours, "size"), Some(17_721_344));
+        assert_eq!(json::string(ours, "sha256").unwrap(), "0b89ad46d461e757");
     }
 
     #[test]
@@ -460,12 +472,29 @@ mod tests {
         assert_ne!(branch.as_deref(), Some(Channel::Release.branch()));
     }
 
+    /// A build made from a working branch of the installer belongs to no channel,
+    /// even though every other codebase in it is on `dev`. Filtering on the
+    /// installer's own branch is what keeps it off the Nightly list.
+    #[test]
+    fn a_branch_of_the_installer_is_not_a_nightly() {
+        let off = r#"{ "sourcestamps": [
+  { "codebase": "buildscripts", "branch": "dev", "revision": "ed02396189e9710a" },
+  { "codebase": "installer", "branch": "test-recovery", "revision": "6f7cc4e7eb16264f" }
+ ] }"#;
+        let branch = json::records(off, "sourcestamps")
+            .iter()
+            .find(|r| json::string(r, "codebase").as_deref() == Some(CHANNEL_CODEBASE))
+            .and_then(|r| json::string(r, "branch"));
+        assert_eq!(branch.as_deref(), Some("test-recovery"));
+        assert!(!Channel::ALL.iter().any(|c| Some(c.branch()) == branch.as_deref()));
+    }
+
     /// The build's own number and day, which are outside the arrays.
     #[test]
     fn the_build_number_and_day_are_read() {
-        assert_eq!(json::number(BUILD, "number"), Some(627));
+        assert_eq!(json::number(BUILD, "number"), Some(3));
         let day = json::string(BUILD, "timestamp").unwrap();
-        assert_eq!(&day[..10], "2026-09-11");
+        assert_eq!(&day[..10], "2026-09-17");
     }
 
     /// A `}` or a `"` inside a value ends nothing. The build URL carries a `#` and

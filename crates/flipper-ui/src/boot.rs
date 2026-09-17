@@ -1528,7 +1528,34 @@ pub fn boot_now(p: &Profile) -> Result<bool, String> {
     Ok(dry)
 }
 
+/// The command line the installer is booted with.
+///
+/// Given rather than inherited. `boot-profile` passes the running `/proc/cmdline`
+/// when it is not told otherwise, and a FIT carries no `bootargs` of its own, so
+/// without this the installer starts with the line of the system it is replacing: a
+/// `root=UUID=` and a `rootflags=subvol=` naming a filesystem it never mounts, and
+/// three consoles.
+///
+/// The consoles are the reason this is not cosmetic. The installer's launcher takes
+/// the last entry of `/sys/class/tty/console/active` as its controlling terminal, so
+/// an inherited `console=tty1 console=ttyS0 console=ttyS4` put its terminal UI on
+/// tty1, the panel's own VT, which is the screen its graphical half is drawing on.
+/// One console, the debug UART, puts the text half on the wire and leaves the panel
+/// to the graphical one.
+///
+/// The rest: `fbcon=map:1` keeps the framebuffer console off fb0, which is the panel;
+/// `quiet` holds the kernel's own progress off that console while the installer is
+/// drawing on it; `driver_async_probe` lets the ethernet MAC and the LEDs probe
+/// alongside the rest of the boot rather than in front of it.
+///
+/// No `installer=` here, so the launcher's own default stands and both of its halves
+/// run.
+const INSTALLER_CMDLINE: &str =
+    "fbcon=map:1 console=ttyS0,1500000n8 quiet driver_async_probe=rk_gmac-dwmac,leds-gpio";
+
 /// kexec into a FIT image that is not a profile: the system updater's, from /tmp.
+///
+/// The image is booted with [`INSTALLER_CMDLINE`], not with this system's line.
 ///
 /// `boot-profile --image` reads the configuration for this board out of the FIT by
 /// `compatible`, takes the kernel, ramdisk and device tree from it, grafts this
@@ -1552,6 +1579,8 @@ pub fn boot_image(image: &std::path::Path) -> Result<bool, String> {
     if dry {
         args.push("--dry-run");
     }
+    args.push("--cmdline");
+    args.push(INSTALLER_CMDLINE);
     args.push("--image");
     args.push(path);
     run(&args)?;
@@ -1979,7 +2008,26 @@ pub fn size_parts(s: &str) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::env_supath;
+    use super::{env_supath, INSTALLER_CMDLINE};
+
+    /// One console, and it is the wire rather than the panel.
+    ///
+    /// The installer's launcher takes its controlling terminal from the last entry of
+    /// `/sys/class/tty/console/active`, which the `console=` arguments fill in order.
+    /// Name tty1 anywhere in this line and the installer's text UI takes the panel's
+    /// VT, on top of the half already drawing there, which is what the inherited line
+    /// used to do.
+    ///
+    /// Nothing about a root filesystem either: the installer mounts none, so a
+    /// `root=` here would name the very thing it is about to replace.
+    #[test]
+    fn the_installer_gets_one_console_and_no_root() {
+        let args: Vec<&str> = INSTALLER_CMDLINE.split_whitespace().collect();
+        let consoles: Vec<&&str> = args.iter().filter(|a| a.starts_with("console=")).collect();
+        assert_eq!(consoles.len(), 1, "{consoles:?}");
+        assert!(consoles[0].starts_with("console=ttyS"), "{}", consoles[0]);
+        assert!(!args.iter().any(|a| a.starts_with("root=") || a.starts_with("rootflags=")));
+    }
 
     /// Both samples are real files: Debian trixie on the device, and the Arch host.
     /// The separator is a tab in both, and the value carries the PATH= prefix.
