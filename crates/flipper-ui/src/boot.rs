@@ -64,8 +64,10 @@ pub struct Entry {
     pub id: String,
     /// The kernel release it names, e.g. `7.2.0-00249-g26619ffca0bd`.
     pub version: String,
-    /// That release as the entry's own `title` carries it, which kernel-install has
-    /// already trimmed to something a menu can show.
+    /// The same release, trimmed to what a menu line shows. Taken from `version`
+    /// and never from the entry's `title`: a title is the profile's label, and the
+    /// version gets only the room the label leaves it, which for a long profile
+    /// name is a single character and names no kernel at all.
     pub short: String,
     /// The `sort-key`, which is where the order lives. Read, never written here.
     pub key: String,
@@ -825,7 +827,7 @@ pub fn parse_conf(name: &str, text: &str) -> Option<Conf> {
         tries,
         subvol,
         key: field("sort-key").to_string(),
-        short: short_version(field("title"), &version),
+        short: short_version(&version),
         version,
         system,
         user,
@@ -1051,11 +1053,12 @@ fn version_in_path(path: &str) -> String {
 /// Taken from the title because kernel-install has already trimmed it there to fit a
 /// menu, and this menu is 256 pixels wide. A title that ends in anything but a version
 /// -- a profile whose name is the whole title -- falls back to the release itself.
-fn short_version(title: &str, version: &str) -> String {
-    match title.rsplit_once(char::is_whitespace) {
-        Some((_, last)) if last.starts_with(|c: char| c.is_ascii_digit()) => last.to_string(),
-        _ => version.to_string(),
-    }
+/// How much of a kernel release a menu line shows. Long enough for the release and
+/// enough of the git hash to tell two builds apart.
+const SHORT_VERSION_MAX: usize = 18;
+
+fn short_version(version: &str) -> String {
+    version.chars().take(SHORT_VERSION_MAX).collect()
 }
 
 /// The listing, parsed. Split out so it can be tested against real output.

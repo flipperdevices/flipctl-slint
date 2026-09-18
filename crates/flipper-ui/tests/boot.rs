@@ -194,8 +194,7 @@ fn an_entry_names_the_subvolume_and_the_kernel_it_boots() {
         .expect("an entry that mounts a subvolume");
     assert_eq!(conf.subvol, "@Desktop");
     assert_eq!(conf.version, "7.2.0-00249-g26619ffca0bd");
-    // The title's version is what a row shows, kernel-install having already trimmed
-    // it to fit a menu.
+    // What a row shows is the release, trimmed here rather than taken from the title.
     assert_eq!(conf.short, "7.2.0-00249-g26619");
 
     // devicetreedir must not be read as devicetree, and neither is an overlay.
@@ -204,6 +203,30 @@ fn an_entry_names_the_subvolume_and_the_kernel_it_boots() {
     // An entry that mounts nothing is not a row: the loader directory holds whatever
     // anyone has put there.
     assert!(boot::parse_conf("stray", "title Nothing\nlinux /vmlinuz\n").is_none());
+}
+
+/// A long profile label must not cost the kernel its name.
+///
+/// The title is composed as the label then whatever room is left, so a 24-character
+/// profile leaves one character for the release. Taking a row's kernel from the title
+/// gave every kernel of such a profile the same name, and the selector could not tell
+/// two of them apart.
+#[test]
+fn a_long_profile_label_does_not_swallow_the_kernel_name() {
+    let entry = |version: &str| {
+        format!(
+            "title      Desktop__Desktop-clone__ 7\n\
+             version    {version}\n\
+             options    root=UUID=b34a8456 rootflags=subvol=@Desktop__Desktop-clone__\n\
+             linux      /@Desktop__Desktop-clone__/usr/lib/modules/{version}/vmlinuz\n"
+        )
+    };
+    let a = boot::parse_conf("901-x", &entry("7.3.0-rc2-g4f88cfd50a94")).unwrap();
+    let b = boot::parse_conf("901-y", &entry("7.3.0-rc2-gd83595fdc473")).unwrap();
+
+    assert_eq!(a.short, "7.3.0-rc2-g4f88cfd");
+    assert_eq!(b.short, "7.3.0-rc2-gd83595f");
+    assert_ne!(a.short, b.short, "two kernels of one profile must not share a name");
 }
 
 /// The kernel release, for the entries that state none.
@@ -215,7 +238,7 @@ linux /@Minimal/usr/lib/modules/6.1.172/vmlinuz
 ";
     let conf = boot::parse_conf("600-flipperos-Minimal-6.1.172", older).unwrap();
     assert_eq!(conf.version, "6.1.172");
-    // No title to trim: the release itself is what the row would show.
+    // Short enough to show whole.
     assert_eq!(conf.short, "6.1.172");
 
     // An image that keeps its kernels in /boot names the release in the file.
