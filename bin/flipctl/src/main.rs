@@ -298,6 +298,9 @@ mod demo {
         Manager,
         /// Reboot. menu.js POSTs /api/system/reboot and pushes no scene.
         Reboot,
+        /// Turn the machine off. Like Reboot, nothing is drawn afterwards: the
+        /// handover stops us and the last frame stays on the panel.
+        Shutdown,
         /// Open one of the detail screens.
         Detail(Detail),
         /// The boot menu, which lists the bootable profiles.
@@ -421,6 +424,7 @@ mod demo {
             Row { label: "Disk info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
             Row { label: "Update", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
             Row { label: "Reboot", icon: 0, frames: 1, stat: Stat::None, act: Act::Reboot },
+            Row { label: "Shutdown", icon: 0, frames: 1, stat: Stat::None, act: Act::Shutdown },
         ],
     };
 
@@ -6092,6 +6096,10 @@ fn panel(
                         demo::Act::Reboot => {
                             eprintln!("action         reboot");
                             flipper_ui::system::reboot();
+                        }
+                        demo::Act::Shutdown => {
+                            eprintln!("action         shutdown");
+                            flipper_ui::system::shutdown();
                         }
                         // Nothing to draw while this happens: the handover stops
                         // us, so the last frame on the panel is this menu until

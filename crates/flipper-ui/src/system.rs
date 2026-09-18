@@ -94,3 +94,8 @@ pub fn spawn_transient(script: &str) -> Receiver<String> {
 pub fn reboot() -> Receiver<String> {
     spawn_transient("systemctl reboot")
 }
+
+/// Turn the machine off, the same way and with the same answer.
+pub fn shutdown() -> Receiver<String> {
+    spawn_transient("systemctl poweroff")
+}
