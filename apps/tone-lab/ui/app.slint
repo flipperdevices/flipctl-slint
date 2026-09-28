@@ -1,0 +1,29 @@
+// One picture and one line of readings, which is the whole app.
+//
+// CanvasBody is flipctl's own canvas: the bitmap goes up untouched at panel size,
+// and text is the only thing drawn over it, because an app has no font of its own
+// to measure a string with.
+import { Shell, PanelStatus } from "@app/shell.slint";
+import { CanvasBody, CanvasText } from "@flipctl/canvas.slint";
+
+export { CanvasText, PanelStatus }
+
+export component AppWindow inherits Shell {
+    in property <image> picture;
+    in property <[CanvasText]> texts;
+    in property <[string]> buttons;
+    in property <int> pressed_slot: -1;
+
+    // The shell's keys, under a name this component owns so Rust can see it.
+    callback keyed(string, bool);
+    key(text, down) => {
+        root.keyed(text, down);
+    }
+
+    CanvasBody {
+        bitmap: root.picture;
+        texts: root.texts;
+        buttons: root.buttons;
+        pressed_slot: root.pressed_slot;
+    }
+}

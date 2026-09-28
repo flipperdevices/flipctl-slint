@@ -1,0 +1,9 @@
+# The tone lab: still frames from the engine, corrected live on the glass.
+#
+# Choosing a tone curve by rebuilding Doom costs a launch per guess, and the guess
+# is made on a panel the host cannot imitate. This puts four captured frames on the
+# panel instead and moves the curve under the D-pad, so a whole afternoon of
+# palette builds becomes a minute of looking.
+name = "Tone Lab"
+wayland = "./target/release/tone-lab-app"
+folder = "Test Tools"
