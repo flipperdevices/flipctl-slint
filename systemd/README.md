@@ -62,5 +62,8 @@ the same reason the rest of the stack does it: numbers move between kernels.
 The recovery image ships this same unit with `flipctl-recovery.conf` installed as
 `flipctl.service.d/50-recovery.conf`. Recovery has no logind, no sudo and no `user`,
 so the drop-in runs flipctl as root with no PAM session, and unbinds fbcon from the
-panel before it starts. Its build has no `wayland` feature, so there is no sway and
-the Apps and App Manager rows are not shown.
+panel before it starts. Nothing else orders it after the display driver, so the
+drop-in waits for the panel's card as a device unit, which `flipctl-recovery.rules`
+(installed as `70-flipctl-recovery.rules`) creates by tagging the card for systemd.
+The image installs neither recovery file. Recovery's build has no `wayland` feature,
+so there is no sway and the Apps and App Manager rows are not shown.

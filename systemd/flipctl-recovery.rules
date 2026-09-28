@@ -1,0 +1,5 @@
+# Installed as 70-flipctl-recovery.rules by the recovery image, after 60-drm.rules
+# sets ID_PATH. The panel's card as a systemd device unit, so flipctl.service can be
+# ordered after it: nothing else tags DRM cards for systemd, and recovery has no
+# logind to wait on.
+SUBSYSTEM=="drm", KERNEL=="card*", ENV{ID_PATH}=="platform-2acf0000.spi-cs-0", TAG+="systemd"
