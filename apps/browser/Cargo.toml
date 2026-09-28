@@ -1,0 +1,38 @@
+# Its own workspace, so this crate is independent of whatever it happens to sit
+# inside. Without it cargo refuses to build: a crate under a workspace directory
+# is assumed to be a member of it.
+[workspace]
+
+[package]
+name = "browser-app"
+version = "0.1.0"
+edition = "2021"
+# The source. The binary is a combined work: it links flipctl-app, and so Slint,
+# which makes the built app GPL-3.0-only like flipctl itself.
+license = "MIT"
+publish = false
+
+# The engine is Chromium, a separate program spoken to over a pipe, so nothing here
+# lays out or fetches a page. What is here is the protocol, which is JSON, and the
+# pictures, which are JPEG: zune-jpeg decodes one straight to luma, which is the
+# grey the panel wants.
+[dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["device"] }
+slint = { version = "1.17", default-features = false, features = ["compat-1-2", "backend-winit-wayland", "renderer-software", "std"] }
+libc = "0.2"
+serde_json = "1"
+base64 = "0.22"
+zune-jpeg = "0.5"
+
+# The panel's own renderer, for the tests: they draw the screen headlessly and read
+# the pixels back. Tests only, so an app built on the device never compiles it.
+[dev-dependencies]
+flipper-ui = { path = "../../crates/flipper-ui", default-features = false, features = ["slint"] }
+png = "0.17"
+
+[build-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
+
+[profile.release]
+opt-level = "z"
+strip = true

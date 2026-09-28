@@ -1,0 +1,11 @@
+# A browser: Chromium lays the page out as a desktop would, and the panel looks at
+# it through a magnifier.
+#
+# The engine runs headless and sends a picture of the page whenever it changes, so
+# it is not a window flipctl hosts: this app draws every pixel, the cursor and the
+# minimap over the page, and it is the one that clicks. The pad drags the cursor,
+# PTT and a sideways swipe zoom, the arrows move the cursor and scroll at the page's
+# edge, Ok clicks and opens the keyboard on a text field, Edit types an address.
+name = "Browser"
+wayland = "./target/release/browser-app"
+apt = ["chromium"]

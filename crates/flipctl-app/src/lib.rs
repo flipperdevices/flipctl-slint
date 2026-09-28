@@ -30,9 +30,16 @@
 //! }
 //! ```
 
+pub use flipper_ui::key::FlipperKey;
+pub use flipper_ui::platform::Touch;
 pub use flipper_ui::status::{Status, StatusSource};
 pub use flipper_ui::Ethernet;
-pub use flipper_ui::{dropdown, font, paint, pixel, theme};
+pub use flipper_ui::{dropdown, font, keyboard, paint, pixel, theme};
+
+/// The touchpad and the motor, which a hosted app opens itself: the compositor has
+/// no pointer, so the pad reaches nobody unless somebody reads it.
+#[cfg(feature = "device")]
+pub use flipper_ui::{evdev::TouchpadSource, haptic::Haptic};
 
 /// Put a status reading on the panel's bar.
 ///
@@ -131,6 +138,25 @@ impl Key {
             'a' | 'A' => Self::Ptt,
             _ => return None,
         })
+    }
+
+    /// The same button under flipper-ui's name, which is what the on-screen
+    /// keyboard takes.
+    pub const fn flipper(self) -> FlipperKey {
+        match self {
+            Self::Up => FlipperKey::Up,
+            Self::Down => FlipperKey::Down,
+            Self::Left => FlipperKey::Left,
+            Self::Right => FlipperKey::Right,
+            Self::Ok => FlipperKey::Ok,
+            Self::Back => FlipperKey::Back,
+            Self::Escape => FlipperKey::Escape,
+            Self::View => FlipperKey::View,
+            Self::Power => FlipperKey::Power,
+            Self::Edit => FlipperKey::Edit,
+            Self::Run => FlipperKey::Run,
+            Self::Ptt => FlipperKey::Ptt,
+        }
     }
 
     /// Whether this is one of the five soft buttons, and which, from the left.

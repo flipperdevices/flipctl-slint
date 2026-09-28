@@ -286,6 +286,101 @@ station and the volume in a module-level object so re-entering the scene finds t
 which works because the scene is torn down and the page is not. An app here is a
 process: closing it ends the process, and the state goes with it.
 
+## The browser, ported 2026-09-28
+
+`js/apps/browser.js` (cf09c8c, "fake browser concept"), transcribed into
+`apps/browser`. The prototype pans and zooms over a screenshot; here the screenshot is
+a live page, from Chromium running headless and screencasting over the DevTools
+protocol on a pipe. The numbers are the prototype's: x1 to x8 at 300 pad units a
+doubling in steps of 0.05, a tick of the motor every 0.1 and a thump at either limit,
+the 4px crosshair with its white halo, and the 64px minimap. Where the prototype
+stops, the port had to go on, and that is where each divergence comes from.
+
+**The page is seven panels wide.** Chromium lays out at 1792x1008, the shape of the
+prototype's 1790x1008 mockup rounded to a multiple of the panel, so x1 fills the panel
+exactly and x7 is one CSS pixel to one panel pixel.
+
+**Shrinking is a summed-area table, not a mip chain.** The prototype halves its image
+repeatedly and draws from the nearest level so that every source pixel is averaged.
+A summed-area table gives the exact mean of any rectangle in four lookups, so each
+panel pixel is the average of the page pixels under it at every factor, not only at
+the mip levels, and a frame costs one pass to prepare.
+
+**Zoom follows the finger sideways, not up and down.** The prototype zooms on the
+vertical travel, up to magnify. On the device that was asked to change on first use:
+with PTT held, right magnifies and left shrinks, at the same 300 units a doubling.
+
+**The minimap sits bottom right, and only while the view moves.** The prototype
+puts it bottom left and shows it whenever the zoom is past x1. Asked for on the
+device: it sits in the bottom-right corner, outlined black with white outside that
+and a pixel of white inside it, so the view's frame never merges with the outline at
+the page's edge, and in by those three pixels so all four of its sides show, and it comes up
+when the pad or the arrows move the view, stays while PTT is held, and goes down
+three seconds after the last move.
+
+**The halo is kept as the prototype draws it.** It runs one pixel past the left and
+top arms and stops level with the right and bottom ones. That looks like an
+off-by-one, but it is what the design shows, so it is transcribed rather than
+corrected.
+
+**New: Ok clicks, the arrows pan, Edit types an address, Back goes back.** The
+prototype has none of them yet. Ok clicks the page point under the cursor. The arrows
+move the cursor 16 panel pixels a press, as the pad would; with the cursor already
+against the page's edge, a press further that way scrolls the page by 80% of what is
+visible instead, so each screenful overlaps the last. They scrolled on every press at
+first, which on the device read as the arrows doing nothing whenever the page had
+nowhere to go. Edit opens flipctl's own keyboard on the current address: a bare host gets
+`https://`, and words become a DuckDuckGo search. Back goes one page back and leaves
+from the first; Escape always leaves. A drag of the cursor also moves the page's
+pointer, so hover states show.
+
+**A click in a text field opens the keyboard on it.** New, and not in the prototype.
+After Ok the app asks the page, off the thread that draws, whether the focus is now
+in a text input, a textarea or an editable element, looking through shadow roots and
+same-origin frames. If it is, the keyboard opens titled with the field's label,
+placeholder or name, and with its text. Done selects the field's contents and types
+over them with `Input.insertText`, so the page hears ordinary input events rather
+than having its value set behind its back. Done on unchanged text writes nothing,
+since the panel shows the value in ASCII and that is not always the value. A
+password is shown as typed: the keyboard has no masking yet, and flipctl's own
+password entry has none either. Nothing is submitted: Done fills the field and the
+page's own button sends it.
+
+**New: the strip, with tabs, instead of soft keys.** Asked for on the device: no
+soft keys, and the address reached by pushing the cursor up. At the top of the
+site, which is the page scrolled to its top (the screencast frame carries the scroll
+offset) with the view showing that top, a 32px strip is across the panel and the page
+is pushed down under it, not covered; once the view leaves the top, by scrolling or
+by panning down while zoomed, the strip goes and the page has the whole panel. Up
+with the cursor on the top edge there, or a drag that carries on 12 panel pixels past
+it, moves the highlight into the strip, which is laid out as Chromium's: a grey tab row with the tab
+on screen white and a cross on it, a + after the last, then back, forward and reload
+as 7x7 icons beside the address in the keyboard's grey field. The arrows and the pad step the highlight from item to item, never
+onto a cross from the other row; Ok does what it is on; Down off the address or Back
+comes back to the page. The strip first came down only when asked for and went away
+again on Down, and on the device the first press anybody made was Down, meaning to
+reach the address, which put it away. It was then made permanent, with the page
+laid out at 1792x784 under it, and then asked to belong to the top of the site only,
+which is where it is now and why the layout is back to 1792x1008. Each tab is a target of its own in the one engine, and only the
+tab on screen is screencast. Titles are asked for with `document.title` when a tab
+loads, because the engine's target events carry only the title a page had when it
+was created. Closing the last tab sends it home rather than leaving nothing on screen.
+
+**The engine does not say it is headless.** DuckDuckGo answered a search on the
+device with a captcha. Headless Chromium puts HeadlessChrome in its User-Agent and
+its client hints and sets navigator.webdriver, so it is started with the User-Agent
+desktop Chromium of the same major version sends on Linux and with
+AutomationControlled off. It is a launch flag rather than a per-tab override because
+a tab created blank and sent on to its address afterwards never sent a picture, and a
+tab created on its address has made its first request before it can be told
+anything. The captcha could not be made to come back from the device or the host
+with or without this, so it cuts the obvious signals rather than being a proven fix.
+
+**The pad is the app's own.** The compositor has no pointer, so nothing reaches a
+hosted app's pad unless the app opens it. The browser reads it on a thread of its own
+through `TouchpadSource`, which `flipctl-app` now exports behind its `device`
+feature, together with `Haptic`, the keyboard and `Key::flipper`.
+
 ## Poll cadences, revisited 2026-09-03
 
 Each detail screen was given its prototype scene's own interval. Two of those did

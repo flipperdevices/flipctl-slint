@@ -156,6 +156,8 @@ What the crate gives the app:
 | `picture` | A `paint::Surface` as an image, for an app that draws pixels. |
 | `paint`, `font`, `pixel`, `theme` | The primitives, the panel's bitmap fonts, and every token. |
 | `dropdown` | The settings row's own geometry: what to put in a `DropRow`, and where a picker's options go. |
+| `keyboard`, `Key::flipper` | The on-screen keyboard's model, `TextInput`, which `TextInputBody` draws. It takes flipper-ui's key names, which `Key::flipper` gives. |
+| `TouchpadSource`, `Haptic` | The pad and the motor, behind the `device` feature. The compositor has no pointer, so an app that wants the pad opens it itself. |
 
 ## The widgets
 
@@ -174,7 +176,7 @@ Imported from `@flipctl`, the same components flipctl's own screens are built fr
 | `SoftBar`, `SoftButton` (`frame.slint`) | The five soft keys on their own. |
 | `StatusBar` (`statusbar.slint`) | The top row, if you are not using a body that draws it. |
 
-## The two examples
+## The examples
 
 `apps/sysmon` is the fuller one: four pages, three of rows in `DetailBody` and one
 that paints two graphs into a `Surface` and shows them through `CanvasBody`, with
@@ -185,6 +187,11 @@ which it starts, asks questions of over a socket and kills with itself. It is al
 one with tests that draw: `cargo test` renders the page headlessly and reads the
 pixels back, and `RADIO_RENDER=1 cargo test` leaves the frames in `target/render` to
 look at.
+
+`apps/browser` is the one that owns the pad: it reads it on a thread of its own and drives
+headless Chromium over the DevTools protocol, drawing the page, the cursor and the
+minimap itself. `cargo test -- --ignored real` puts a live site through the whole path
+when a chromium is installed.
 
 ## What it costs
 

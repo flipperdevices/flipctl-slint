@@ -16,6 +16,8 @@ publish = false
 # The build-script half: generates the theme and compiles an app's components.
 # Off by default so the runtime library carries no build-time dependency.
 build = ["flipper-tokens", "slint-build"]
+# The touchpad and the vibration motor, read straight from evdev.
+device = ["flipper-ui/device"]
 
 [dependencies]
 flipper-ui = { path = "../flipper-ui", default-features = false }

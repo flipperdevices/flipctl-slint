@@ -1,0 +1,304 @@
+// The browser's one screen: the page, and what is drawn over it.
+//
+// No status bar and no soft bar: the strip across the top is the browser's chrome,
+// its tabs and its address, and the page has the panel below it. The cursor sits on
+// the page, the minimap shows while the view moves, and the factor shows while PTT
+// is held. The address is typed on flipctl's own keyboard, which takes the whole
+// panel while it is up.
+//
+// Every position arrives from src/view.rs, and the page arrives already shrunk to
+// the panel: this file draws and measures nothing.
+import { FlipperTheme } from "@theme";
+import { Shell, PanelStatus } from "@app/shell.slint";
+import { SelectorFrame } from "@flipctl/frame.slint";
+import { Modal } from "@flipctl/modal.slint";
+import { TextInputBody, KbCell } from "@flipctl/keyboard.slint";
+
+export { KbCell, PanelStatus }
+
+// One filled rectangle: an arm of the cursor or its halo, or a side of a frame.
+export struct Mark {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    black: bool,
+}
+
+// A tab in the strip. The white one is the page on screen.
+export struct StripTab {
+    x: length,
+    w: length,
+    title: string,
+    active: bool,
+    hot: bool,
+}
+
+// The tabs and the address over the top of the page, placed by src/strip.rs.
+component Strip {
+    in property <[StripTab]> tabs;
+    in property <length> tab_y;
+    in property <length> tab_h;
+    in property <length> addr_y;
+    in property <length> addr_h;
+    in property <length> field_x;
+    in property <length> field_w;
+    in property <length> field_h;
+    in property <string> address;
+    in property <bool> address_hot;
+    in property <[Mark]> marks;
+    in property <length> rule_y;
+
+    property <length> text_dy:
+        Math.floor((root.tab_h - FlipperTheme.kb_text_ink_h) / 2 / 1px) * 1px;
+
+    width: 100%;
+    height: root.rule_y + 1px;
+
+    Rectangle {
+        y: 0;
+        height: root.addr_y;
+        background: FlipperTheme.app_bar;
+    }
+    Rectangle {
+        y: root.addr_y;
+        height: root.addr_h;
+        background: FlipperTheme.white;
+    }
+
+    for tab in root.tabs: SelectorFrame {
+        x: tab.x;
+        y: root.tab_y;
+        frame_w: tab.w;
+        // The white one is a row taller, so it runs on into the address row.
+        frame_h: tab.active && !tab.hot ? root.tab_h + 1px : root.tab_h;
+        radius: FlipperTheme.menu;
+        round_bl: false;
+        round_br: false;
+        shadow: false;
+        filled: tab.hot || tab.active;
+        fill_color: tab.hot ? FlipperTheme.black : FlipperTheme.white;
+        stroke: false;
+    }
+    for tab in root.tabs: Text {
+        x: tab.x + 5px;
+        y: root.tab_y + root.text_dy;
+        text: tab.title;
+        color: tab.hot ? FlipperTheme.white : FlipperTheme.black;
+    }
+
+    SelectorFrame {
+        x: root.field_x;
+        y: root.addr_y + 1px;
+        frame_w: root.field_w;
+        frame_h: root.field_h;
+        radius: FlipperTheme.menu;
+        shadow: false;
+        filled: true;
+        fill_color: root.address_hot ? FlipperTheme.black : FlipperTheme.disabled_bg;
+        stroke: false;
+    }
+    Text {
+        x: root.field_x + FlipperTheme.kb_input_pad;
+        y: root.addr_y + 1px + root.text_dy;
+        text: root.address;
+        color: root.address_hot ? FlipperTheme.white : FlipperTheme.black;
+    }
+
+    for m in root.marks: Rectangle {
+        x: m.x;
+        y: m.y;
+        width: m.w;
+        height: m.h;
+        background: m.black ? FlipperTheme.black : FlipperTheme.white;
+    }
+
+    Rectangle {
+        y: root.rule_y;
+        height: 1px;
+        background: FlipperTheme.black;
+    }
+}
+
+export component AppWindow inherits Shell {
+    // The page as the panel shows it, and what to say before there is one.
+    in property <image> page;
+    in property <bool> has_page;
+    in property <string> waiting;
+
+    // The minimap, and its border under it.
+    in property <bool> mini_shown;
+    in property <image> mini;
+    in property <length> mini_x;
+    in property <length> mini_y;
+    in property <length> mini_w;
+    in property <length> mini_h;
+    in property <[Mark]> under;
+    // The minimap's frame, then the cursor.
+    in property <[Mark]> over;
+
+    // The zoom factor, while PTT is held. Measured in Rust.
+    in property <string> pill;
+    in property <length> pill_x;
+    in property <length> pill_y;
+    in property <length> pill_w;
+
+    in property <bool> keyboard;
+    in property <string> kb_title;
+    in property <string> kb_text;
+    in property <length> kb_field_w;
+    in property <length> kb_cursor_dx;
+    in property <bool> kb_cursor_on;
+    in property <bool> kb_field_focused;
+    in property <string> kb_warning;
+    in property <[KbCell]> kb_cells;
+    in property <length> kb_chrome_x;
+    in property <length> kb_chrome_y;
+    in property <length> kb_chrome_w;
+    in property <length> kb_chrome_h;
+    in property <string> kb_lang_label;
+    in property <string> kb_tab_label;
+    in property <int> kb_tab_focus;
+    in property <int> kb_tab_pressed;
+    in property <int> kb_discard: -1;
+    in property <[string]> kb_buttons;
+    in property <int> pressed_slot: -1;
+
+    // The strip across the top. Always shown once the app is up.
+    in property <bool> strip_shown;
+    in property <[StripTab]> strip_tabs;
+    in property <length> strip_tab_y;
+    in property <length> strip_tab_h;
+    in property <length> strip_addr_y;
+    in property <length> strip_addr_h;
+    in property <length> strip_field_x;
+    in property <length> strip_field_w;
+    in property <length> strip_field_h;
+    in property <string> strip_address;
+    in property <bool> strip_address_hot;
+    in property <[Mark]> strip_marks;
+    in property <length> strip_rule_y;
+
+    // The engine would not start, or stopped.
+    in property <[string]> dialog;
+
+    callback keyed(string, bool);
+    key(text, down) => {
+        root.keyed(text, down);
+    }
+    // The engine or the pad has something: Rust drains its queue.
+    callback wake();
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: FlipperTheme.white;
+
+        if root.has_page: Image {
+            x: 0;
+            y: 0;
+            width: root.width;
+            height: root.height;
+            source: root.page;
+            image-fit: fill;
+            image-rendering: pixelated;
+        }
+
+        if !root.has_page: Text {
+            x: Math.round((root.width - (self.width - 1px)) / 2 / 1px) * 1px;
+            y: Math.round((root.height - FlipperTheme.kb_text_ink_h) / 2 / 1px) * 1px;
+            text: root.waiting;
+            color: FlipperTheme.black;
+        }
+
+        for m in root.under: Rectangle {
+            x: m.x;
+            y: m.y;
+            width: m.w;
+            height: m.h;
+            background: m.black ? FlipperTheme.black : FlipperTheme.white;
+        }
+
+        if root.mini_shown: Image {
+            x: root.mini_x;
+            y: root.mini_y;
+            width: root.mini_w;
+            height: root.mini_h;
+            source: root.mini;
+            image-fit: fill;
+            image-rendering: pixelated;
+        }
+
+        if root.strip_shown: Strip {
+            x: 0;
+            y: 0;
+            tabs: root.strip_tabs;
+            tab_y: root.strip_tab_y;
+            tab_h: root.strip_tab_h;
+            addr_y: root.strip_addr_y;
+            addr_h: root.strip_addr_h;
+            field_x: root.strip_field_x;
+            field_w: root.strip_field_w;
+            field_h: root.strip_field_h;
+            address: root.strip_address;
+            address_hot: root.strip_address_hot;
+            marks: root.strip_marks;
+            rule_y: root.strip_rule_y;
+        }
+
+        for m in root.over: Rectangle {
+            x: m.x;
+            y: m.y;
+            width: m.w;
+            height: m.h;
+            background: m.black ? FlipperTheme.black : FlipperTheme.white;
+        }
+
+        if root.pill != "": SelectorFrame {
+            x: root.pill_x;
+            y: root.pill_y;
+            frame_w: root.pill_w;
+            frame_h: FlipperTheme.kb_input_h;
+            radius: FlipperTheme.menu;
+            shadow: false;
+            filled: true;
+            fill_color: FlipperTheme.black;
+            stroke: false;
+        }
+        if root.pill != "": Text {
+            x: root.pill_x + FlipperTheme.kb_input_pad;
+            y: root.pill_y
+                + Math.floor((FlipperTheme.kb_input_h - FlipperTheme.kb_text_ink_h) / 2 / 1px) * 1px;
+            text: root.pill;
+            color: FlipperTheme.white;
+        }
+
+        if root.keyboard: TextInputBody {
+            title: root.kb_title;
+            visible_text: root.kb_text;
+            field_w: root.kb_field_w;
+            cursor_dx: root.kb_cursor_dx;
+            cursor_on: root.kb_cursor_on;
+            field_focused: root.kb_field_focused;
+            warning: root.kb_warning;
+            cells: root.kb_cells;
+            chrome_x: root.kb_chrome_x;
+            chrome_y: root.kb_chrome_y;
+            chrome_w: root.kb_chrome_w;
+            chrome_h: root.kb_chrome_h;
+            lang_label: root.kb_lang_label;
+            tab_label: root.kb_tab_label;
+            tab_focus: root.kb_tab_focus;
+            tab_pressed: root.kb_tab_pressed;
+            buttons: root.kb_buttons;
+            pressed_slot: root.pressed_slot;
+            discard: root.kb_discard;
+        }
+
+        if root.dialog.length > 0: Modal {
+            lines: root.dialog;
+            right_label: "Ok";
+            pressed_slot: root.pressed_slot;
+        }
+    }
+}
