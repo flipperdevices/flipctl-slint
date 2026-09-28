@@ -133,6 +133,11 @@ def copy_licenses(repo: Path, app_dir: Path, doc: Path, program: str) -> None:
         shutil.copy2(third_party, doc / third_party.name)
     else:
         print(f"warning: {third_party} missing; run scripts/gen-third-party-licenses.sh", file=sys.stderr)
+    # Whatever the crate attributions cannot cover: data an app carries that is
+    # somebody else's, which a generator reading Cargo.lock has no way to know about.
+    notice = app_dir / "NOTICE.md"
+    if notice.is_file():
+        shutil.copy2(notice, doc / notice.name)
     shutil.copy2(repo / "LICENSE", doc / "LICENSE")
     texts = repo / "LICENSES"
     if texts.is_dir():
@@ -158,6 +163,20 @@ def stage_staged(app_dir: Path, appdir: Path, tools: Path, manifest: dict) -> No
     os.chmod(appdir / "AppRun", 0o755)
 
     provides = manifest.get("provides", "")
+    if not provides:
+        # An app carrying only its own files: everything beside the manifest and the
+        # icon goes in as it stands. A runtime is the other kind of staged bundle and
+        # is the one with a recipe, because what it carries is ours to assemble.
+        beside = {"AppRun", "app.toml", manifest.get("icon", "")}
+        for item in sorted(app_dir.iterdir()):
+            if item.name in beside:
+                continue
+            if item.is_dir():
+                shutil.copytree(item, appdir / item.name)
+            else:
+                shutil.copy2(item, appdir / item.name)
+        return
+
     recipes = {"py": stage_python, "js": stage_node}
     if provides not in recipes:
         sys.exit(f"{app_dir}: a staged bundle provides {provides!r}, which has no recipe here")
@@ -273,7 +292,10 @@ def stage(app_dir: Path, appdir: Path, binary: Path | None, version: str, repo: 
         os.chmod(apprun, 0o755)
     else:
         stage_staged(app_dir, appdir, repo / "target/appimage/tools", manifest)
-        stage_ui(repo, appdir)
+        # The drawing stack is what a runtime lends the scripts it runs. An app that
+        # brings its own program has no use for it.
+        if manifest.get("provides"):
+            stage_ui(repo, appdir)
 
     icon_name = f"{app_id}.png"
     source_icon = app_dir / manifest["icon"] if manifest.get("icon") else HERE / "flipctl.png"

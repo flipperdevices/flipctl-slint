@@ -206,6 +206,11 @@ build_app() {
         cross_build "$app" "$bin"
         staged=(--binary "$SRCDIR/target/cross/apps/$RELDIR/$bin")
     fi
+    # An app that carries its own userspace unpacks it first: pinned Debian packages
+    # into <app>/runtime, which the staging below copies in like any other file.
+    if [ -f "$HERE/apps/$app/deb.lock" ]; then
+        "$HERE/tools/appimage/fetch-debs.sh" "$HERE/apps/$app"
+    fi
     echo "== staging $app =="
     in_bundle python3 "$SRCDIR/tools/appimage/bundle.py" stage "apps/$app" "$OUTDIR/$app/AppDir" \
         "${staged[@]}" --version "$version" --repo "$SRCDIR"
