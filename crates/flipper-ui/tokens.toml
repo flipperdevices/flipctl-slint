@@ -298,6 +298,9 @@ list_viewport_h     = 104   # menu.js, = 5 * 20 + 4 dividers
 submenu_container_y = 28    # submenu.js containerY, = status_bar_h + 15
 breadcrumb_x        = 4     # submenu.js breadcrumbX
 breadcrumb_y        = 15    # submenu.js breadcrumbY, = status_bar_h + 2
+# A detail screen with no breadcrumb, which is every app's, starts where the
+# breadcrumb would be rather than leaving that band blank.
+detail_container_y  = 15    # = breadcrumb_y
 
 selector_x          = 4     # menu.js SELECTOR_X
 selector_w_scroll   = 244   # menu.js SELECTOR_W_WITH_SCROLL
@@ -500,6 +503,9 @@ boot_visible_rows = 6
 # Rows a detail screen shows. Body starts at submenu_container_y (28) on an item_h
 # pitch, and the last row has to clear the soft strip at 130: 28 + 8 * 12 = 124.
 detail_visible_rows = 8
+# The same screen with no breadcrumb starts at detail_container_y (15), which
+# makes room for one more row: 15 + 9 * 12 = 123.
+detail_visible_rows_bare = 9
 msgbox_max_chars  = 25   # MessageBox.js maxLineLength
 # Rows the visible-networks modal keeps room for while it is still scanning, or
 # once it knows there is nothing in range: the spinner and the placeholder both

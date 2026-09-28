@@ -27,7 +27,7 @@ const TICK: Duration = Duration::from_secs(1);
 const HISTORY: usize = 248;
 
 /// Rows a list body shows at once.
-const WINDOW: usize = 8;
+const WINDOW: usize = theme::count::DETAIL_VISIBLE_ROWS_BARE as usize;
 
 const PANEL_W: usize = theme::PANEL_W as usize;
 /// The system's status bar owns the rows above this, and its soft buttons the
