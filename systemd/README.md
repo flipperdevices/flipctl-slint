@@ -56,3 +56,11 @@ device so it can be tried before the image carries it; the image is where they b
 `Before=` lines claim it before a display manager wakes up and starts looking at
 cards. The panel and the render node are named by path, never by card number, for
 the same reason the rest of the stack does it: numbers move between kernels.
+
+## Recovery
+
+The recovery image ships this same unit with `flipctl-recovery.conf` installed as
+`flipctl.service.d/50-recovery.conf`. Recovery has no logind, no sudo and no `user`,
+so the drop-in runs flipctl as root with no PAM session, and unbinds fbcon from the
+panel before it starts. Its build has no `wayland` feature, so there is no sway and
+the Apps and App Manager rows are not shown.

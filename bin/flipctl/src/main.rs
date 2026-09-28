@@ -225,15 +225,16 @@ mod demo {
     /// The rows of `menu` this machine has: everything, less what it cannot do.
     ///
     /// A machine with no `list-profiles` has no profiles to boot into, and one with no
-    /// compositor has nothing to host an app in. An entry that opens an empty screen,
-    /// or a list whose every row fails to start, is worse than no entry. Filtered in
-    /// one place so the keys and the drawing agree: they index the same list.
+    /// compositor has nothing to host an app in, nor to manage apps for. An entry that
+    /// opens an empty screen, or a list whose every row fails to start, is worse than
+    /// no entry. Filtered in one place so the keys and the drawing agree: they index
+    /// the same list.
     pub fn rows(menu: &'static Menu) -> Vec<&'static Row> {
         menu.rows
             .iter()
             .filter(|r| match r.act {
                 Act::Boot => flipper_ui::boot::available(),
-                Act::Apps => can_host_apps(),
+                Act::Apps | Act::Manager => can_host_apps(),
                 Act::Flipctl2 => flipper_ui::old_flipctl_loader::available(),
                 _ => true,
             })
@@ -2790,7 +2791,16 @@ fn panel(
     // Under a compositor the keys come with the frames: it holds the input devices
     // and hands us key events on the same connection, so reading evdev as well would
     // be two readers of one press.
-    let mut input = if headless || wayland { None } else { Some(EvdevSource::open()?) };
+    //
+    // The buttons are on i2c and their probe can fail or land after we start, so a
+    // missing one is not fatal: draw regardless and keep looking, as the boot menu does.
+    let look_for_input = !headless && !wayland;
+    let mut input = if look_for_input {
+        EvdevSource::open().map_err(|e| eprintln!("buttons        none yet: {e}")).ok()
+    } else {
+        None
+    };
+    let mut looked_for_input = Instant::now();
     // The pad and the motor, on the same terms as the buttons: not in headless or
     // under a compositor, and never fatal. Neither exists on every board, and the
     // pad reaches only the text-input screen, so a missing one costs that screen
@@ -3678,6 +3688,15 @@ fn panel(
         if let Some(sink) = sink.as_mut() {
             while let Some(event) = sink.poll_key() {
                 pending_input.push(event);
+            }
+        }
+        // Not every turn: opening them walks /dev/input.
+        if look_for_input && input.is_none() && looked_for_input.elapsed() >= Duration::from_secs(1)
+        {
+            looked_for_input = Instant::now();
+            if let Ok(source) = EvdevSource::open() {
+                eprintln!("buttons        appeared");
+                input = Some(source);
             }
         }
         if let Some(input) = input.as_mut() {
