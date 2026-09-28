@@ -101,3 +101,14 @@ path = [
 precedence = "override"
 SPDX-FileCopyrightText = "JapanYoshi; 2026 Flipper Devices Inc. (FlipCTL glyphs)"
 SPDX-License-Identifier = "Unlicense"
+
+# Freedoom's PLAYPAL, and the palette derived from it. The project licenses that
+# lump and COLORMAP separately from the rest of its art, because they descend from
+# id Software's originals rather than from the project's own drawing. Doom carries
+# it with every colour replaced by the grey the panel renders it as, which is a
+# derivative of it and keeps its terms.
+[[annotations]]
+path = ["apps/doom/palette.wad"]
+precedence = "override"
+SPDX-FileCopyrightText = "2001 Colin Phipps; 2008, 2013 Simon Howard; 1999 id Software"
+SPDX-License-Identifier = "GPL-2.0-or-later"

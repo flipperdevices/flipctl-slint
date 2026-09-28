@@ -1,0 +1,100 @@
+# Every Debian package this bundle carries, pinned by checksum.
+#
+# The app installs nothing: the engine, the game data and all eighty-odd shared
+# libraries they need are unpacked into the bundle at build time, so Doom runs on a
+# Flipper that has never seen apt. The panel's own glibc and dynamic loader are the
+# only things borrowed from the device, because a program cannot bring its own.
+#
+# Columns: url, sha256, size. Generated on a Flipper running the image this targets:
+#
+#     ldd /usr/games/dsda-doom | sed -n 's/.*=> \(\/[^ ]*\).*/\1/p' | sed 's#^/lib/#/usr/lib/#' |
+#         sort -u | xargs dpkg -S | grep -v ^diversion | cut -d: -f1 | sort -u > pkgs
+#     apt-get download --print-uris $(cat pkgs) dsda-doom freedoom
+#
+# Regenerate it the same way when the image's Debian release moves, and check the
+# result still runs with the packages purged.
+#
+# One package is deliberately absent. libgbm is mesa, built for the Flipper rather
+# than by Debian, so pinning it here would tie this build to a private archive for a
+# library every device already has: flipctl cannot convert a frame on the GPU without
+# it. SDL links it, the loader finds the device's, and nothing in this bundle calls
+# into it.
+http://deb.debian.org/debian/pool/main/a/alsa-lib/libasound2t64_1.2.14-1%2bdeb13u1_arm64.deb 9c808d819ccddc37c793dd3186c2ecd858b2feb2474cebb883f70386e7890d39 341632
+http://deb.debian.org/debian/pool/main/b/bzip2/libbz2-1.0_1.0.8-6_arm64.deb 3537fe4fc577a60c8a9568873cd577db7ebc135eb8bb1825f18caf8972d9d2f2 37772
+http://deb.debian.org/debian/pool/main/d/db5.3/libdb5.3t64_5.3.28%2bdfsg2-9_arm64.deb bfef56508d69fd3f940668f6abd0a466a362cabf63c4cc1c787cc58d28f6e92f 629132
+http://deb.debian.org/debian/pool/main/d/dbus/libdbus-1-3_1.16.2-2_arm64.deb ca6bb5f2047ad58d274cb7d14216035a07d8e5aae6f6a0122c4f6293c9c39515 169068
+http://deb.debian.org/debian/pool/main/d/dsda-doom/dsda-doom_0.29.0%2bdfsg-1_arm64.deb c61856b1b487bbd856773989184467042a53deefcd5cb664be0e5d8bd7f0340b 874308
+http://deb.debian.org/debian/pool/main/e/expat/libexpat1_2.8.3-1%7edeb13u1_arm64.deb c3248c4beb721c8290e6e34527ae56b1fc965aa6a14982ca602df4458ef0854e 109116
+http://deb.debian.org/debian/pool/main/f/flac/libflac14_1.5.0%2bds-2_arm64.deb 11800827306e56fcbd1a65ea67d9d13126fc02bf87fdfecd35e0f48a145b3c59 179768
+http://deb.debian.org/debian/pool/main/f/fluidsynth/libfluidsynth3_2.4.4%2bdfsg-1%2bdeb13u3_arm64.deb 0eafb1172bf90efbb834379fff13226b7d985d8a31b81b9f7046bb5b84739756 222188
+http://deb.debian.org/debian/pool/main/f/freedoom/freedoom_0.13.0-2_all.deb 2671a19ec2b917e81031ccb067e317d46ea4f3d4591fd8b533248bed7facc4c6 17746500
+http://deb.debian.org/debian/pool/main/g/gcc-14/libatomic1_14.2.0-19_arm64.deb 7ccff90234484bf21ae5ecb79d25b6a84b2f4038f65dd139085b2e3a937cd8dc 10128
+http://deb.debian.org/debian/pool/main/g/gcc-14/libgcc-s1_14.2.0-19_arm64.deb 1108bc87879833d6d9a145f22a4a15cddb34e065b4b5f4b97bee586adbac2851 54104
+http://deb.debian.org/debian/pool/main/g/gcc-14/libgomp1_14.2.0-19_arm64.deb 43e84cb7971d8a4d8870cab6204e998ea4f23ee1339bb0ff556dd881bac82d25 123520
+http://deb.debian.org/debian/pool/main/g/gcc-14/libstdc%2b%2b6_14.2.0-19_arm64.deb 6669b0c52a2e7c6af9adfdabce3ff6e286065cdfbc7b85280862b5f799daebee 637536
+http://deb.debian.org/debian/pool/main/g/glib2.0/libglib2.0-0t64_2.84.4-3%7edeb13u5_arm64.deb d446f0ea85fb9dc411219ce861e59e5eabe1981c796918771a7d2aa97cc72481 1428508
+http://deb.debian.org/debian/pool/main/j/jackd2/libjack-jackd2-0_1.9.22%7edfsg-4_arm64.deb c6bd35ff8a539a24957b95bae936aeed868a7865ff7227c0ec8dcccd69cebbda 265068
+http://deb.debian.org/debian/pool/main/j/jbigkit/libjbig0_2.1-6.1%2bb2_arm64.deb dbecef09dbafd82ff6444aa1cb45053b6331985b20ab2590eff052d7d6b1bb18 30360
+http://deb.debian.org/debian/pool/main/liba/libasyncns/libasyncns0_0.8-6%2bb5_arm64.deb 818bbcaa7ada536a1bdd5b1c26b77608606403f5c15557691e83d0b4433b89ef 11672
+http://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.75-10%2bdeb13u1%2bb3_arm64.deb 863aa5b9cdf6f80010b48982d4639126b09a89eeef2c0c5c7be226297c811581 28568
+http://deb.debian.org/debian/pool/main/libd/libdecor-0/libdecor-0-0_0.2.2-2_arm64.deb 34c0db59390767ef7b1cb5594f78f142b0673a5e7788e068cdd323f9c16f9207 15204
+http://deb.debian.org/debian/pool/main/libd/libdeflate/libdeflate0_1.23-2_arm64.deb ddd23094f9608f2ff9ea2256df2e917e315524371a6a82cb9daa921557c5a595 42376
+http://deb.debian.org/debian/pool/main/libd/libdrm/libdrm2_2.4.124-2_arm64.deb b535506630bb6a9a616bc07caf3b29915f980d8c3437852fb96ea64fb1a8a3f8 38304
+http://deb.debian.org/debian/pool/main/libd/libdumb/libdumb1t64_0.9.3-7_arm64.deb 17fb6afbd2e760d6d8451683791977d908941039e5caf34f01d4314c8227fe21 175228
+http://deb.debian.org/debian/pool/main/libf/libffi/libffi8_3.4.8-2_arm64.deb d84a783b818f2386627604e64b793eb4ac5bb9ea1ba321a194a1c9c82fe09a01 21260
+http://deb.debian.org/debian/pool/main/libg/libglu/libglu1-mesa_9.0.2-1.1%2bb3_arm64.deb 670bef3258dae7d5c3abbcb0d236b0b25e84a06df65d99f86ae9eec0ba6f0d58 161588
+http://deb.debian.org/debian/pool/main/libg/libglvnd/libgl1_1.7.0-1%2bb2_arm64.deb 7943f99962aa3316515760bf44e66f0c15a3c813ad750b784b43e319fa2e6003 90876
+http://deb.debian.org/debian/pool/main/libg/libglvnd/libglvnd0_1.7.0-1%2bb2_arm64.deb 29ec7b8cf1c9a47055de643eb0a1921854e762b4789a7f3bc3b0dea498fd4da9 41588
+http://deb.debian.org/debian/pool/main/libg/libglvnd/libglx0_1.7.0-1%2bb2_arm64.deb 0245aafaac5e68ca9511f23c5bebf010327e63c65790c03dbb80bf14d485956d 31080
+http://deb.debian.org/debian/pool/main/libg/libglvnd/libopengl0_1.7.0-1%2bb2_arm64.deb 1880bc8e29a9dfd2823fc0b88f514eb65699d961ec967d2ed2ba692c241fa09a 32148
+http://deb.debian.org/debian/pool/main/libi/libinstpatch/libinstpatch-1.0-2_1.1.6-1%2bb2_arm64.deb 119e629c5f7a91c494080d65e82caf624ee5c0291e57fecb70de5fe766dd9d3a 235224
+http://deb.debian.org/debian/pool/main/libj/libjpeg-turbo/libjpeg62-turbo_2.1.5-4_arm64.deb e4989073bb0bac8a6ec043c7adb80e1dfe601d8552233da48bb24ab45d1a1d4a 172784
+http://deb.debian.org/debian/pool/main/libm/libmad/libmad0_0.15.1b-11%2bb1_arm64.deb 00e2170e1c58d6c48c26d187ea1f3d72b3d1fd94b797577982b2622de520e96d 66292
+http://deb.debian.org/debian/pool/main/libo/libogg/libogg0_1.3.5-3%2bb2_arm64.deb d59a83ab352bf0c16ce9513fdf264f87214813ca8c628c652801ef476ece8286 23580
+http://deb.debian.org/debian/pool/main/libp/libpng1.6/libpng16-16t64_1.6.48-1%2bdeb13u5_arm64.deb 11096ad43504ca24e8044bcc89e922d932a2812ff25568613b28d22235190ba5 275192
+http://deb.debian.org/debian/pool/main/libs/libsamplerate/libsamplerate0_0.2.2-4%2bb2_arm64.deb 5d9fad694b249d48d8457e1242ab60e04db6a30d7d56f80c6ae463ff122147ec 944716
+http://deb.debian.org/debian/pool/main/libs/libsdl2-image/libsdl2-image-2.0-0_2.8.8%2bdfsg-1%2bdeb13u1_arm64.deb e878cc4837973d9eefad5348c6481a03f0653b0e8072219c630564e23291e507 63076
+http://deb.debian.org/debian/pool/main/libs/libsdl2/libsdl2-2.0-0_2.32.4%2bdfsg-1_arm64.deb 6312ccbc29645ac5cc9dde9f9ed8bd5c85a0233690c270c83c963b49f8cd49d5 602568
+http://deb.debian.org/debian/pool/main/libs/libsdl2-mixer/libsdl2-mixer-2.0-0_2.8.1%2bdfsg-2_arm64.deb 437f89bee6159d4b0ec130fdc7ca24cd51af454386039aafe45e673313a85775 80804
+http://deb.debian.org/debian/pool/main/libs/libsndfile/libsndfile1_1.2.2-2%2bdeb13u1_arm64.deb 6c94f17e1f02778f98b96bb9ae19ff30085662e96685898a018c26bfd4bfc3f2 185528
+http://deb.debian.org/debian/pool/main/libv/libvorbis/libvorbis0a_1.3.7-3_arm64.deb 6e8e64ebe692dd2d019af7f914f2e3b81bf13d4b1ce2516fb4248a0310ef7cf6 83772
+http://deb.debian.org/debian/pool/main/libv/libvorbis/libvorbisenc2_1.3.7-3_arm64.deb 4a477b3ae19ba50a288f036c8176d61cd9f3836ba65472f88b95e3f6b3bf2dd3 75532
+http://deb.debian.org/debian/pool/main/libv/libvorbis/libvorbisfile3_1.3.7-3_arm64.deb 6eea69ab6f851955736abe56002551e304eb36cffdc9e9a1a21fb578ca3632ff 20136
+http://deb.debian.org/debian/pool/main/libw/libwebp/libsharpyuv0_1.5.0-0.1_arm64.deb 5a37f40f806df4b67a2bdaa750add7a9ff29abd3119a8ceac773b886cbf3d9f9 114456
+http://deb.debian.org/debian/pool/main/libw/libwebp/libwebp7_1.5.0-0.1_arm64.deb d5ebdb920770ee135c4e319babb2bcef61e9f37283a37a8cb4e673769dd0d676 271148
+http://deb.debian.org/debian/pool/main/libw/libwebp/libwebpdemux2_1.5.0-0.1_arm64.deb 3ce742d0420c9b4c7f875a150eebed63e2e2fb1c7191edb0bdd482c28cc52f51 113008
+http://deb.debian.org/debian/pool/main/libx/libx11/libx11-6_1.8.12-1_arm64.deb 646f2d3f2165c8eebceb7f4aaca31e97a818bb11a045964833a9f764b738bac2 794952
+http://deb.debian.org/debian/pool/main/libx/libx11/libx11-xcb1_1.8.12-1_arm64.deb 1eafaa4295e129d6a81e742ab8da43194daa6b916199923c8cef8ad358985894 247336
+http://deb.debian.org/debian/pool/main/libx/libxau/libxau6_1.0.11-1_arm64.deb ac1061728670f4626adaa1288953a0e6fb801c9cae72ee1c3231e63e2609d23a 20576
+http://deb.debian.org/debian/pool/main/libx/libxcb/libxcb1_1.17.0-2%2bb1_arm64.deb d0178198e80ed4cacdececabe2c112ec88c7a9258cc11a55b8e267ab14a90d82 143168
+http://deb.debian.org/debian/pool/main/libx/libxcursor/libxcursor1_1.2.3-1_arm64.deb 76d13a27c444f88c44cf50e209e8f9dc5088da330680bd35f6eba0430662a4b5 39252
+http://deb.debian.org/debian/pool/main/libx/libxdmcp/libxdmcp6_1.1.5-1_arm64.deb e10bbb0802181992ecf091e9425171850eee16068729c109214ba4924f81fb52 27752
+http://deb.debian.org/debian/pool/main/libx/libxext/libxext6_1.3.4-1%2bb3_arm64.deb 27cf208c6d2924b22ed3b9ceff304b992e1f07ef7b0ef00239585595581dac99 49244
+http://deb.debian.org/debian/pool/main/libx/libxfixes/libxfixes3_6.0.0-2%2bb4_arm64.deb d29134cbb9230a50ba1d097743d4d4fcf7826c6b48a2d8a303a0e3fc20b837e6 20456
+http://deb.debian.org/debian/pool/main/libx/libxi/libxi6_1.8.2-1_arm64.deb b7148d371c908fa81bf45153fdcb3e7d178fe11e15f9907e29ce6e9ed9aaad24 77768
+http://deb.debian.org/debian/pool/main/libx/libxkbcommon/libxkbcommon0_1.7.0-2_arm64.deb 866888d3cfeb32388dd88a2615c4f78ebf8dd7b272821a83494cba260d8fa7d1 106024
+http://deb.debian.org/debian/pool/main/libx/libxmp/libxmp4_4.6.2-2_arm64.deb ac5dc83da01dc3248f223a31e26e7bb68d77d6481bcecc7e2b5172479c3da576 294900
+http://deb.debian.org/debian/pool/main/libx/libxrandr/libxrandr2_1.5.4-1%2bb3_arm64.deb 607a23d6d2cb920e000b24870531a86821cf4e141a4eb0bf38212b47b892d597 35932
+http://deb.debian.org/debian/pool/main/libx/libxrender/libxrender1_0.9.12-1_arm64.deb 28396c96e460288d5851913121b053609f7ff34f996d78d7a38c1d2b6ab9f006 27024
+http://deb.debian.org/debian/pool/main/libx/libxss/libxss1_1.2.3-1%2bb3_arm64.deb ffbdfe7ee0644984dfe7577a22edee74f1e3b2dd76721417c8e45aed9388a220 17088
+http://deb.debian.org/debian/pool/main/libz/libzip/libzip5_1.11.3-2_arm64.deb 35a46f58b02f7b5a843a89f937863a2e487845fadac99a444af0ad898199c376 59424
+http://deb.debian.org/debian/pool/main/libz/libzstd/libzstd1_1.5.7%2bdfsg-1_arm64.deb 924540bd59fdbfa77a0604360efdaca54411a43daf11c7e002a3c64791b67448 266052
+http://deb.debian.org/debian/pool/main/l/lame/libmp3lame0_3.100-6%2bb3_arm64.deb ed3563722129ffa4def03b7af0b589fa20eef972bdcc4599202ddb1ac654c58e 354760
+http://deb.debian.org/debian/pool/main/l/lerc/liblerc4_4.0.0%2bds-5_arm64.deb db015dc1888371e490594f8aaaaa55356313478d744fa69e242e034e4c2a0019 146184
+http://deb.debian.org/debian/pool/main/m/mpg123/libmpg123-0t64_1.32.10-1%2bdeb13u1_arm64.deb d284df39ff3b64f1cdf274352613c52534c55eed82c3a2ff0fc7ba154acd7bf0 143208
+http://deb.debian.org/debian/pool/main/n/ncurses/libtinfo6_6.5%2b20250216-2_arm64.deb 2a747f7fff3c2347c357387a7133df997410f07ba1b1df1a1461a97bd7fbc2fc 341360
+http://deb.debian.org/debian/pool/main/o/openssl/libssl3t64_3.5.7-1%7edeb13u2_arm64.deb ec131326aa9fa9ec934eca386bc7991f328fe383eaefd3e43bd8901a9199c5ae 2766020
+http://deb.debian.org/debian/pool/main/o/opusfile/libopusfile0_0.12-4%2bb3_arm64.deb b3592094006e46145ea52faeb5cab3c6f182d06dc9dae382a3e9ce1c3c33e88e 40256
+http://deb.debian.org/debian/pool/main/o/opus/libopus0_1.5.2-2_arm64.deb 1d980e8a4717074805a98dbe07671cb3bee068c25709315f3de836980c629836 2812952
+http://deb.debian.org/debian/pool/main/p/pcre2/libpcre2-8-0_10.46-1%7edeb13u2_arm64.deb e7d2c997dac145c16457be0fed3d084c98cd030bec7633eec7e5bde6dbb97712 262840
+http://deb.debian.org/debian/pool/main/p/pipewire/libpipewire-0.3-0t64_1.4.2-1_arm64.deb f25ab475f09ab5ec952f13a2d6b7a870dd5eb8c7806664baf8be9bdee3ae995b 260312
+http://deb.debian.org/debian/pool/main/p/portmidi/libportmidi0_217-6.1%2bb4_arm64.deb 4d6f82e2146a8e6fe6e2de53be95c4e2abac02eaebe60e1ab53d2d4625d1350f 21216
+http://deb.debian.org/debian/pool/main/p/pulseaudio/libpulse0_17.0%2bdfsg1-2%2bb1_arm64.deb 2de5610e3affe69cfb11110f890375261b47c9e0fc1a81eef7ecc4d6d2dc9a6d 236376
+http://deb.debian.org/debian/pool/main/r/readline/libreadline8t64_8.2-6_arm64.deb f78ff432b2a627bc04f7eef0e6e2696501c9e06feca748a5b741d5e594429033 159264
+http://deb.debian.org/debian/pool/main/s/systemd/libsystemd0_257.13-1%7edeb13u1_arm64.deb d2f63c408549c29eaefb6f4c948393edce99f45ee8e43c991391bef63fb7d54b 422500
+http://deb.debian.org/debian/pool/main/t/tiff/libtiff6_4.7.0-3%2bdeb13u3_arm64.deb 208e9fdc14ed88a30f31fdfb993d1e8ab19f9ab29f3cd8546ffb4ea3f74f5a3f 325232
+http://deb.debian.org/debian/pool/main/w/wayland/libwayland-client0_1.23.1-3_arm64.deb 8abdc649e46470548c545f827e16f52e1bc16d05d4a3794e6dedb2d74ce58c9a 26140
+http://deb.debian.org/debian/pool/main/w/wayland/libwayland-cursor0_1.23.1-3_arm64.deb 824c1ca46458530a670bfd003f1c083e66e395e1800c294a22af38641ccdc11a 11732
+http://deb.debian.org/debian/pool/main/w/wayland/libwayland-egl1_1.23.1-3_arm64.deb fe01fb2f3c5d5b54784563d9826fa505fab61dc30333d71343352bddd3812b18 5952
+http://deb.debian.org/debian/pool/main/x/xz-utils/liblzma5_5.8.1-1%2bdeb13u1_arm64.deb 6a7b98005f84fc26d66a45e432f70d0793646a734f8c44cd1626b3ffa8edd7c6 302720
+http://deb.debian.org/debian/pool/main/z/zlib/zlib1g_1.3.dfsg%2breally1.3.1-1%2bb1_arm64.deb 209aa5cf671e97b9eb0410844fa6df4cae2e75b0c72e7802ab6c8ece13e6ddef 85116

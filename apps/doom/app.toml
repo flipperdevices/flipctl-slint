@@ -1,0 +1,15 @@
+# Doom on the panel, through the device's own engine.
+#
+# A staged bundle: nothing is compiled into it, and nothing is installed to run it.
+# The engine is dsda-doom and the game data is Freedoom, the freely licensed
+# replacement the engine needs, both unpacked into the bundle at build time from
+# deb.lock along with every library they load. The bundle's own files are the
+# corrected palette and the script that generates it.
+#
+# No `size`: the engine renders at the panel's own 256x144, set in the config AppRun
+# writes, so nothing is scaled anywhere. The command line refuses a height below 200
+# but the config does not, which is the only reason that setting lives in a file.
+name = "Doom"
+wayland = "./AppRun"
+audio = true
+folder = "Games"

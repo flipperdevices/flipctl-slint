@@ -1,0 +1,80 @@
+#!/bin/sh
+# Doom at the panel's own shape.
+#
+# Geometry was the real fault and is fixed here: the engine draws a 4:3 view, and
+# putting it in a 16:9 window untold stretches everything sideways, so -aspect gives
+# it the panel's real shape. screenblocks 10 keeps the engine's own status bar,
+# because the compact overlay HUD is too small to read at 144 lines.
+#
+# Nothing is installed to run this. The engine, the game data and the seventy-nine
+# Debian packages they need are unpacked into the bundle at build time from
+# deb.lock, and the loader is pointed at them here, so Doom runs on a device that
+# has never seen apt.
+#
+# The palette is corrected for a panel of black ink on an orange ground, which the
+# engine's own colours are not made for. Tone Lab is where that curve was
+# chosen and where it can be changed: it holds a captured frame still, puts the
+# curve under the D-pad, and its Save writes a palette here. Without one, the
+# palette built into this bundle is used.
+set -eu
+APPDIR=${APPDIR:-$(cd "$(dirname "$0")" && pwd)}
+CFG="$PWD/dsda-doom.cfg"
+RUNTIME="$APPDIR/runtime"
+PALETTE="${HOME:-/home/user}/.local/share/flipctl/doom/palette.wad"
+[ -f "$PALETTE" ] || PALETTE="$APPDIR/palette.wad"
+
+# The panel has ten usable keys and the engine wants more, so the binding is a
+# budget. The D-pad moves, and the rest are:
+#
+#   z  fire            x  next weapon    c  nothing, ever
+#   v  use             b  automap        Ptt  menu
+#
+# Ok is left alone: the engine already confirms a menu choice with Enter, so the
+# menu opens with Ptt, walks with the D-pad, confirms with Ok and backs out with
+# Ptt again. That is the only way to reach save, load and the options, since Back
+# belongs to flipctl and leaves the app.
+#
+# Nothing strafes. With four arrows spent on turning and walking there is no key
+# left for it, and strafing is the one thing here that a player can do without.
+#
+# The arrows are not ASCII the way the letters are: the engine numbers them 172
+# left, 173 up, 174 right, 175 down, and its own movement defaults are w/s/a/d.
+# Everything else is the character's own code. Written every launch, because the
+# engine saves over this file on exit.
+#
+# autorun is on, so no key is spent on running. No quit key is bound either: Back
+# already ends the app, and the engine's quit prompt asks for a y, which no button
+# here sends.
+cat > "$CFG" <<CFGEOF
+screen_resolution               "256x144"
+use_fullscreen                  1
+usegamma                        0
+screenblocks                    10
+autorun                         1
+input_forward                   173 -1 -1 | 0 -1 -1 | 0 -1 -1
+input_backward                  175 -1 -1 | 0 -1 -1 | 0 -1 -1
+input_turnleft                  172 -1 -1 | 0 -1 -1 | 0 -1 -1
+input_turnright                 174 -1 -1 | 0 -1 -1 | 0 -1 -1
+input_fire                      122 -1 -1 | 0 -1 -1 | 0 -1 -1
+input_nextweapon                120 -1 -1 | 0 -1 -1 | 0 -1 -1
+input_use                       118 -1 -1 | 0 -1 -1 | 0 -1 -1
+input_map                       98 -1 -1 | 0 -1 -1 | 0 -1 -1
+input_menu_escape               97 -1 -1 | 0 -1 -1 | 0 -1 -1
+CFGEOF
+
+# The bundle's own libraries come first. glibc is the device's, because the loader
+# the kernel runs is named in the binary and has to match the libc beside it, and so
+# is mesa's libgbm, which every device that runs flipctl already has.
+export LD_LIBRARY_PATH="$RUNTIME/usr/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Where the engine looks for its own resource wad, since it is no longer at the
+# compiled-in path.
+export DOOMWADPATH="$RUNTIME/usr/share/dsda-doom:$RUNTIME/usr/share/games/doom"
+
+exec "$RUNTIME/usr/games/dsda-doom" \
+    -config "$CFG" \
+    -iwad "$RUNTIME/usr/share/games/doom/freedoom1.wad" \
+    -file "$PALETTE" \
+    -aspect 16:9 \
+    -fullscreen \
+    -warp 1 1 \
+    "$@"
