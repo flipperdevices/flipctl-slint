@@ -1,0 +1,16 @@
+# A player, not a library.
+#
+# It collects every video under the home directory and lists them. Nothing plays
+# until it is chosen. There are no thumbnails and no sorting beyond name: the list is
+# drawn on mpv's own OSD by a script in the bundle, which keeps the chooser and the
+# player in one process and one window.
+#
+# Nothing is bundled with it: the app ships no media, so what it plays is whatever
+# you put on the device.
+name = "Video Player"
+wayland = "./AppRun"
+apt = ["mpv"]
+# The sound server, and with it the sink pinned to the panel's speaker rather than
+# whatever the desktop last plugged in.
+audio = true
+folder = "Media"

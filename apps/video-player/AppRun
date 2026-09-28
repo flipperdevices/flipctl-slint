@@ -1,0 +1,40 @@
+#!/bin/sh
+# Every video under the home directory, as a list you pick from.
+#
+# Nothing plays until you choose it. mpv holds an idle window, browser.lua draws the
+# list into it and owns the D-pad, and only Ok loads a file, so opening the app shows
+# you what is there rather than starting whatever happened to sort first.
+#
+# One process for both the list and the playback. The alternative was a chooser that
+# hands over to a player, and on this panel every handover is a window closing and
+# another opening, which is where the blank frames come from.
+set -eu
+APPDIR=${APPDIR:-$(cd "$(dirname "$0")" && pwd)}
+ROOT=${1:-$HOME}
+LIST=$PWD/playlist
+
+# Bounded on purpose: a full card would otherwise make the app look hung while find
+# walked it. Dotted directories are skipped, which keeps caches and the app's own
+# working directories out of the list.
+find "$ROOT" -maxdepth 4 -name '.*' -prune -o -type f \
+    \( -iname '*.mp4' -o -iname '*.mkv' -o -iname '*.webm' -o -iname '*.avi' \
+    -o -iname '*.mov' -o -iname '*.m4v' -o -iname '*.mpg' -o -iname '*.mpeg' \
+    -o -iname '*.ogv' -o -iname '*.ts' -o -iname '*.wmv' -o -iname '*.flv' \) \
+    -print 2>/dev/null | sort | head -n 500 >"$LIST"
+
+# --idle keeps the window open with no file loaded, which is what makes a list
+# possible at all. Unifont for the OSD, because a filename is not always Latin and a
+# missing glyph is a box.
+exec mpv \
+    --no-config \
+    --idle=yes \
+    --force-window=yes \
+    --keep-open=yes \
+    --vo=wlshm \
+    --ao=pipewire \
+    --osd-font=Unifont \
+    --osd-bar=no \
+    --osc=no \
+    --input-default-bindings=no \
+    --script="$APPDIR/browser.lua" \
+    --script-opts=browser-list="$LIST"
