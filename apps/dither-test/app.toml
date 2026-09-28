@@ -1,0 +1,10 @@
+# Smooth grey against ordered dithering, on the panel itself.
+#
+# The question this answers: does this panel render mid greys badly and patterned
+# black and white well? If so, every picture we put on it wants dithering rather
+# than a tone curve, which is a change to how flipctl composites rather than
+# anything in an app.
+name = "Dither Test"
+wayland = "./AppRun"
+apt = ["mpv"]
+folder = "Test Tools"

@@ -1,0 +1,17 @@
+#!/bin/sh
+# The same test card three ways, switched with left and right.
+#
+# wlshm and --scale=nearest: any smoothing here would blur the dither pattern into
+# the grey it is meant to replace, which would defeat the whole comparison.
+set -eu
+APPDIR=${APPDIR:-$(cd "$(dirname "$0")" && pwd)}
+
+exec mpv \
+    --no-config \
+    --input-conf="$APPDIR/input.conf" \
+    --vo=wlshm \
+    --scale=nearest \
+    --image-display-duration=inf \
+    --loop-playlist=inf \
+    --osd-duration=1200 \
+    "$APPDIR/1-smooth.png" "$APPDIR/2-dither4.png" "$APPDIR/3-dither2.png"
