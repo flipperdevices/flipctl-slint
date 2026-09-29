@@ -32,12 +32,13 @@ const PLUS_W: i32 = 14;
 const TAB_PAD_X: i32 = 5;
 const CLOSE_W: i32 = 9;
 
-/// The buttons in the address row: a 7x7 icon each, on a pitch of 12.
+/// The buttons in the address row: a 7x7 icon each, on a pitch of 12: back, forward,
+/// reload, and the phone or the monitor the tab is laid out as.
 const ICON: usize = 7;
 const BUTTONS_X: i32 = 4;
 const BUTTON_PITCH: i32 = 12;
 /// The field starts after the three buttons and runs to the right edge but two.
-const FIELD_X: i32 = BUTTONS_X + 3 * BUTTON_PITCH;
+const FIELD_X: i32 = BUTTONS_X + 4 * BUTTON_PITCH;
 const FIELD_PAD_X: i32 = 4;
 
 #[rustfmt::skip]
@@ -61,6 +62,26 @@ const FORWARD: [&str; ICON] = [
     "...#...",
 ];
 #[rustfmt::skip]
+const PHONE: [&str; ICON] = [
+    ".#####.",
+    ".#...#.",
+    ".#...#.",
+    ".#...#.",
+    ".#...#.",
+    ".#.#.#.",
+    ".#####.",
+];
+#[rustfmt::skip]
+const MONITOR: [&str; ICON] = [
+    "#######",
+    "#.....#",
+    "#.....#",
+    "#.....#",
+    "#######",
+    "...#...",
+    ".#####.",
+];
+#[rustfmt::skip]
 const RELOAD: [&str; ICON] = [
     "..###.#",
     ".#...##",
@@ -80,6 +101,8 @@ pub enum Item {
     Back,
     Forward,
     Reload,
+    /// The tab's mode, which Ok switches between a phone and a desktop.
+    Mobile,
     Address,
 }
 
@@ -160,7 +183,8 @@ pub fn hits(tabs: usize, active: usize) -> Vec<Hit> {
         w: PLUS_W,
         h: TAB_H,
     });
-    for (i, item) in [Item::Back, Item::Forward, Item::Reload].into_iter().enumerate() {
+    for (i, item) in [Item::Back, Item::Forward, Item::Reload, Item::Mobile].into_iter().enumerate()
+    {
         let x = BUTTONS_X + i as i32 * BUTTON_PITCH - 2;
         out.push(Hit { item, x, y: ADDR_Y + 1, w: ICON as i32 + 4, h: FIELD_H });
     }
@@ -235,7 +259,15 @@ fn icon(rows: &[&str; ICON], x: i32, y: i32, black: bool, out: &mut Vec<Mark>) {
 }
 
 /// The strip, with the cursor over `hot`.
-pub fn view(tabs: &[Tab<'_>], active: usize, address: &str, hot: Option<Item>) -> StripView {
+/// The strip, with `hot` highlighted, and the mode button showing the phone or the
+/// monitor the tab on screen is laid out as.
+pub fn view(
+    tabs: &[Tab<'_>],
+    active: usize,
+    address: &str,
+    mobile: bool,
+    hot: Option<Item>,
+) -> StripView {
     let hits = hits(tabs.len(), active);
     let w = tab_w(tabs.len());
     let mut marks = Vec::new();
@@ -279,6 +311,7 @@ pub fn view(tabs: &[Tab<'_>], active: usize, address: &str, hot: Option<Item>) -
             Item::Back => Some(BACK),
             Item::Forward => Some(FORWARD),
             Item::Reload => Some(RELOAD),
+            Item::Mobile => Some(if mobile { PHONE } else { MONITOR }),
             Item::Tab(_) | Item::Address => None,
         };
         let Some(glyph) = glyph else { continue };
@@ -319,7 +352,7 @@ mod tests {
     #[test]
     fn the_arrows_walk_the_strip_and_down_leaves_it() {
         // Three tabs, the middle one on screen, so its cross is an item of its own.
-        assert_eq!(step(3, 1, Item::Address, (-1, 0)), Some(Item::Reload));
+        assert_eq!(step(3, 1, Item::Address, (-1, 0)), Some(Item::Mobile));
         assert_eq!(step(3, 1, Item::Back, (-1, 0)), Some(Item::Back), "no wrapping");
         assert_eq!(step(3, 1, Item::Tab(1), (1, 0)), Some(Item::Close(1)));
         assert_eq!(step(3, 1, Item::Close(1), (1, 0)), Some(Item::Tab(2)));
@@ -327,7 +360,8 @@ mod tests {
         assert_eq!(step(3, 1, Item::NewTab, (1, 0)), Some(Item::NewTab));
         assert_eq!(step(3, 1, Item::Back, (0, -1)), Some(Item::Tab(0)));
         assert_eq!(step(3, 1, Item::Address, (0, -1)), Some(Item::Tab(1)));
-        assert_eq!(step(3, 1, Item::Tab(0), (0, 1)), Some(Item::Reload), "the nearest below it");
+        assert_eq!(step(3, 1, Item::Tab(0), (0, 1)), Some(Item::Mobile), "the nearest below it");
+        assert_eq!(step(3, 1, Item::Mobile, (-1, 0)), Some(Item::Reload));
         assert_eq!(step(3, 1, Item::Tab(0), (0, -1)), Some(Item::Tab(0)));
         assert_eq!(step(3, 1, Item::Address, (0, 1)), None, "Down off the address is the page");
         // A tab that went away leaves the highlight somewhere that exists.
@@ -337,7 +371,7 @@ mod tests {
     #[test]
     fn a_long_title_is_cut_to_its_tab() {
         let tabs = [Tab { title: "Wikipedia, the free encyclopedia" }, Tab { title: "x" }];
-        let v = view(&tabs, 0, "https://en.wikipedia.org/", None);
+        let v = view(&tabs, 0, "https://en.wikipedia.org/", true, None);
         assert!(v.tabs[0].title.ends_with(".."), "{}", v.tabs[0].title);
         assert!(
             font::tw(&v.tabs[0].title) <= v.tabs[0].w - 2 * TAB_PAD_X - CLOSE_W,

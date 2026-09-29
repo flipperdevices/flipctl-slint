@@ -29,9 +29,12 @@ use serde_json::{json, Value};
 
 use crate::page::Page;
 
-/// The size the page is laid out at: seven panels wide, so x7 is one CSS pixel to
-/// one panel pixel, and the shape of the panel, so x1 fills it.
-pub const VIEWPORT: (u32, u32) = (1792, 1008);
+/// The sizes a page is laid out at, both the shape of the panel so x1 fills it.
+/// Desktop is seven panels wide, so x7 is one CSS pixel to one panel pixel. Mobile
+/// is the narrowest phone in use, the width sites are tested at, and the one whose
+/// body text at x1 comes out larger than the panel's own.
+pub const DESKTOP: (u32, u32) = (1792, 1008);
+pub const MOBILE: (u32, u32) = (360, 203);
 
 /// How long a command may take to be answered before the engine is taken for gone.
 const ANSWER: Duration = Duration::from_secs(20);
@@ -73,6 +76,8 @@ struct Link {
     session: Mutex<Option<String>>,
     /// Titles asked for and not yet answered: the command, and whose title it is.
     titles: Mutex<HashMap<u64, String>>,
+    /// What the engine says it is, by mode, when its version is known.
+    agents: Option<Agents>,
 }
 
 impl Link {
@@ -94,6 +99,26 @@ impl Link {
     fn send(&self, method: &str, params: Value, to: To<'_>) {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let _ = self.write(id, method, params, to);
+    }
+
+    /// A tab's size and what it says it is, for one mode. `wait` for the answers,
+    /// which a tab being opened does so its first picture is already the right shape.
+    fn mode(&self, session: &str, mobile: bool, wait: bool) {
+        let (w, h) = if mobile { MOBILE } else { DESKTOP };
+        let metrics = json!({ "width": w, "height": h, "deviceScaleFactor": 1, "mobile": mobile });
+        let tab = To::Tab(session);
+        let agent = self.agents.as_ref().map(|a| a.override_for(mobile));
+        if wait {
+            let _ = self.call("Emulation.setDeviceMetricsOverride", metrics, tab);
+            if let Some(agent) = agent {
+                let _ = self.call("Emulation.setUserAgentOverride", agent, tab);
+            }
+        } else {
+            self.send("Emulation.setDeviceMetricsOverride", metrics, tab);
+            if let Some(agent) = agent {
+                self.send("Emulation.setUserAgentOverride", agent, tab);
+            }
+        }
     }
 
     /// Ask a tab for its title without waiting: the reader hands the answer on as
@@ -137,22 +162,69 @@ impl Drop for Browser {
     }
 }
 
-/// The User-Agent the same version of desktop Chromium sends on Linux: the major
-/// version and nothing finer, as Chrome's own reduced string has it, and the
-/// platform it reports whatever the machine is. `None` when the engine will not say
-/// which version it is, and then it keeps its own.
-fn user_agent(program: &str) -> Option<String> {
-    let out = Command::new(program)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    let major = major_version(&String::from_utf8_lossy(&out.stdout))?;
-    Some(format!(
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
-         Chrome/{major}.0.0.0 Safari/537.36"
-    ))
+/// What the engine says it is: the User-Agent the same version of Chromium sends on
+/// a Linux desktop or on an Android phone, with the major version and nothing finer
+/// as Chrome's own reduced strings have it, and the client hints to match.
+struct Agents {
+    major: u32,
+}
+
+impl Agents {
+    /// `None` when the engine will not say which version it is, and then it keeps
+    /// its own.
+    fn of(program: &str) -> Option<Self> {
+        let out = Command::new(program)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        Some(Self { major: major_version(&String::from_utf8_lossy(&out.stdout))? })
+    }
+
+    fn user_agent(&self, mobile: bool) -> String {
+        let major = self.major;
+        if mobile {
+            format!(
+                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) \
+                 Chrome/{major}.0.0.0 Mobile Safari/537.36"
+            )
+        } else {
+            format!(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+                 Chrome/{major}.0.0.0 Safari/537.36"
+            )
+        }
+    }
+
+    /// The override for `Emulation.setUserAgentOverride`: the string and the client
+    /// hints, which a page reads apart from it and would otherwise still say desktop.
+    fn override_for(&self, mobile: bool) -> Value {
+        let major = self.major.to_string();
+        let brands = json!([
+            { "brand": "Chromium", "version": major },
+            { "brand": "Not=A?Brand", "version": "24" },
+        ]);
+        let full = json!([
+            { "brand": "Chromium", "version": format!("{major}.0.0.0") },
+            { "brand": "Not=A?Brand", "version": "24.0.0.0" },
+        ]);
+        let (platform, version, model) =
+            if mobile { ("Android", "10.0.0", "K") } else { ("Linux", "", "") };
+        json!({
+            "userAgent": self.user_agent(mobile),
+            "platform": if mobile { "Linux armv8l" } else { "Linux x86_64" },
+            "userAgentMetadata": {
+                "brands": brands,
+                "fullVersionList": full,
+                "platform": platform,
+                "platformVersion": version,
+                "architecture": if mobile { "" } else { "x86" },
+                "model": model,
+                "mobile": mobile,
+            },
+        })
+    }
 }
 
 /// The major version out of `chromium --version`: "Chromium 152.0.7977.82 built on
@@ -200,7 +272,7 @@ impl Browser {
         cmd.arg("--headless")
             .arg("--remote-debugging-pipe")
             .arg(format!("--user-data-dir={}", profile.display()))
-            .arg(format!("--window-size={},{}", VIEWPORT.0, VIEWPORT.1))
+            .arg(format!("--window-size={},{}", MOBILE.0, MOBILE.1))
             .args([
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -210,12 +282,14 @@ impl Browser {
                 "--disable-blink-features=AutomationControlled",
             ]);
         // Headless says so in its User-Agent, and DuckDuckGo answered the first
-        // search with a captcha. Set for the whole engine rather than per tab: a tab
-        // is created on its address and its first request is already on the wire
-        // before a tab of it could be told anything, and creating it blank and
-        // sending it on afterwards leaves it with no pictures (see open).
-        if let Some(agent) = user_agent(program) {
-            cmd.arg(format!("--user-agent={agent}"));
+        // search with a captcha. A phone's, since a tab opens in mobile mode, and set
+        // for the whole engine rather than per tab: a tab is created on its address
+        // and its first request is already on the wire before a tab of it could be
+        // told anything, and creating it blank and sending it on afterwards leaves it
+        // with no pictures (see open).
+        let agents = Agents::of(program);
+        if let Some(agents) = agents.as_ref() {
+            cmd.arg(format!("--user-agent={}", agents.user_agent(true)));
         }
         cmd.arg("about:blank").stdin(Stdio::null()).stdout(Stdio::null());
         unsafe {
@@ -256,6 +330,7 @@ impl Browser {
             pending: Mutex::new(HashMap::new()),
             session: Mutex::new(None),
             titles: Mutex::new(HashMap::new()),
+            agents,
         });
         let reader = unsafe { File::from_raw_fd(ours_in) };
         let listening = Arc::clone(&link);
@@ -282,6 +357,17 @@ impl Browser {
 
     pub fn close(&self, tab: &Tab) {
         self.link.send("Target.closeTarget", json!({ "targetId": tab.target }), To::Browser);
+    }
+
+    /// Lay `tab` out as a phone or as a desktop, and load its page again as one:
+    /// what a server sends depends on who asks. The new size is waited for and the
+    /// screencast started again on it, as DevTools does on a resize: left running, it
+    /// can miss the reloaded page and send nothing more.
+    pub fn set_mode(&self, tab: &Tab, mobile: bool) {
+        self.link.mode(&tab.session, mobile, true);
+        self.link.send("Page.reload", json!({}), To::Tab(&tab.session));
+        self.link.send("Page.stopScreencast", json!({}), To::Tab(&tab.session));
+        self.link.send("Page.startScreencast", screencast(), To::Tab(&tab.session));
     }
 
     pub fn reload(&self) {
@@ -455,9 +541,9 @@ impl Remote {
         Ok(true)
     }
 
-    /// A new tab on `url`, attached to and laid out at the viewport. Not on screen
-    /// until it is switched to.
-    pub fn open(&self, url: &str) -> Result<Tab, String> {
+    /// A new tab on `url`, attached to and laid out as a phone or a desktop. Not on
+    /// screen until it is switched to.
+    pub fn open(&self, url: &str, mobile: bool) -> Result<Tab, String> {
         let link = &self.0;
         let target = link.call("Target.createTarget", json!({ "url": url }), To::Browser)?;
         let target = target["targetId"].as_str().ok_or("no target")?.to_string();
@@ -468,11 +554,7 @@ impl Remote {
         )?;
         let session = attached["sessionId"].as_str().ok_or("no session")?.to_string();
         let tab = To::Tab(&session);
-        link.call(
-            "Emulation.setDeviceMetricsOverride",
-            json!({ "width": VIEWPORT.0, "height": VIEWPORT.1, "deviceScaleFactor": 1, "mobile": false }),
-            tab,
-        )?;
+        link.mode(&session, mobile, true);
         link.call("Page.enable", json!({}), tab)?;
         // A page quick enough to have loaded before Page.enable never says it has,
         // so its title is asked for now as well as when it loads.
@@ -482,7 +564,7 @@ impl Remote {
 }
 
 fn screencast() -> Value {
-    json!({ "format": "jpeg", "quality": 85, "maxWidth": VIEWPORT.0, "maxHeight": VIEWPORT.1 })
+    json!({ "format": "jpeg", "quality": 85, "maxWidth": DESKTOP.0, "maxHeight": DESKTOP.1 })
 }
 
 /// The reader: answers to their callers, events to the app.
@@ -602,7 +684,7 @@ mod tests {
             let _ = tx.lock().unwrap().send(event);
         })
         .expect("launch");
-        let tab = browser.remote().open(page).expect("open");
+        let tab = browser.remote().open(page, false).expect("open");
         browser.switch(None, &tab);
         let frame = loop {
             match rx.recv_timeout(Duration::from_secs(20)).expect("an event") {
@@ -611,7 +693,7 @@ mod tests {
                 Event::Url { .. } | Event::Title { .. } => {}
             }
         };
-        assert_eq!((frame.w, frame.h), VIEWPORT);
+        assert_eq!((frame.w, frame.h), DESKTOP);
         let middle = frame.render(crate::view::Placement { s: 1.0, dx: -896, dy: -504 }, 1, 1);
         assert!(middle[0] < 16, "a black page came out as {}", middle[0]);
         drop(browser);
@@ -626,12 +708,11 @@ mod tests {
         assert_eq!(major_version("something else entirely"), None);
     }
 
-    /// A page is served to an ordinary desktop Chromium: no Headless in the
-    /// User-Agent or its client hints, and navigator.webdriver unset. `cargo test
-    /// -- --ignored`.
-    #[test]
-    #[ignore]
-    fn a_page_sees_an_ordinary_browser() {
+    /// A page on 127.0.0.1, which Chromium counts as secure so a page there has client
+    /// hints, and every request's head as it arrives. The page asks to be laid out at
+    /// the device's width, as a page made for phones does: without that a phone, and
+    /// Chromium in mobile mode, lays it out 980 wide and shows it shrunk.
+    fn serve() -> (u16, mpsc::Receiver<String>) {
         use std::io::Read as _;
         let server = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
         let port = server.local_addr().unwrap().port();
@@ -646,17 +727,30 @@ mod tests {
                     continue;
                 }
                 let head = String::from_utf8_lossy(&buf[..n]).to_string();
-                let _ = stream.write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 13\r\n\r\n<p>hello</p>\n",
+                let body = "<meta name=viewport content=\"width=device-width\"><p>hello</p>\n";
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
                 );
+                let _ = stream.write_all(reply.as_bytes());
                 let _ = seen_tx.send(head);
             }
         });
+        (port, seen_rx)
+    }
+
+    /// A page is served to an ordinary desktop Chromium: no Headless in the
+    /// User-Agent or its client hints, and navigator.webdriver unset. `cargo test
+    /// -- --ignored`.
+    #[test]
+    #[ignore]
+    fn a_page_sees_an_ordinary_browser() {
+        let (port, seen_rx) = serve();
 
         let dir = std::env::temp_dir().join(format!("browser-app-ua-{}", std::process::id()));
         let browser = Browser::launch("chromium", &dir, |_| {}).expect("launch");
         let remote = browser.remote();
-        let tab = remote.open(&format!("http://127.0.0.1:{port}/")).expect("open");
+        let tab = remote.open(&format!("http://127.0.0.1:{port}/"), false).expect("open");
         browser.switch(None, &tab);
         let head = seen_rx.recv_timeout(Duration::from_secs(20)).expect("a request");
         assert!(!head.to_lowercase().contains("headless"), "{head}");
@@ -668,6 +762,63 @@ mod tests {
         let seen = seen.expect("an answer");
         assert!(!seen[0].as_str().unwrap().contains("Headless"), "{seen}");
         assert_ne!(seen[1], "true", "navigator.webdriver is set");
+        drop(browser);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A tab in mobile mode is laid out as a phone and says it is one, in its
+    /// User-Agent, its client hints and the width its page sees; switched to desktop,
+    /// it is laid out and reloaded as one. `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn a_mobile_tab_is_a_phone_and_switches_to_a_desktop() {
+        let (port, seen_rx) = serve();
+        let dir = std::env::temp_dir().join(format!("browser-app-mobile-{}", std::process::id()));
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let browser = Browser::launch("chromium", &dir, move |event| {
+            let _ = tx.lock().unwrap().send(event);
+        })
+        .expect("launch");
+        let remote = browser.remote();
+        let tab = remote.open(&format!("http://127.0.0.1:{port}/"), true).expect("open");
+        browser.switch(None, &tab);
+        let frame = |rx: &mpsc::Receiver<Event>| loop {
+            match rx.recv_timeout(Duration::from_secs(20)).expect("an event") {
+                Event::Frame(page) => break (page.w, page.h),
+                Event::Gone(why) => panic!("{why}"),
+                _ => {}
+            }
+        };
+        // The page itself, not the favicon it asks for after.
+        let page = |seen: &mpsc::Receiver<String>| loop {
+            let head = seen.recv_timeout(Duration::from_secs(20)).expect("a request");
+            if head.starts_with("GET / ") {
+                break head;
+            }
+        };
+        let first = page(&seen_rx);
+        assert!(first.contains("Mobile"), "the first request did not ask as a phone: {first}");
+        // The first picture can be one caught mid-resize; the page settles on the
+        // phone's size.
+        while frame(&rx) != MOBILE {}
+        std::thread::sleep(Duration::from_millis(500));
+        let ask = "return [innerWidth, navigator.userAgent, navigator.userAgentData.mobile];";
+        let seen = remote.evaluate(ask).expect("ask").expect("an answer");
+        assert_eq!(seen[0], json!(MOBILE.0));
+        assert!(seen[1].as_str().unwrap().contains("Mobile"), "{seen}");
+        assert_eq!(seen[2], json!(true), "client hints say desktop");
+
+        browser.set_mode(&tab, false);
+        let again = page(&seen_rx);
+        assert!(!again.contains("Mobile"), "the reload still asked as a phone: {again}");
+        assert!(again.to_lowercase().contains("sec-ch-ua-mobile: ?0"), "{again}");
+        while frame(&rx) != DESKTOP {}
+        std::thread::sleep(Duration::from_millis(500));
+        let seen = remote.evaluate(ask).expect("ask").expect("an answer");
+        assert_eq!(seen[0], json!(DESKTOP.0));
+        assert!(!seen[1].as_str().unwrap().contains("Mobile"), "{seen}");
+        assert_eq!(seen[2], json!(false));
         drop(browser);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -687,10 +838,16 @@ mod tests {
         .expect("launch");
         let remote = browser.remote();
         let black = remote
-            .open("data:text/html,<title>Black</title><body style='margin:0;background:black'>")
+            .open(
+                "data:text/html,<title>Black</title><body style='margin:0;background:black'>",
+                false,
+            )
             .expect("open black");
         let white = remote
-            .open("data:text/html,<title>White</title><body style='margin:0;background:white'>")
+            .open(
+                "data:text/html,<title>White</title><body style='margin:0;background:white'>",
+                false,
+            )
             .expect("open white");
         let middle = |page: &Page| {
             page.render(crate::view::Placement { s: 1.0, dx: -896, dy: -504 }, 1, 1)[0]
@@ -742,7 +899,7 @@ mod tests {
             <p style='position:absolute;left:100px;top:400px'>words</p></body>";
         let browser = Browser::launch("chromium", &dir, |_| {}).expect("launch");
         let remote = browser.remote();
-        let tab = remote.open(page).expect("open");
+        let tab = remote.open(page, false).expect("open");
         browser.switch(None, &tab);
         std::thread::sleep(Duration::from_millis(500));
 

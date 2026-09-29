@@ -366,6 +366,17 @@ tab on screen is screencast. Titles are asked for with `document.title` when a t
 loads, because the engine's target events carry only the title a page had when it
 was created. Closing the last tab sends it home rather than leaving nothing on screen.
 
+**A tab is a phone until it is told otherwise.** Asked for so that a captive
+portal's sign-in page comes up in its phone layout. A tab is laid out at 360x203, the
+narrowest phone in use and the width sites are tested at: 16px body text is then 6 panel
+pixels in x-height at x1, a pixel more than the panel's own font, where 512 made it 4.
+It says it is an Android phone in
+its User-Agent and its client hints. The engine is started with the phone's User-Agent
+and size, because a tab's first request goes out before a tab of it can be told
+anything. A phone icon beside reload switches the tab to a desktop, 1792x1008 and a
+desktop's User-Agent, and reloads it; the icon is then a monitor. A page without a
+viewport meta tag is laid out 980 wide in mobile mode, as a phone lays it out.
+
 **The engine does not say it is headless.** DuckDuckGo answered a search on the
 device with a captcha. Headless Chromium puts HeadlessChrome in its User-Agent and
 its client hints and sets navigator.webdriver, so it is started with the User-Agent

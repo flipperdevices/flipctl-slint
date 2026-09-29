@@ -139,10 +139,12 @@ impl View {
         }
     }
 
-    /// A page of another size arrived: the pan point is kept where it is on the
-    /// page, and pulled back inside it if the page shrank.
-    pub fn resize(&mut self, page: Size) {
-        self.pan = (self.pan.0.clamp(0.0, page.w), self.pan.1.clamp(0.0, page.h));
+    /// A page of another size arrived, as a tab switching between a phone's layout
+    /// and a desktop's does: the pan point keeps its place in proportion, so the
+    /// cursor is where it was on the page rather than pushed into a corner.
+    pub fn resize(&mut self, from: Size, to: Size) {
+        let (x, y) = (self.pan.0 / from.w * to.w, self.pan.1 / from.h * to.h);
+        self.pan = (x.clamp(0.0, to.w), y.clamp(0.0, to.h));
         self.gesture = Gesture::Idle;
     }
 
@@ -362,6 +364,14 @@ mod tests {
         assert_eq!(p, Placement { s: 1.0 / 7.0, dx: 0, dy: 0 });
         assert_eq!(v.cursor(PAGE), (128, 72));
         assert!(v.minimap(PAGE).is_none());
+    }
+
+    #[test]
+    fn a_new_page_size_keeps_the_place_in_proportion() {
+        let mut v = View::new(PAGE);
+        v.pan = (448.0, 252.0);
+        v.resize(PAGE, Size { w: 512.0, h: 288.0 });
+        assert_eq!(v.pan, (128.0, 72.0), "a quarter of the way in, both ways");
     }
 
     #[test]

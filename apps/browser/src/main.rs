@@ -89,6 +89,8 @@ struct TabInfo {
     tab: cdp::Tab,
     title: String,
     url: String,
+    /// Laid out as a phone rather than as a desktop, which is how a tab starts.
+    mobile: bool,
 }
 
 struct App {
@@ -116,7 +118,7 @@ struct App {
 
 impl App {
     fn new(url: &str) -> Self {
-        let (w, h) = cdp::VIEWPORT;
+        let (w, h) = cdp::MOBILE;
         Self {
             page: None,
             thumbnail: None,
@@ -138,8 +140,9 @@ impl App {
     /// A frame arrived. The view keeps its place on the page unless the page
     /// changed shape.
     fn frame(&mut self, page: Page) {
-        if self.page.as_ref().map(Page::size) != Some(page.size()) {
-            self.view.resize(page.size());
+        match self.page.as_ref().map(Page::size) {
+            Some(from) if from != page.size() => self.view.resize(from, page.size()),
+            _ => {}
         }
         let h = (page.h as i32 * view::MINI_W / page.w as i32).max(1) as usize;
         let small = page.thumbnail(view::MINI_W as usize, h);
@@ -187,7 +190,7 @@ impl App {
         if let Some(engine) = self.engine.as_ref() {
             engine.switch(self.tabs.get(self.active).map(|t| &t.tab), &tab);
         }
-        self.tabs.push(TabInfo { tab, title: String::new(), url: url.clone() });
+        self.tabs.push(TabInfo { tab, title: String::new(), url: url.clone(), mobile: true });
         self.active = self.tabs.len() - 1;
         self.shown(url);
     }
@@ -270,6 +273,14 @@ impl App {
             Item::Reload => {
                 if let Some(engine) = self.engine.as_ref() {
                     engine.reload();
+                }
+            }
+            Item::Mobile => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.mobile = !tab.mobile;
+                    if let Some(engine) = self.engine.as_ref() {
+                        engine.set_mode(&tab.tab, tab.mobile);
+                    }
                 }
             }
             Item::Address => {
@@ -449,7 +460,8 @@ fn apply_strip(ui: &AppWindow, app: &App) {
             title: if t.title.is_empty() { t.url.as_str() } else { t.title.as_str() },
         })
         .collect();
-    let v = strip::view(&tabs, app.active, &app.url, hot);
+    let mobile = app.tabs.get(app.active).is_none_or(|t| t.mobile);
+    let v = strip::view(&tabs, app.active, &app.url, mobile, hot);
     let placed: Vec<StripTab> = v
         .tabs
         .iter()
@@ -800,7 +812,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 std::thread::Builder::new()
                     .name("open".into())
                     .spawn(move || {
-                        let opened = remote.open(&url).map(|tab| (tab, url));
+                        let opened = remote.open(&url, true).map(|tab| (tab, url));
                         let _ = tx.send(Wake::Opened(opened));
                         waker();
                     })
@@ -921,7 +933,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 let tx = asks.clone();
                 let waker = asked.clone();
                 let _ = std::thread::Builder::new().name("tab".into()).spawn(move || {
-                    let opened = remote.open(&url).map(|tab| (tab, url));
+                    let opened = remote.open(&url, true).map(|tab| (tab, url));
                     let _ = tx.send(Wake::Opened(opened));
                     waker();
                 });
@@ -1004,7 +1016,7 @@ mod tests {
     /// A page of our own: white, with black blocks standing in for text, so the
     /// shrinking shows as greys and the chrome over it as tokens.
     fn app_with_page(blocks: bool) -> App {
-        let (w, h) = cdp::VIEWPORT;
+        let (w, h) = cdp::DESKTOP;
         let grey: Vec<u8> = (0..h)
             .flat_map(|y| (0..w).map(move |x| (x, y)))
             .map(|(x, y)| {
@@ -1045,7 +1057,7 @@ mod tests {
         assert_eq!(at(right, (m.y - 2) as usize), theme::color::BLACK.0);
 
         // On a black page the white outside the black is what shows its edge.
-        let (w, h) = cdp::VIEWPORT;
+        let (w, h) = cdp::DESKTOP;
         let mut dark = App::new(HOME);
         dark.frame(Page::from_luma(w, h, &vec![0; (w * h) as usize], (1.0, 1.0)).expect("page"));
         dark.view.zoom = 2.0;
@@ -1141,6 +1153,7 @@ mod tests {
                 tab: cdp::Tab { target: format!("t{i}"), session: format!("s{i}") },
                 title: title.to_string(),
                 url: format!("https://example.com/{i}"),
+                mobile: true,
             })
             .collect()
     }
@@ -1168,7 +1181,7 @@ mod tests {
         let arm = frame[cy as usize * stride + cx as usize + 3];
         assert_eq!(arm, 0xff, "the crosshair is drawn under the strip");
         key(&mut app, Key::Left, true);
-        assert_eq!(app.strip, Some(strip::Item::Reload));
+        assert_eq!(app.strip, Some(strip::Item::Mobile));
         key(&mut app, Key::Back, true);
         assert_eq!(app.strip, None, "Back put it away");
         app.view.pan.1 = 0.0;
@@ -1188,7 +1201,7 @@ mod tests {
         assert!(!app.strip_touch(t(500, 500)));
         assert!(!app.strip_touch(t(450, 500)), "stepped before a whole item");
         assert!(app.strip_touch(t(400, 500)));
-        assert_eq!(app.strip, Some(strip::Item::Reload));
+        assert_eq!(app.strip, Some(strip::Item::Mobile));
         assert!(app.strip_touch(t(400, 200)));
         assert!(matches!(app.strip, Some(strip::Item::Tab(_) | strip::Item::Close(_))));
         app.strip_touch(Touch { x: 400, y: 200, down: false });
@@ -1196,6 +1209,27 @@ mod tests {
         app.strip_touch(t(0, 0));
         app.strip_touch(t(0, 200));
         assert_eq!(app.strip, None);
+    }
+
+    /// A tab starts as a phone, the button beside reload shows it, and Ok on the
+    /// button makes it a desktop and back. Drawn both ways for looking at.
+    #[test]
+    fn the_mode_button_switches_a_tab_between_phone_and_desktop() {
+        let mut app = app_with_page(false);
+        app.tabs = tabs(&["One"]);
+        assert!(app.tabs[0].mobile, "a tab starts as a desktop");
+        app.strip = Some(strip::Item::Mobile);
+        let phone = shot("strip-mode-phone", &app);
+        assert!(off_palette(&phone).is_empty(), "{:?}", off_palette(&phone));
+        key(&mut app, Key::Ok, true);
+        assert!(!app.tabs[0].mobile);
+        assert_eq!(app.strip, Some(strip::Item::Mobile), "the strip went away");
+        app.strip = None;
+        let monitor = shot("strip-mode-monitor", &app);
+        assert_ne!(phone, monitor, "the button looks the same either way");
+        app.strip = Some(strip::Item::Mobile);
+        key(&mut app, Key::Ok, true);
+        assert!(app.tabs[0].mobile);
     }
 
     /// Tabs: Ok on one puts it on screen, the cross closes one, + asks for an
@@ -1296,7 +1330,7 @@ mod tests {
             let _ = tx.lock().unwrap().send(event);
         })
         .expect("launch");
-        let tab = engine.remote().open(&url).expect("open");
+        let tab = engine.remote().open(&url, false).expect("open");
         engine.switch(None, &tab);
         let mut app = App::new(&url);
         let deadline = std::time::Instant::now() + Duration::from_secs(8);
