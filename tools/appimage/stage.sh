@@ -48,14 +48,30 @@ key_of() {
     sed -n "s/^$2 *= *\"\([^\"]*\)\".*/\1/p" <<<"$1" | head -n1
 }
 
-# The `/// flipctl` block out of a script's head, with the comment marker stripped, so
-# the same reader works on it as on an app.toml.
+# The head of a file, as a string. Read into a variable rather than piped onward,
+# because every reader below stops at the first thing it wants: `grep -q` and awk's
+# `exit` both close the pipe early, `head` dies of SIGPIPE, and `pipefail` then
+# reports the whole pipeline as failed. That turned "this file has a manifest" into
+# "this file has none" for any file short enough to lose the race, and dropped it
+# from the catalogue without a word.
+head_of() {
+    head -c 8192 "$1"
+}
+
+# Whether a file carries a manifest block at all.
+has_block() {
+    case "$(head_of "$1")" in
+        *"/// flipctl"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 block_of() {
-    head -c 8192 "$1" | awk '
+    awk '
         /\/\/\/[ \t]*flipctl[ \t]*$/ { inside = 1; next }
         inside && /^[ \t]*(#|\/\/|--)[ \t]*\/\/\/[ \t]*$/ { exit }
         inside { sub(/^[ \t]*(#|\/\/|--)[ \t]?/, ""); print }
-    '
+    ' <<<"$(head_of "$1")"
 }
 
 # The folder an app asks to be filed under, from the source manifest: a bundle carries
@@ -130,7 +146,7 @@ while IFS= read -r rel; do
     inside_a_bundle "$dir" && continue
     icon=false
     [ "$(basename "$rel")" = icon.png ] && icon=true
-    if [ "$icon" = false ] && ! head -c 8192 "$HERE/apps/$rel" | grep -q "/// flipctl"; then
+    if [ "$icon" = false ] && ! has_block "$HERE/apps/$rel"; then
         continue
     fi
     mkdir -p "$DEST/$dir"
