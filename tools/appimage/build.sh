@@ -183,7 +183,7 @@ in_bundle() {
         docker run --rm --platform linux/amd64 -u "$(id -u):$(id -g)" \
             -v "$HERE:/src" -w /src -v "$OUT:/out" \
             -e SOURCE_DATE_EPOCH="$(git -C "$HERE" log -1 --format=%ct)" -e ARCH=aarch64 \
-            -e TMPDIR=/out/tmp \
+            -e TMPDIR=/tmp \
             flipctl-bundle "$@"
     fi
 }
@@ -219,12 +219,22 @@ build_app() {
     # are for the panel rather than for a desktop. The architecture is in the name
     # for the same reason. What actually decides it for flipctl is still the
     # manifest inside; this is for the person looking at the folder.
+    #
+    # In the container the bundle is written to the container's own /tmp and copied
+    # out. appimagetool reads it back through a shared mmap, which a mount that
+    # refuses one (virtiofs with cache=never) fails; it then crashes with the MD5
+    # digest left unwritten.
     echo "== packing $app-aarch64.fap.AppImage =="
     rm -f "$OUT/$app-aarch64.fap.AppImage"
-    in_bundle "$OUTDIR/tools/$TOOL" --appimage-extract-and-run -n --comp zstd \
+    local final=$OUTDIR/$app-aarch64.fap.AppImage packed=$OUTDIR/$app-aarch64.fap.AppImage
+    [ "$NATIVE" = 1 ] || packed=/tmp/$app-aarch64.fap.AppImage
+    # shellcheck disable=SC2016
+    in_bundle sh -ec 'packed=$1 final=$2; shift 2; "$@" "$packed"; [ "$packed" = "$final" ] || cp "$packed" "$final"' \
+        pack "$packed" "$final" \
+        "$OUTDIR/tools/$TOOL" --appimage-extract-and-run -n --comp zstd \
         --mksquashfs-opt -Xcompression-level --mksquashfs-opt 19 \
         --runtime-file "$OUTDIR/tools/runtime-aarch64" \
-        "$OUTDIR/$app/AppDir" "$OUTDIR/$app-aarch64.fap.AppImage" 2>&1 | grep -v "^$" | sed 's/^/  /'
+        "$OUTDIR/$app/AppDir" 2>&1 | grep -v "^$" | sed 's/^/  /'
     (cd "$OUT" && sha256sum "$app-aarch64.fap.AppImage" > "$app-aarch64.fap.AppImage.sha256")
     echo "== $(du -h "$OUT/$app-aarch64.fap.AppImage" | cut -f1) $OUT/$app-aarch64.fap.AppImage =="
 }
