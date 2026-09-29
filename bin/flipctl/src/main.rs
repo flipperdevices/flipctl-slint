@@ -2935,10 +2935,15 @@ fn panel(
 
     // What the catalogue offers, and how far along asking is.
     //
-    // Asked once, in a thread, the first time the Install tab is opened, because it
-    // is a network round trip and the render loop cannot wait on one. Not asked at
-    // startup either: most of the time nobody opens the tab, and a device with no
-    // network should not spend twenty seconds of every boot finding that out.
+    // Asked in a thread every time the Install tab is opened, because it is a network
+    // round trip and the render loop cannot wait on one. Not asked at startup: most
+    // of the time nobody opens the tab, and a device with no network should not spend
+    // twenty seconds of every boot finding that out.
+    //
+    // Every time rather than once, because the catalogue is somebody else's file and
+    // it changes. An index held for the life of the process goes on naming a download
+    // that has been renamed or withdrawn, and what the person sees for that is the
+    // server refusing a URL they cannot see and no way to ask again.
     enum Shop {
         /// Nobody has opened the tab yet.
         Closed,
@@ -5205,13 +5210,12 @@ fn panel(
                         mgr_install = true;
                         mgr_selected = 0;
                         mgr_scroll = 0;
-                        // Opening the tab is what asks the server, and pressing
-                        // Install again on a tab that failed asks it again. A device
-                        // whose network comes up a moment later is the ordinary case
-                        // here, so there has to be a way to ask twice; a thread
-                        // already running is left alone rather than joined by a
-                        // second one.
-                        if matches!(shop, Shop::Closed | Shop::Shut) {
+                        // Opening the tab is what asks the server, and opening it
+                        // again asks again: the catalogue is a file on a server and a
+                        // copy of it held from an earlier visit can name a download
+                        // that has since moved. A thread already running is left alone
+                        // rather than joined by a second one.
+                        if !matches!(shop, Shop::Opening(_)) {
                             let (tx, rx) = std::sync::mpsc::channel();
                             std::thread::spawn(move || {
                                 let _ = tx.send(flipper_ui::catalogue::fetch_index());
