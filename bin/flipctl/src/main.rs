@@ -1617,13 +1617,44 @@ struct WlApp {
     rotate: flipper_ui::Rotate,
 }
 
+/// The arguments saved for `name`'s next start, taken so they go to that start only.
+#[cfg(all(feature = "device", feature = "slint", feature = "wayland"))]
+fn take_args(saved: &mut Option<(String, Vec<String>)>, name: &str) -> Vec<String> {
+    match saved.take() {
+        Some((for_name, args)) if for_name == name => args,
+        other => {
+            *saved = other;
+            Vec::new()
+        }
+    }
+}
+
+/// The Browser app's bundle, by its file name, which is what the catalogue names it.
+#[cfg(all(feature = "device", feature = "slint", feature = "wayland"))]
+const BROWSER_BUNDLE: &str = "browser-aarch64.fap.AppImage";
+
+/// What asking for an app from outside its list came to.
+#[cfg(all(feature = "device", feature = "slint"))]
+enum Opened {
+    /// It was running, and is in front now.
+    Front,
+    /// Its install is under way, and the question is already on the panel.
+    Queued,
+    /// It is being started.
+    Starting,
+    /// It cannot start, and the panel says why.
+    Refused,
+}
+
 /// Launch a Wayland app in its own compositor, or name the one already running.
+/// `args` go to the app itself, after the bundle.
 #[cfg(all(feature = "device", feature = "slint", feature = "wayland"))]
 fn start_hosted(
     entry: &flipper_ui::app::AppEntry,
     apps: &[flipper_ui::app::AppEntry],
     host: &mut Option<flipper_ui::sway::Host>,
     running: &mut Vec<WlApp>,
+    args: &[String],
 ) -> Option<String> {
     // Only ever one copy. A second instance would draw on a second output that nothing
     // reads, so the app would look started and stay invisible.
@@ -1684,7 +1715,7 @@ fn start_hosted(
         &dir,
         &display,
         &place.output,
-        &entry.launch_line(via),
+        &entry.launch_line(via, args),
         &work,
         w,
         h,
@@ -3453,6 +3484,10 @@ fn panel(
     // connection is opened once and kept: a switch should cost one write.
     #[cfg(feature = "wayland")]
     let mut wl_apps: Vec<WlApp> = Vec::new();
+    // Arguments for the next start of the app with this name, and only that start:
+    // what a network behind a captive portal hands the Browser, the page to open.
+    #[cfg(feature = "wayland")]
+    let mut launch_args: Option<(String, Vec<String>)> = None;
     #[cfg(feature = "wayland")]
     let mut wl_front: Option<String> = None;
     // When the front app was launched, so an app that never manages to put a window
@@ -3573,6 +3608,57 @@ fn panel(
         }
     };
 
+    // An app asked for from outside the list, by a desktop handing its bundle over or
+    // by a network that wants signing in: to the front if it is already on the panel,
+    // left alone if its install is under way, and otherwise started from the list open
+    // on its own folder with it selected, so an install question lands where a press
+    // on its row would have put it.
+    macro_rules! open_app {
+        ($at:expr, $why:expr) => {'open: {
+            let at: usize = $at;
+            let name = apps[at].name.clone();
+            #[cfg(feature = "wayland")]
+            if wl_apps.iter().any(|a| a.name == name) {
+                switcher = None;
+                wl_front = Some(name.clone());
+                wl_since = Instant::now();
+                wl_drawn = false;
+                wl_fresh = true;
+                screen.set_screen(Screen::Apps);
+                launched_from = Screen::Apps;
+                recents.open(&name, flipper_ui::switcher::Kind::App);
+                eprintln!("app            front is {name} (opened {})", $why);
+                break 'open Opened::Front;
+            }
+            if deps.is_some() && pending_app!() == Some(name.as_str()) {
+                deps_detached = false;
+                break 'open Opened::Queued;
+            }
+            switcher = None;
+            app_path = apps[at].group.clone();
+            let rows = app_rows(&apps, &app_path);
+            app_selected =
+                rows.iter().position(|r| matches!(r, AppRow::App(i) if *i == at)).unwrap_or(0)
+                    as i32;
+            app_scroll = 0;
+            apply_app_list(
+                &screen,
+                &app_labels(&apps, &rows, &app_path),
+                app_selected,
+                &EMPTY_BUTTONS,
+                app_scroll,
+                &app_path,
+            );
+            screen.set_screen(Screen::Apps);
+            eprintln!("app            {name} opened {}", $why);
+            if begin_app!(at as i32) {
+                Opened::Starting
+            } else {
+                Opened::Refused
+            }
+        }};
+    }
+
     loop {
         // A desktop handing a bundle over: list it, start it or front it, and answer.
         // The reply says what was accepted, not what came of it: the outcome shows on
@@ -3614,50 +3700,11 @@ fn panel(
                 },
             };
             let name = apps[at].name.clone();
-            // Already on the panel: to the front, as its card would bring it.
-            #[cfg(feature = "wayland")]
-            if wl_apps.iter().any(|a| a.name == name) {
-                switcher = None;
-                wl_front = Some(name.clone());
-                wl_since = Instant::now();
-                wl_drawn = false;
-                wl_fresh = true;
-                screen.set_screen(Screen::Apps);
-                launched_from = Screen::Apps;
-                recents.open(&name, flipper_ui::switcher::Kind::App);
-                eprintln!("app            front is {name} (opened from a desktop)");
-                req.ok(&format!("front {name}"));
-                continue;
-            }
-            // Its install is under way: the answer is already on the panel.
-            if deps.is_some() && pending_app!() == Some(name.as_str()) {
-                deps_detached = false;
-                req.ok(&format!("queued {name}"));
-                continue;
-            }
-            // The list open on the app's own folder, with it selected, so an install
-            // question lands where a press on its row would have put it.
-            switcher = None;
-            app_path = apps[at].group.clone();
-            let rows = app_rows(&apps, &app_path);
-            app_selected =
-                rows.iter().position(|r| matches!(r, AppRow::App(i) if *i == at)).unwrap_or(0)
-                    as i32;
-            app_scroll = 0;
-            apply_app_list(
-                &screen,
-                &app_labels(&apps, &rows, &app_path),
-                app_selected,
-                &EMPTY_BUTTONS,
-                app_scroll,
-                &app_path,
-            );
-            screen.set_screen(Screen::Apps);
-            eprintln!("app            {name} opened from a desktop");
-            if begin_app!(at as i32) {
-                req.ok(&format!("starting {name}"));
-            } else {
-                req.err(&format!("{name} cannot start; the panel says why"));
+            match open_app!(at, "from a desktop") {
+                Opened::Front => req.ok(&format!("front {name}")),
+                Opened::Queued => req.ok(&format!("queued {name}")),
+                Opened::Starting => req.ok(&format!("starting {name}")),
+                Opened::Refused => req.err(&format!("{name} cannot start; the panel says why")),
             }
         }
 
@@ -3930,7 +3977,9 @@ fn panel(
                             }
                             #[cfg(feature = "wayland")]
                             {
-                                wl_front = start_hosted(entry, &apps, &mut host, &mut wl_apps);
+                                let args = take_args(&mut launch_args, &entry.name);
+                                wl_front =
+                                    start_hosted(entry, &apps, &mut host, &mut wl_apps, &args);
                                 wl_since = Instant::now();
                                 wl_drawn = false;
                                 wl_fresh = true;
@@ -4795,8 +4844,14 @@ fn panel(
                                         }
                                         #[cfg(feature = "wayland")]
                                         {
-                                            wl_front =
-                                                start_hosted(entry, &apps, &mut host, &mut wl_apps);
+                                            let args = take_args(&mut launch_args, &entry.name);
+                                            wl_front = start_hosted(
+                                                entry,
+                                                &apps,
+                                                &mut host,
+                                                &mut wl_apps,
+                                                &args,
+                                            );
                                             wl_since = Instant::now();
                                             wl_drawn = false;
                                             wl_fresh = true;
@@ -6569,7 +6624,32 @@ fn panel(
 
         // Radio state moved, so any row whose status reads it has to be rebuilt.
         if net.take_dirty() {
+            let was = net_now.portal;
             net_now = net.get();
+            // Behind a captive portal: the Browser opens on the page that brings the
+            // portal's sign-in up. Once each time a network turns out to be one, not on
+            // every reading after, so closing it is not undone by the next recheck.
+            // Nothing when it is not installed: there is no network to install it
+            // over.
+            #[cfg(feature = "wayland")]
+            if net_now.portal && !was {
+                apps = flipper_ui::bundle::discover_all(&flipper_ui::bundle::roots());
+                apps_dirty = true;
+                let browser = apps
+                    .iter()
+                    .position(|a| a.bundle.file_name().is_some_and(|f| f == BROWSER_BUNDLE));
+                match browser {
+                    Some(at) if demo::can_host_apps() => {
+                        let page = flipper_ui::net::portal_page();
+                        eprintln!("net            behind a captive portal, opening {page}");
+                        launch_args = Some((apps[at].name.clone(), vec![page]));
+                        let _ = open_app!(at, "for a captive portal");
+                    }
+                    _ => {
+                        eprintln!("net            behind a captive portal, and no Browser to open")
+                    }
+                }
+            }
             demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
             // The settings modal puts Disconnect at the top only for the live
             // connection, and which one that is may be what just changed.

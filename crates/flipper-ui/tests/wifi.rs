@@ -149,6 +149,7 @@ fn the_wifi_screens_hold_their_geometry() {
         wifi_enabled: true,
         wifi_connected: true,
         ssid: "Flipper Lab".into(),
+        ..Default::default()
     };
     let page = wifi::page_rows(&joined);
     screen.set_wifi_rows(rows(&page));
@@ -299,6 +300,7 @@ fn wifi_frames_use_only_design_tokens() {
         wifi_enabled: true,
         wifi_connected: true,
         ssid: "Flipper Lab".into(),
+        ..Default::default()
     };
     screen.set_wifi_rows(rows(&wifi::page_rows(&joined)));
     screen.set_wifi_selected(2);

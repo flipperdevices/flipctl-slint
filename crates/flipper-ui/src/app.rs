@@ -115,16 +115,25 @@ impl AppEntry {
     /// Through a shell, because what runs is a command line: the bundle, quoted, or
     /// the launcher with the bundle as its argument.
     pub fn command(&self) -> (PathBuf, Vec<PathBuf>) {
-        (PathBuf::from("/bin/sh"), vec![PathBuf::from("-c"), PathBuf::from(self.launch_line(None))])
+        (
+            PathBuf::from("/bin/sh"),
+            vec![PathBuf::from("-c"), PathBuf::from(self.launch_line(None, &[]))],
+        )
     }
 
     /// The command line the shell runs: the bundle, or `via` with the bundle as its
-    /// argument, each single-quoted so a space in a file name stays in the name.
-    pub fn launch_line(&self, via: Option<&AppEntry>) -> String {
-        match via {
+    /// argument, and then `args` for the app itself, each single-quoted so a space in
+    /// a file name stays in the name and nothing in an argument is the shell's.
+    pub fn launch_line(&self, via: Option<&AppEntry>, args: &[String]) -> String {
+        let mut line = match via {
             Some(launcher) => format!("{} {}", quoted(&launcher.bundle), quoted(&self.bundle)),
             None => quoted(&self.bundle),
+        };
+        for arg in args {
+            line.push(' ');
+            line.push_str(&quoted(Path::new(arg)));
         }
+        line
     }
 
     /// A writable directory of the app's own, which is where it runs.
@@ -806,14 +815,20 @@ mod tests {
             key: "My Radio".into(),
             ..Default::default()
         };
-        assert_eq!(app.launch_line(None), "'/home/user/Apps/My Radio.AppImage'");
+        assert_eq!(app.launch_line(None, &[]), "'/home/user/Apps/My Radio.AppImage'");
         let via = AppEntry {
             bundle: PathBuf::from("/home/user/Apps/python.AppImage"),
             ..Default::default()
         };
         assert_eq!(
-            app.launch_line(Some(&via)),
+            app.launch_line(Some(&via), &[]),
             "'/home/user/Apps/python.AppImage' '/home/user/Apps/My Radio.AppImage'"
+        );
+        // An argument for the app goes after it, quoted like the rest, so a URL's own
+        // `&` and a quote inside it reach the app as they are.
+        assert_eq!(
+            app.launch_line(None, &["http://a.test/?x=1&y='2'".into()]),
+            "'/home/user/Apps/My Radio.AppImage' 'http://a.test/?x=1&y='\\''2'\\'''"
         );
         let (program, args) = app.command();
         assert_eq!(program, Path::new("/bin/sh"));

@@ -49,46 +49,137 @@ pub struct Net {
     pub wifi_connected: bool,
     /// Empty when not connected, or when the active connection has no name.
     pub ssid: String,
+    /// NetworkManager's overall answer, which is the best any interface gets.
+    pub connectivity: Connectivity,
+    /// Some interface is behind a captive portal. Not the same as the overall answer
+    /// being one: with a cable online beside a portal's Wi-Fi, the whole is full and
+    /// only the Wi-Fi says portal.
+    pub portal: bool,
 }
 
-/// `nmcli -t -f WIFI,WWAN radio` prints one line, `<wifi>:<wwan>`.
-fn read_radio() -> Option<(bool, bool)> {
-    let s = output(&["nmcli", "-t", "-f", "WIFI,WWAN", "radio"])?;
-    let line = s.lines().next()?;
-    let (wifi, wwan) = line.split_once(':')?;
-    Some((wifi.trim() == "enabled", wwan.trim() == "enabled"))
+/// How far NetworkManager's own check gets: it fetches a known page and compares
+/// what comes back, so a network that answers with something else is behind a
+/// captive portal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Connectivity {
+    #[default]
+    Unknown,
+    None,
+    Portal,
+    Limited,
+    Full,
 }
 
-/// The SSID of the active wireless connection, if there is one.
-///
-/// `nmcli -t -f NAME,TYPE,STATE c show --active` prints one line per active
-/// connection. The wireless one's NAME is the connection's name, which for a
-/// normal `nmcli dev wifi connect` is the SSID.
-fn read_wifi_connection() -> Option<String> {
-    let s = output(&["nmcli", "-t", "-f", "NAME,TYPE,STATE", "c", "show", "--active"])?;
-    for line in s.lines() {
-        // NAME may itself contain an escaped colon, so split from the right: the
-        // last two fields are TYPE and STATE.
-        let mut parts = line.rsplitn(3, ':');
-        let state = parts.next()?;
-        let kind = parts.next()?;
-        let name = parts.next()?;
-        if kind == "802-11-wireless" && state == "activated" {
-            return Some(name.replace("\\:", ":"));
+impl Connectivity {
+    fn parse(word: &str) -> Self {
+        match word.trim() {
+            "none" => Self::None,
+            "portal" => Self::Portal,
+            "limited" => Self::Limited,
+            "full" => Self::Full,
+            _ => Self::Unknown,
         }
     }
-    None
+}
+
+/// `nmcli -t -f CONNECTIVITY,WIFI,WWAN general` prints one line,
+/// `<connectivity>:<wifi>:<wwan>`. The terse values are not translated whatever the
+/// locale, and the connectivity comes with the radios for no extra process.
+fn read_general() -> Option<(Connectivity, bool, bool)> {
+    parse_general(&output(&["nmcli", "-t", "-f", "CONNECTIVITY,WIFI,WWAN", "general"])?)
+}
+
+fn parse_general(s: &str) -> Option<(Connectivity, bool, bool)> {
+    let mut fields = s.lines().next()?.split(':');
+    let connectivity = Connectivity::parse(fields.next()?);
+    let wifi = fields.next()?.trim() == "enabled";
+    let wwan = fields.next()?.trim() == "enabled";
+    Some((connectivity, wifi, wwan))
+}
+
+/// `nmcli -t -f DEVICE,TYPE,STATE,CONNECTION,IP4-CONNECTIVITY,IP6-CONNECTIVITY device`
+/// prints one line per interface. Read for two things in one process: the connected
+/// Wi-Fi's connection, whose name for a normal `nmcli dev wifi connect` is the SSID,
+/// and whether any interface is behind a portal.
+fn read_devices() -> Option<(Option<String>, bool)> {
+    Some(parse_devices(&output(&[
+        "nmcli",
+        "-t",
+        "-f",
+        "DEVICE,TYPE,STATE,CONNECTION,IP4-CONNECTIVITY,IP6-CONNECTIVITY",
+        "device",
+    ])?))
+}
+
+fn parse_devices(s: &str) -> (Option<String>, bool) {
+    let mut ssid = None;
+    let mut portal = false;
+    for line in s.lines() {
+        let fields = terse_fields(line);
+        let [_, kind, state, connection, ip4, ip6] = fields.as_slice() else { continue };
+        if kind == "wifi" && state == "connected" && ssid.is_none() {
+            ssid = Some(connection.clone());
+        }
+        portal |= [ip4, ip6].iter().any(|c| Connectivity::parse(c) == Connectivity::Portal);
+    }
+    (ssid, portal)
+}
+
+/// One line of nmcli's terse output, split on the colons that are not escaped: a
+/// connection's name can hold a colon, which comes out as `\:`, and a backslash as
+/// `\\`.
+fn terse_fields(line: &str) -> Vec<String> {
+    let mut fields = vec![String::new()];
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => fields.last_mut().unwrap().extend(chars.next()),
+            ':' => fields.push(String::new()),
+            _ => fields.last_mut().unwrap().push(c),
+        }
+    }
+    fields
 }
 
 fn read_net() -> Net {
-    let (wifi_enabled, wwan_enabled) = read_radio().unwrap_or((false, false));
-    let ssid = read_wifi_connection();
+    let (connectivity, wifi_enabled, wwan_enabled) =
+        read_general().unwrap_or((Connectivity::Unknown, false, false));
+    let (ssid, behind) = read_devices().unwrap_or((None, false));
     Net {
         airplane: !wifi_enabled && !wwan_enabled,
         wifi_enabled,
         wifi_connected: ssid.is_some(),
         ssid: ssid.unwrap_or_default(),
+        connectivity,
+        portal: behind || connectivity == Connectivity::Portal,
     }
+}
+
+/// The page a browser opens on to meet a captive portal: NetworkManager's own check
+/// address, which the portal is already intercepting, so asking for it is what gets
+/// the portal's sign-in page back. Read from NetworkManager's merged configuration
+/// rather than written down twice, by its full path since /usr/sbin is on no user's
+/// PATH; Debian's default when it cannot be read.
+pub fn portal_page() -> String {
+    const DEBIAN: &str = "http://network-test.debian.org/nm";
+    output(&["/usr/sbin/NetworkManager", "--print-config"])
+        .and_then(|config| connectivity_uri(&config))
+        .unwrap_or_else(|| DEBIAN.to_string())
+}
+
+/// The `uri` of the `[connectivity]` section of `NetworkManager --print-config`.
+fn connectivity_uri(config: &str) -> Option<String> {
+    let mut inside = false;
+    for line in config.lines().map(str::trim) {
+        if line.starts_with('[') {
+            inside = line == "[connectivity]";
+        } else if inside {
+            if let Some(uri) = line.strip_prefix("uri=") {
+                return Some(uri.trim().to_string()).filter(|u| !u.is_empty());
+            }
+        }
+    }
+    None
 }
 
 /// Polls nmcli on its own thread so the render loop never waits on a subprocess.
@@ -281,5 +372,59 @@ impl NetSource {
         // The row is showing what we asked for, not what happened: have the watcher
         // look again once the radio has had time to refuse.
         let _ = self.poke.send(Wake::Ours);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What nmcli 1.52 prints, read on the device, and a portal as the fake one
+    /// made it say.
+    #[test]
+    fn the_general_line_carries_connectivity_and_both_radios() {
+        assert_eq!(parse_general("full:enabled:enabled\n"), Some((Connectivity::Full, true, true)));
+        assert_eq!(
+            parse_general("portal:enabled:disabled"),
+            Some((Connectivity::Portal, true, false))
+        );
+        assert_eq!(
+            parse_general("limited:disabled:disabled").map(|g| g.0),
+            Some(Connectivity::Limited)
+        );
+        assert_eq!(
+            parse_general("something:enabled:enabled").map(|g| g.0),
+            Some(Connectivity::Unknown)
+        );
+        assert_eq!(parse_general("full:enabled"), None, "a short line is not a reading");
+    }
+
+    /// What the device printed on the portal tester's Wi-Fi with its cable online, and
+    /// a moment in which the Wi-Fi said portal: the whole was full throughout.
+    #[test]
+    fn a_portal_on_one_interface_is_seen_beside_a_full_one() {
+        let limited = "end0:ethernet:connected:Router WAN:full:limited\n\
+                       wlxb06b11673c1a:wifi:connected:TEST-PORTAL:limited:limited\n\
+                       lo:loopback:connected (externally):lo:unknown:unknown\n\
+                       wlxb26b11673c1a:wifi:disconnected::none:none\n";
+        assert_eq!(parse_devices(limited), (Some("TEST-PORTAL".into()), false));
+        let portal = limited.replace("TEST-PORTAL:limited", "TEST-PORTAL:portal");
+        assert_eq!(parse_devices(&portal), (Some("TEST-PORTAL".into()), true));
+        // A name with a colon in it, escaped as nmcli escapes it.
+        let colon = "wlan0:wifi:connected:Cafe\\: Guest:portal:none\n";
+        assert_eq!(parse_devices(colon), (Some("Cafe: Guest".into()), true));
+        assert_eq!(parse_devices(""), (None, false));
+    }
+
+    /// The check address out of `NetworkManager --print-config`, as the device prints
+    /// it, and nothing out of a section that is not the connectivity one.
+    #[test]
+    fn the_check_address_comes_out_of_the_connectivity_section() {
+        let printed = "[main]\nplugins=ifupdown,keyfile\n\n[ifupdown]\nmanaged=false\n\n\
+                       [connectivity]\nuri=http://network-test.debian.org/nm\ninterval=300\n\
+                       response=NetworkManager is online\n";
+        assert_eq!(connectivity_uri(printed).as_deref(), Some("http://network-test.debian.org/nm"));
+        assert_eq!(connectivity_uri("[main]\nuri=http://nope/\n"), None);
+        assert_eq!(connectivity_uri("[connectivity]\nuri=\n"), None);
     }
 }

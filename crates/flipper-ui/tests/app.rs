@@ -230,7 +230,7 @@ fn a_script_is_listed_beside_a_bundle() {
         ..Default::default()
     };
     assert_eq!(
-        script.launch_line(Some(&launcher)),
+        script.launch_line(Some(&launcher), &[]),
         format!("'{}' '{}'", launcher.bundle.display(), script.bundle.display())
     );
 }
