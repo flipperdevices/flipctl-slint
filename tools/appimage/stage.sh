@@ -17,6 +17,11 @@
 # and the checksum in the file itself. A hand-maintained list of sha256s is a list that
 # goes wrong silently.
 #
+# Entries come out in alphabetical order by name, which is neither the order the
+# bundles are found in nor the order they are built in: a file listing sorts AppImages
+# before scripts and folders before their contents, and an index that reshuffles itself
+# whenever an app is added produces a diff nobody can read.
+#
 # `base-url` is where the bytes are served from, which is not where this tree is: the
 # index can sit in git while the files are release assets, and since release assets are
 # a flat namespace the url is the base and the file's own name, never its folder.
@@ -101,6 +106,9 @@ offer() {
     else
         sha=$(sha256sum "$file" | cut -d' ' -f1)
     fi
+    local block
+    entries=$((entries + 1))
+    block="$ORDER/$(printf '%04d' "$entries")"
     {
         echo
         echo "[[app]]"
@@ -111,8 +119,16 @@ offer() {
         if [ -n "$provides" ]; then echo "provides = \"$provides\""; fi
         echo "size = $size"
         echo "sha256 = \"$sha\""
-    } >>"$INDEX"
+    } >"$block"
+    # Sorted on a folded copy of the name, so the order is the one a reader expects
+    # rather than the one ASCII gives, where every capital sorts before every
+    # lower-case letter.
+    printf '%s\t%s\n' "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" "$block" >>"$ORDER/index"
 }
+
+ORDER=$(mktemp -d)
+trap 'rm -rf "$ORDER"' EXIT
+entries=0
 
 mkdir -p "$DEST"
 cat >"$INDEX" <<EOF
@@ -165,6 +181,13 @@ while IFS= read -r rel; do
     fi
 done < <(cd "$HERE/apps" && find . -type f -not -path "*/__pycache__/*" -not -path "*/target/*" \
     -printf '%P\n' | sort)
+
+# Now that every app is known, the index is written in one pass, in order.
+if [ -s "$ORDER/index" ]; then
+    LC_ALL=C sort -t"$(printf '\t')" -k1,1 "$ORDER/index" | cut -f2 | while IFS= read -r block; do
+        cat "$block"
+    done >>"$INDEX"
+fi
 
 # A script app is only startable if something provides its runtime, and a staging with
 # no bundles at all means build.sh was never run.
