@@ -3085,6 +3085,9 @@ fn panel(
         Install(usize),
     }
     let mut dialog: Option<Dialog> = None;
+    // A dialog that only reports, and when it closes by itself: the lines it was
+    // opened with, so a different dialog shown since is never the one closed.
+    let mut notice: Option<(Vec<String>, Instant)> = None;
     // What was last pushed to the window, so an unchanged dialog is not pushed
     // again. See the note at the push site.
     // The dialog as it was last handed over, plus whether the switcher was up:
@@ -4210,12 +4213,13 @@ fn panel(
                             // Said rather than implied. The row behind this changes
                             // to "installed" either way, but a download that ends in
                             // the dialog simply vanishing reads as one that gave up.
-                            Some(Dialog {
-                                lines: vec![name, "installed".into()],
-                                left: "Back",
-                                right: "",
-                                act: DialogAct::None,
-                            })
+                            // It closes by itself once read, since nothing is asked.
+                            let lines = vec![name, "installed".into()];
+                            notice = Some((
+                                lines.clone(),
+                                Instant::now() + Duration::from_millis(timing::NOTICE_MS as u64),
+                            ));
+                            Some(Dialog { lines, left: "Back", right: "", act: DialogAct::None })
                         }
                         Err(e) => {
                             eprintln!("apps           {name} not installed: {e}");
@@ -5725,9 +5729,15 @@ fn panel(
                                         screen.set_screen(Screen::Manager);
                                         // The list it returns to is one row shorter,
                                         // which is evidence but not an answer: the
-                                        // dialog says which app went.
+                                        // dialog says which app went, then goes.
+                                        let lines = vec![app.name.clone(), "uninstalled".into()];
+                                        notice = Some((
+                                            lines.clone(),
+                                            Instant::now()
+                                                + Duration::from_millis(timing::NOTICE_MS as u64),
+                                        ));
                                         dialog = Some(Dialog {
-                                            lines: vec![app.name.clone(), "uninstalled".into()],
+                                            lines,
                                             left: "Back",
                                             right: "",
                                             act: DialogAct::None,
@@ -5933,12 +5943,13 @@ fn panel(
                     if let Some(offer) = offers.get(mgr_selected as usize) {
                         let roots = flipper_ui::bundle::roots();
                         dialog = Some(if offer.present(&roots) {
-                            Dialog {
-                                lines: vec![offer.name.clone(), "is already installed".into()],
-                                left: "Back",
-                                right: "",
-                                act: DialogAct::None,
-                            }
+                            // Nothing to ask, so it goes by itself like the others.
+                            let lines = vec![offer.name.clone(), "is already installed".into()];
+                            notice = Some((
+                                lines.clone(),
+                                Instant::now() + Duration::from_millis(timing::NOTICE_MS as u64),
+                            ));
+                            Dialog { lines, left: "Back", right: "", act: DialogAct::None }
                         } else {
                             match needs(offer, &apps, offers) {
                                 Needs::Nothing => Dialog {
@@ -6830,6 +6841,16 @@ fn panel(
         // must not fill at the same time.
         screen.set_pressed(press.row_pressed());
         screen.set_arrow_pressed(arrow.map_or(0, |(dir, _)| dir));
+        // A notice whose time is up closes, though not while one of its buttons is
+        // flashing: that press would then land on the screen underneath once the
+        // dialog had gone.
+        if notice.as_ref().is_some_and(|(_, until)| Instant::now() >= *until) && !press.showing() {
+            if let Some((lines, _)) = notice.take() {
+                if dialog.as_ref().is_some_and(|d| d.lines == lines) {
+                    dialog = None;
+                }
+            }
+        }
         // Only when the dialog actually changed.
         //
         // Handing Slint a freshly built model is a change even when its contents

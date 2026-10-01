@@ -523,6 +523,7 @@ box   = 4   # MessageBox, bottom-bar button top corners, keyboard container
 [timing]
 press_flash_ms   = 30    # bottom-bar button, next scene usually replaces the view
 toast_ms         = 1600  # wifi.js, how long a modal's pill stays up
+notice_ms        = 1000  # app manager's installed, uninstalled and already-installed dialogs, which close themselves
 chevron_flash_ms = 120   # toggle chevron tap, must outlast the 200ms icon tick
 press_commit_ms  = 150   # popup item and keyboard key, the flash must be seen
 icon_frame_ms    = 200   # animated icon strip, 5 fps
