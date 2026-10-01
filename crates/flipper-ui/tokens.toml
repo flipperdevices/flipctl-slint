@@ -489,6 +489,11 @@ readout_gap         = 3
 # 82 + 15 + 3 + 19 + 1 + 4 + 1 + 5 + 34 = 164, nudged 2px left by eye to 162.
 power_icon_x        = 162
 
+# The idle screen's address list: one line per address, and a gap between one
+# interface's card and the next. drawEthCard's two-line card, 24px and 2 apart.
+idle_line_h         = 12
+idle_card_gap       = 2
+
 # Dimensionless counts. Kept apart from [metric] because those are pixel lengths;
 # a count used as a length is a type error in the generated Slint theme.
 [count]

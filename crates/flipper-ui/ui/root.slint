@@ -7,7 +7,7 @@
 // is also the shape a scene stack needs later.
 import { FlipperTheme } from "@theme";
 import { MenuBody, ListItem } from "list.slint";
-import { IdleBody, IdleLink } from "idle.slint";
+import { IdleBody, IdleLine } from "idle.slint";
 import { LogBody } from "log.slint";
 import { Modal } from "modal.slint";
 import { DetailBody, DetailRow } from "detail.slint";
@@ -18,7 +18,7 @@ import { TextInputBody, KbCell } from "keyboard.slint";
 import { SwitcherBody, SwitchCard } from "switcher.slint";
 import { CardsBody, CardItem } from "card.slint";
 
-export { ListItem, IdleLink, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetRow, WifiDetailRow, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem }
+export { ListItem, IdleLine, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetRow, WifiDetailRow, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem }
 
 // Idle is the root. The menu opens over it and the app list over that. There are no
 // screens for an app to be shown on: an app draws its own, and what flipctl puts up
@@ -53,11 +53,11 @@ export component Root inherits Window {
     in property <string> hostname;
     in property <string> profile;
     in property <bool> has_profile: true;
-    in property <[IdleLink]> links;
-    in property <int> link_scroll;
-    // How many interface cards the idle screen has room for, so the keys that scroll
-    // them can clamp against the geometry rather than a guess.
-    out property <int> link_rows: idle.link_rows;
+    in property <[IdleLine]> links;
+    in property <length> link_offset;
+    // How much room the idle screen's address list has, so the keys that scroll it
+    // can clamp against the geometry rather than a guess.
+    out property <length> links_h: idle.links_h;
     in property <[string]> idle_buttons;
     in property <int> idle_pressed_slot: -1;
 
@@ -228,7 +228,7 @@ export component Root inherits Window {
         profile: root.profile;
         has_profile: root.has_profile;
         links: root.links;
-        link_scroll: root.link_scroll;
+        link_offset: root.link_offset;
         buttons: root.idle_buttons;
         pressed_slot: root.idle_pressed_slot;
     }

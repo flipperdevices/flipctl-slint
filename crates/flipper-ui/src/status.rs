@@ -268,12 +268,56 @@ fn modem_present() -> bool {
     })
 }
 
-/// One network interface worth showing on the idle screen.
+/// One network interface worth showing on the idle screen, with every address it has.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Link {
     pub name: String,
-    pub v4: String,
-    pub v6: String,
+    pub v4: Vec<String>,
+    pub v6: Vec<String>,
+}
+
+/// One line of the idle screen's address list: an interface's first line carries its
+/// name, and every line after it is one more address.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct IdleLine {
+    /// The interface, on the first line of its card; empty on the lines below.
+    pub name: String,
+    pub label: &'static str,
+    pub value: String,
+    /// Top of the line, from the top of the first card.
+    pub y: i32,
+}
+
+/// The idle screen's address list, laid out: one line per address, cards stacked with
+/// a gap between them. Here rather than in the component because a card is as tall as
+/// its interface has addresses, and Slint cannot carry a running total down a model.
+pub fn idle_lines(links: &[Link]) -> Vec<IdleLine> {
+    use crate::theme::metric::{IDLE_CARD_GAP, IDLE_LINE_H};
+    let mut out = Vec::new();
+    let mut y = 0;
+    for link in links {
+        let addrs =
+            link.v4.iter().map(|a| ("IPv4:", a)).chain(link.v6.iter().map(|a| ("IPv6:", a)));
+        for (i, (label, value)) in addrs.enumerate() {
+            out.push(IdleLine {
+                name: if i == 0 { link.name.clone() } else { String::new() },
+                label,
+                value: value.clone(),
+                y,
+            });
+            y += IDLE_LINE_H;
+        }
+        y += IDLE_CARD_GAP;
+    }
+    out
+}
+
+/// The furthest the list can scroll, in lines: the first line from which everything to
+/// the end fits in `room` pixels.
+pub fn idle_scroll_max(lines: &[IdleLine], room: i32) -> usize {
+    let Some(last) = lines.last() else { return 0 };
+    let bottom = last.y + crate::theme::metric::IDLE_LINE_H;
+    lines.iter().position(|line| bottom - line.y <= room).unwrap_or(lines.len() - 1)
 }
 
 /// Everything the idle screen shows beyond the status bar.
@@ -326,9 +370,9 @@ impl Idle {
     /// under a tenth of a percent of a core at this cadence, and it repaints only
     /// when the set actually differs.
     ///
-    /// One /sys/class/net walk, one `carrier` read per port, one getifaddrs and one
-    /// /proc/net/if_inet6 parse. The kernel could say all of this over rtnetlink
-    /// instead, which `route_watch.rs` already has the socket for.
+    /// One /sys/class/net walk, one getifaddrs, one /proc/net/if_inet6 parse and one
+    /// rtnetlink link dump for the dummies. The kernel could say all of this over
+    /// rtnetlink instead, which `route_watch.rs` already has the socket for.
     pub fn refresh_links(&mut self) -> bool {
         let fresh = links();
         let changed = fresh != self.links;
@@ -467,74 +511,136 @@ fn booted_profile() -> String {
         .unwrap_or_default()
 }
 
-/// Interfaces with a carrier, each with its addresses.
+/// Every interface that has an address, each with all of them.
+///
+/// Everything but loopback and dummies: a bridge, a VPN tunnel or a container's veth
+/// is an address the machine answers on, and this screen exists to show those. The
+/// physical ports come first, so the cards a person is looking for lead the list.
 ///
 /// IPv6 comes from `/proc/net/if_inet6`, which is plain text. There is no
 /// equivalent for IPv4, so that side uses `getifaddrs`; the alternative was
 /// shelling out to `ip`, which a UI process has no business doing.
 fn links() -> Vec<Link> {
-    let mut out: Vec<Link> = Vec::new();
-    let v6 = ipv6_by_interface();
-    // Once for the whole refresh. getifaddrs allocates and returns every address on
-    // the machine, so asking it per interface walked that list four times over to
-    // answer four questions it had already answered.
-    let v4_all = ipv4_by_interface();
-    // The same interfaces the Ethernet page lists, plus wireless: hardware with a
-    // live link. A machine's bridges, veths and VPN tunnels are not its network, and
-    // a port with no address of its own has nothing to say on a screen that exists to
-    // show addresses.
-    for name in crate::sysinfo::hardware_ifaces() {
-        let dir = std::path::Path::new("/sys/class/net").join(&name);
-        if read(dir.join("carrier")).as_deref() != Some("1") {
-            continue;
-        }
-        let Some(v4) = v4_all.get(&name).filter(|found| !found.is_empty()) else {
-            continue;
-        };
-        // Labelled from the port's own name, by the same function the Ethernet page
-        // uses, so the two screens agree about which port is which: end0 is ETH0 on
-        // both and the gadget is USB ETH on both. Numbering the rows here instead
-        // renamed every port below one that had no address yet, so a machine whose
-        // first socket was empty called its second one ETH0.
-        //
-        // Wireless is the exception, because its name carries nothing a person can
-        // use: wlxb06b11673af2 is one card, and what matters is that it is the wifi.
-        let label = if dir.join("wireless").is_dir() {
-            "WIFI".to_string()
-        } else {
-            crate::sysinfo::iface_display_name(&name)
-        };
-        out.push(Link {
-            name: label,
-            v4: v4.first().cloned().unwrap_or_default(),
-            v6: v6.get(&name).cloned().unwrap_or_default(),
+    let mut v4 = ipv4_by_interface();
+    let mut v6 = ipv6_by_interface();
+    let dummies = dummies();
+    let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
+        return Vec::new();
+    };
+    let mut names: Vec<(bool, String)> = entries
+        .flatten()
+        .filter(|e| read(e.path().join("type")).as_deref() != Some(ARPHRD_LOOPBACK))
+        .map(|e| (!e.path().join("device").exists(), e.file_name().to_string_lossy().to_string()))
+        .filter(|(_, name)| !dummies.contains(name))
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .filter_map(|(_, name)| {
+            let link_v4 = v4.remove(&name).unwrap_or_default();
+            let link_v6 = v6.remove(&name).unwrap_or_default();
+            if link_v4.is_empty() && link_v6.is_empty() {
+                return None;
+            }
+            // Labelled from the port's own name, by the same function the Ethernet
+            // page uses, so the two screens agree about which port is which: end0 is
+            // ETH0 on both and the gadget is USB ETH on both.
+            //
+            // Wireless is the exception, because its name carries nothing a person can
+            // use: wlxb06b11673af2 is one card, and what matters is that it is the wifi.
+            let label = if Path::new("/sys/class/net").join(&name).join("wireless").is_dir() {
+                "WIFI".to_string()
+            } else {
+                crate::sysinfo::iface_display_name(&name)
+            };
+            Some(Link { name: label, v4: link_v4, v6: link_v6 })
+        })
+        .collect()
+}
+
+/// `/sys/class/net/<if>/type` for loopback, `ARPHRD_LOOPBACK`.
+const ARPHRD_LOOPBACK: &str = "772";
+
+/// The interfaces whose link kind is `dummy`.
+///
+/// sysfs has no word for what kind of virtual interface something is, so this asks
+/// rtnetlink for every link and reads `IFLA_LINKINFO`. One dump, answered at once;
+/// the timeout is only there so a kernel that never answers cannot hold the render
+/// loop this runs on.
+fn dummies() -> std::collections::HashSet<String> {
+    use crate::netlink::{self, each_attr, each_message, Socket, NLM_F_DUMP};
+    const RTM_NEWLINK: u16 = 16;
+    const RTM_GETLINK: u16 = 18;
+    const IFINFOMSG: usize = 16;
+    const IFLA_IFNAME: u16 = 3;
+    const IFLA_LINKINFO: u16 = 18;
+    const IFLA_INFO_KIND: u16 = 1;
+
+    let mut out = std::collections::HashSet::new();
+    let Ok(socket) = Socket::open(netlink::ROUTE) else { return out };
+    if socket.set_timeout(Duration::from_millis(100)).is_err()
+        || socket.send(&netlink::message(RTM_GETLINK, NLM_F_DUMP, &[0; IFINFOMSG], &[])).is_err()
+    {
+        return out;
+    }
+    let mut buf = vec![0u8; 32 * 1024];
+    // A dump can take more than one read, and `each_message` stops at DONE without
+    // saying so, so the end is looked for here.
+    while let Ok(got @ 1..) = socket.recv(&mut buf) {
+        let mut done = false;
+        let ok = each_message(&buf[..got], |kind, body| {
+            if kind != RTM_NEWLINK || body.len() < IFINFOMSG {
+                return;
+            }
+            let (mut name, mut dummy) = (None, false);
+            each_attr(&body[IFINFOMSG..], |attr, value| match attr {
+                IFLA_IFNAME => {
+                    name = Some(String::from_utf8_lossy(value).trim_end_matches('\0').to_string())
+                }
+                IFLA_LINKINFO => each_attr(value, |info, kind| {
+                    dummy |= info == IFLA_INFO_KIND
+                        && kind.strip_suffix(b"\0").unwrap_or(kind) == b"dummy";
+                }),
+                _ => {}
+            });
+            if let Some(name) = name.filter(|_| dummy) {
+                out.insert(name);
+            }
         });
+        let mut at = 0;
+        while at + netlink::NLMSG_HDR <= got {
+            let len = u32::from_ne_bytes(buf[at..at + 4].try_into().expect("4 bytes")) as usize;
+            done |= u16::from_ne_bytes([buf[at + 4], buf[at + 5]]) == netlink::NLMSG_DONE;
+            if len < netlink::NLMSG_HDR {
+                break;
+            }
+            at += netlink::align4(len);
+        }
+        if done || !ok {
+            break;
+        }
     }
     out
 }
 
-/// Link-local and global IPv6 per interface, from procfs. The address arrives as
-/// 32 hex digits with no separators.
-fn ipv6_by_interface() -> std::collections::HashMap<String, String> {
-    let mut map: std::collections::HashMap<String, String> = Default::default();
-    // The lowest address, not the first one procfs happens to list. An interface with
-    // more than one has no order promised to it, so taking the first made the row
-    // flip between two addresses from one read to the next; at a three-second
-    // cadence that would be a visible flicker rather than a curiosity. Lowest also
-    // puts a global address ahead of a link-local one, which is the useful way round.
+/// Every IPv6 address per interface, from procfs. The address arrives as 32 hex
+/// digits with no separators.
+///
+/// Sorted, because procfs promises no order and a list that reshuffled itself between
+/// reads would flicker at the three-second cadence. Link-local last, so the address
+/// worth reading leads.
+fn ipv6_by_interface() -> std::collections::HashMap<String, Vec<String>> {
+    let mut map: std::collections::HashMap<String, Vec<String>> = Default::default();
     for (iface, addr) in ipv6_list() {
-        map.entry(iface)
-            .and_modify(|held| {
-                if addr < *held {
-                    *held = addr.clone();
-                }
-            })
-            .or_insert(addr);
+        map.entry(iface).or_default().push(addr);
+    }
+    for addrs in map.values_mut() {
+        addrs.sort_by_key(|a| (a.starts_with("fe80:"), a.clone()));
     }
     map
 }
 
-/// Every global IPv6 address, as (interface, address).
+/// Every IPv6 address but loopback's, as (interface, address).
 ///
 /// Written out in shortest form by `sysinfo::format_ipv6`, which is the same
 /// RFC 5952 collapse this used to carry its own copy of.
@@ -729,5 +835,64 @@ mod modem {
             return named;
         }
         "--"
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+    use crate::theme::metric::{IDLE_CARD_GAP, IDLE_LINE_H};
+
+    fn link(name: &str, v4: &[&str], v6: &[&str]) -> Link {
+        Link {
+            name: name.into(),
+            v4: v4.iter().map(|a| a.to_string()).collect(),
+            v6: v6.iter().map(|a| a.to_string()).collect(),
+        }
+    }
+
+    /// Every address is a line, the name is on a card's first one only, and IPv4
+    /// comes before IPv6. An interface with only IPv6 still gets a card.
+    #[test]
+    fn every_address_is_a_line() {
+        let lines = idle_lines(&[
+            link("ETH0", &["192.168.1.2", "10.0.0.2"], &["fe80::1"]),
+            link("WG0", &[], &["fd00::2"]),
+        ]);
+        let shown: Vec<_> =
+            lines.iter().map(|l| (l.name.as_str(), l.label, l.value.as_str(), l.y)).collect();
+        let second = 3 * IDLE_LINE_H + IDLE_CARD_GAP;
+        assert_eq!(
+            shown,
+            [
+                ("ETH0", "IPv4:", "192.168.1.2", 0),
+                ("", "IPv4:", "10.0.0.2", IDLE_LINE_H),
+                ("", "IPv6:", "fe80::1", 2 * IDLE_LINE_H),
+                ("WG0", "IPv6:", "fd00::2", second),
+            ]
+        );
+    }
+
+    /// Two two-address cards are the old 26px pitch, so a machine with one address of
+    /// each kind per port looks as it did.
+    #[test]
+    fn a_two_line_card_keeps_the_old_pitch() {
+        let lines = idle_lines(&[link("ETH0", &["a"], &["b"]), link("ETH1", &["c"], &["d"])]);
+        assert_eq!(lines[2].y, 26);
+    }
+
+    /// The list stops scrolling once its last line is on screen, and a list that fits
+    /// does not scroll at all.
+    #[test]
+    fn the_list_scrolls_only_as_far_as_its_end() {
+        let lines =
+            idle_lines(&[link("ETH0", &["a", "b", "c"], &["d"]), link("ETH1", &["e"], &[])]);
+        // Five lines and one gap: 62px.
+        assert_eq!(idle_scroll_max(&lines, 62), 0);
+        assert_eq!(idle_scroll_max(&lines, 61), 1);
+        assert_eq!(idle_scroll_max(&lines, 26), 3);
+        // Room for less than one line still leaves the last one reachable.
+        assert_eq!(idle_scroll_max(&lines, 0), lines.len() - 1);
+        assert_eq!(idle_scroll_max(&[], 50), 0);
     }
 }

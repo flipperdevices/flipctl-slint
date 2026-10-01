@@ -392,6 +392,14 @@ hosted app's pad unless the app opens it. The browser reads it on a thread of it
 through `TouchpadSource`, which `flipctl-app` now exports behind its `device`
 feature, together with `Haptic`, the keyboard and `Key::flipper`.
 
+## The idle screen's addresses, revisited 2026-10-01
+
+`drawEthCard` gives each interface a two-line card, one IPv4 and one IPv6, and the
+port showed only hardware ports with a carrier. Every address of every interface but
+loopback and dummies is shown now, one line each, so a card is as tall as its
+interface has addresses and the list scrolls a line at a time. A two-address card
+keeps the prototype's 26px pitch.
+
 ## Poll cadences, revisited 2026-09-03
 
 Each detail screen was given its prototype scene's own interval. Two of those did

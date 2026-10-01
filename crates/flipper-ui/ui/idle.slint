@@ -8,10 +8,15 @@ import { FlipperTheme } from "@theme";
 import { StatusBar, PanelStatus } from "statusbar.slint";
 import { SoftBar } from "frame.slint";
 
-export struct IdleLink {
+// One line of the address list. An interface's first line carries its name, the
+// lines under it one more address each. `y` comes from Rust, from the top of the
+// first card: a card is as tall as its interface has addresses, which is a running
+// total this side cannot keep.
+export struct IdleLine {
     name: string,
-    v4: string,
-    v6: string,
+    label: string,
+    value: string,
+    y: length,
 }
 
 // A centred label and value pair, treated as one block. desktop.js measures
@@ -156,14 +161,15 @@ export component IdleBody inherits Rectangle {
     in property <int> power_mw: -32768;
     in property <string> hostname;
     in property <string> profile;
-    in property <[IdleLink]> links;
+    in property <[IdleLine]> links;
     // Whether this machine has profiles at all. Without them the row and the rule
     // under it are not drawn and everything below moves up: an empty "Profile:" is
     // a line that says nothing.
     in property <bool> has_profile: true;
-    // First link shown. There is room for two or three cards and a machine can have
-    // more interfaces than that, so the list scrolls.
-    in property <int> link_scroll;
+    // How far the list is scrolled, as the `y` of its first visible line. A machine
+    // with several ports, a gadget and a VPN has more addresses than fit, so the keys
+    // move it a line at a time.
+    in property <length> link_offset;
     in property <[string]> buttons;
     in property <int> pressed_slot: -1;
 
@@ -172,9 +178,9 @@ export component IdleBody inherits Rectangle {
     // by, so the hostname lands where the profile was.
     property <length> lift: root.has_profile ? 0px : 14px;
     property <length> links_y: root.bar + 65px - root.lift;
-    // How many cards fit between the last rule and the soft buttons, from the
-    // geometry rather than from a count kept in step by hand.
-    out property <int> link_rows: Math.max(1, Math.floor((root.height - FlipperTheme.button_h - root.links_y) / 26px));
+    // The room between the last rule and the soft buttons, from the geometry rather
+    // than from a count kept in step by hand. Rust scrolls against it.
+    out property <length> links_h: root.height - FlipperTheme.button_h - root.links_y;
 
     StatusBar {
         x: 0; y: 0;
@@ -295,29 +301,29 @@ export component IdleBody inherits Rectangle {
         value_dy: 1px;
     }
 
-    // One card per link, two lines each. Only the window that fits is drawn, and
-    // the keys move it.
-    for link[i] in root.links: Rectangle {
+    // One line per address. Only the lines wholly inside the room are drawn, and the
+    // keys move the window. A card's first line is drawEthCard's name, label and
+    // address; the lines under it are its second line, once per address after the
+    // first. A divergence: drawEthCard has one IPv4 and one IPv6 line per card, drawn
+    // whether or not the address exists.
+    for line in root.links: Rectangle {
         x: 0;
-        y: root.links_y + (i - root.link_scroll) * 26px;
+        y: root.links_y + line.y - root.link_offset;
         width: parent.width;
-        height: 24px;
+        height: FlipperTheme.idle_line_h;
         background: transparent;
-        visible: i >= root.link_scroll && i < root.link_scroll + root.link_rows;
-        EthLine {
+        visible: line.y >= root.link_offset
+            && line.y + FlipperTheme.idle_line_h - root.link_offset <= root.links_h;
+        if line.name != "": EthLine {
             x: 0; y: 0; width: parent.width;
-            name: link.name;
-            label: "IPv4:";
-            value: link.v4;
+            name: line.name;
+            label: line.label;
+            value: line.value;
         }
-        // Only when there is one. A divergence from drawEthCard, which draws the
-        // label unconditionally and leaves it dangling with nothing after it. The
-        // card keeps its height either way, so nothing below shifts when an
-        // address appears or goes.
-        if link.v6 != "": CentredPair {
-            x: 0; y: 12px; width: parent.width;
-            label: "IPv6:";
-            value: link.v6;
+        if line.name == "": CentredPair {
+            x: 0; y: 0; width: parent.width;
+            label: line.label;
+            value: line.value;
             gap: 3px;
         }
     }

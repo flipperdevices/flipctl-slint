@@ -2413,9 +2413,14 @@ fn apply_app_list(
     )));
 }
 
-/// Copy the idle screen's own fields across.
+/// Copy the idle screen's own fields across, with the address list scrolled to
+/// `scroll` lines, and return where it ended up once clamped.
 #[cfg(feature = "slint")]
-fn apply_idle(screen: &flipper_ui::ui::Root, idle: &flipper_ui::status::Idle) {
+fn apply_idle(
+    screen: &flipper_ui::ui::Root,
+    idle: &flipper_ui::status::Idle,
+    scroll: usize,
+) -> usize {
     const UNKNOWN: i32 = -32768;
     screen.set_battery_temp(idle.battery_temp.unwrap_or(UNKNOWN));
     screen.set_cpu_temp(idle.cpu_temp.unwrap_or(UNKNOWN));
@@ -2425,20 +2430,23 @@ fn apply_idle(screen: &flipper_ui::ui::Root, idle: &flipper_ui::status::Idle) {
     // No profiles on this machine means no row for one, and the rest moves up.
     screen.set_has_profile(flipper_ui::boot::available());
     // Clamped here as well as on a key: a cable coming out shortens the list, and a
-    // window left past the end drew every card invisible and an empty screen.
-    let shown = screen.get_link_rows().max(1);
-    let total = idle.links.len() as i32;
-    screen.set_link_scroll(screen.get_link_scroll().min((total - shown).max(0)));
+    // window left past the end drew every line invisible and an empty screen.
+    let lines = flipper_ui::status::idle_lines(&idle.links);
+    let scroll =
+        scroll.min(flipper_ui::status::idle_scroll_max(&lines, screen.get_links_h() as i32));
+    screen.set_link_offset(lines.get(scroll).map_or(0.0, |l| l.y as f32));
     screen.set_links(slint::ModelRc::new(slint::VecModel::from(
-        idle.links
+        lines
             .iter()
-            .map(|l| flipper_ui::ui::IdleLink {
+            .map(|l| flipper_ui::ui::IdleLine {
                 name: l.name.as_str().into(),
-                v4: l.v4.as_str().into(),
-                v6: l.v6.as_str().into(),
+                label: l.label.into(),
+                value: l.value.as_str().into(),
+                y: l.y as f32,
             })
             .collect::<Vec<_>>(),
     )));
+    scroll
 }
 
 /// Copy a status reading into the screen's properties.
@@ -2610,7 +2618,7 @@ fn png(
     if let Some(now) = status.poll() {
         apply_status(&screen, now);
     }
-    apply_idle(&screen, &flipper_ui::status::Idle::read_all());
+    apply_idle(&screen, &flipper_ui::status::Idle::read_all(), 0);
     if let Some(slot) = press {
         screen.set_idle_pressed_slot(slot);
     }
@@ -2896,7 +2904,8 @@ fn panel(
     // hostname and profile once because the booted subvol cannot change without a
     // reboot.
     let mut idle = flipper_ui::status::Idle::read_all();
-    apply_idle(&screen, &idle);
+    // The idle screen's address list, scrolled this many lines down.
+    let mut link_scroll = apply_idle(&screen, &idle, 0);
     let mut sensor_poll = Instant::now();
     let mut link_poll = Instant::now();
 
@@ -5181,13 +5190,13 @@ fn panel(
             if screen.get_screen() == Screen::Idle
                 && matches!(event.key, FlipperKey::Up | FlipperKey::Down)
             {
-                use slint::Model;
-                let last = (screen.get_links().row_count() as i32 - screen.get_link_rows()).max(0);
-                let at = screen.get_link_scroll();
-                screen.set_link_scroll(match event.key {
-                    FlipperKey::Down => (at + 1).min(last),
-                    _ => (at - 1).max(0),
-                });
+                let lines = flipper_ui::status::idle_lines(&idle.links);
+                let last = flipper_ui::status::idle_scroll_max(&lines, screen.get_links_h() as i32);
+                link_scroll = match event.key {
+                    FlipperKey::Down => (link_scroll + 1).min(last),
+                    _ => link_scroll.saturating_sub(1),
+                };
+                screen.set_link_offset(lines.get(link_scroll).map_or(0.0, |l| l.y as f32));
                 window.request_redraw();
                 continue;
             }
@@ -6816,13 +6825,13 @@ fn panel(
         if sensor_poll.elapsed() >= Duration::from_secs(1) {
             sensor_poll = Instant::now();
             if idle.refresh_sensors() {
-                apply_idle(&screen, &idle);
+                link_scroll = apply_idle(&screen, &idle, link_scroll);
             }
         }
         if link_poll.elapsed() >= Duration::from_secs(3) {
             link_poll = Instant::now();
             if idle.refresh_links() {
-                apply_idle(&screen, &idle);
+                link_scroll = apply_idle(&screen, &idle, link_scroll);
                 eprintln!("links          {} interface(s)", idle.links.len());
             }
         }
