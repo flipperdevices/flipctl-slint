@@ -411,9 +411,8 @@ pub struct BootMenu {
     /// entries, while it is somewhere other than the kernel that profile boots.
     ///
     /// A spin is not a write: walking past three kernels would otherwise rewrite the
-    /// profile's entries and put each one on trial in turn. The value is committed when
-    /// the line is left -- by OK, by Back, or by moving off it -- so one choice is one
-    /// write.
+    /// profile's entries and put each one on trial in turn. The value is saved when
+    /// the Config screen is left, so one choice is one write.
     kernel_pick: Option<usize>,
     /// Where the Video Out spinner stands, while it is somewhere other than what the
     /// profile's own entry applies.
@@ -783,29 +782,19 @@ impl BootMenu {
     /// A key on the Config screen.
     ///
     /// Up and Down move; OK opens what a line opens; Left and Right spin the value of a
-    /// line that has one, which is the kernel and the video out. Leaving such a line at
-    /// all commits what its spinner shows, so a choice is one write however it was
-    /// arrived at.
+    /// line that has one, which is the kernel and the video out. Nothing is written
+    /// until the screen is left: the spinners keep what they show while the cursor
+    /// moves between lines, and Back saves every one that changed in one go. Saving on
+    /// leaving a line instead swapped this screen for the saving popup, and finishing
+    /// closed it, so moving the cursor threw the person out of the screen they were in.
     fn config_key(&mut self, key: FlipperKey, profile: &Option<Profile>) -> Outcome {
         let lines = CONFIG_LINES.len();
         let kernels = profile.as_ref().map_or(0, |p| p.entries.len());
         let outs = boot::VIDEO_OUT.len();
         self.popup = Some(Popup::Config);
         match key {
-            FlipperKey::Down => {
-                let leaving = self.popup_index;
-                self.popup_index = (self.popup_index + 1) % lines;
-                if spins(leaving) {
-                    return self.commit(leaving, profile);
-                }
-            }
-            FlipperKey::Up => {
-                let leaving = self.popup_index;
-                self.popup_index = (self.popup_index + lines - 1) % lines;
-                if spins(leaving) {
-                    return self.commit(leaving, profile);
-                }
-            }
+            FlipperKey::Down => self.popup_index = (self.popup_index + 1) % lines,
+            FlipperKey::Up => self.popup_index = (self.popup_index + lines - 1) % lines,
             // One kernel installed is a value to read, not a choice to make.
             FlipperKey::Right if self.popup_index == CONFIG_KERNEL && kernels > 1 => {
                 let at = self.kernel_at(profile);
@@ -822,7 +811,8 @@ impl BootMenu {
                 self.video_pick = Some((self.video_at(profile) + outs - 1) % outs);
             }
             FlipperKey::Ok | FlipperKey::Run => match self.popup_index {
-                at if spins(at) => return self.commit(at, profile),
+                // A spinner is set with Left and Right and saved on the way out.
+                at if spins(at) => {}
                 // The three hardware lines: listed, and honest about it.
                 at => {
                     self.popup = Some(Popup::Said(format!(
@@ -832,13 +822,12 @@ impl BootMenu {
                 }
             },
             FlipperKey::Escape | FlipperKey::Back => {
-                let leaving = self.commit(self.popup_index, profile);
+                self.save(profile);
                 if self.popup.as_ref().is_some_and(|p| matches!(p, Popup::Config)) {
-                    // Nothing to commit, so Back goes up to View, which opened this.
+                    // Nothing to save, so Back goes up to View, which opened this.
                     self.popup = Some(Popup::View);
                     self.popup_index = 0;
                 }
-                return leaving;
             }
             _ => {}
         }
@@ -857,72 +846,47 @@ impl BootMenu {
         kernel_base_of(profile, boot::running_kernel())
     }
 
-    /// Write the kernel the spinner shows, if it is not the one already booting.
+    /// Write what the spinners show, where it differs from what the profile has.
     ///
-    /// Clearing the pick first: the write is what makes it true, and a pick left behind
-    /// a failed write would show a choice the entries do not have.
-    /// Write what the spinner on `line` shows, if it shows something new.
-    ///
-    /// One door for both, because leaving a line is what commits it and there are
-    /// three ways to leave: up, down, and out.
-    fn commit(&mut self, line: usize, profile: &Option<Profile>) -> Outcome {
-        match line {
-            CONFIG_KERNEL => self.commit_kernel(profile),
-            CONFIG_VIDEO => self.commit_video(profile),
-            _ => Outcome::Stay,
+    /// One popup for both, and one thread doing them in turn. The video out goes
+    /// first: it writes into the entry files by the names the list read, and the boot
+    /// order tool may rename them. Clearing the picks first: the write is what makes
+    /// them true, and a pick left behind a failed write would show a choice the
+    /// entries do not have.
+    fn save(&mut self, profile: &Option<Profile>) {
+        let kernel = self.kernel_pick.take();
+        let video = self.video_pick.take();
+        let Some(p) = profile.clone() else { return };
+        // Against where the spinner started, which is the running kernel and not always
+        // entry 0: comparing with entry 0 dropped a pick of the kernel set to boot.
+        let base = self.kernel_base(&p);
+        let entry = kernel.filter(|&at| at != base).and_then(|at| p.entries.get(at).cloned());
+        let video = video.filter(|&at| at != boot::video_out_for(&p));
+        if entry.is_none() && video.is_none() {
+            return;
         }
-    }
-
-    /// Put the picked video out on the profile, which is every entry it has.
-    ///
-    /// The setting belongs to the profile rather than to one of its kernels: the row
-    /// says what comes out of the connectors when this profile runs, and it would be a
-    /// poor setting if the answer depended on which kernel a later boot happened to
-    /// pick. Each entry carries the overlay from under its own kernel's tree
-    /// directory, which `set_video_out` reads out of each file.
-    fn commit_video(&mut self, profile: &Option<Profile>) -> Outcome {
-        let Some(at) = self.video_pick.take() else {
-            return Outcome::Stay;
-        };
-        let Some(p) = profile.clone() else { return Outcome::Stay };
-        if at == boot::video_out_for(&p) {
-            return Outcome::Stay;
+        if let Some(at) = video {
+            let label = boot::VIDEO_OUT.get(at).map_or("", |(_, label)| label);
+            crate::logline!(
+                "boot menu      {} video out is to be {label} on {} entr{}",
+                p.name,
+                p.entries.len(),
+                if p.entries.len() == 1 { "y" } else { "ies" }
+            );
         }
-        let label = boot::VIDEO_OUT.get(at).map_or("", |(_, label)| label);
-        crate::logline!(
-            "boot menu      {} video out is to be {label} on {} entr{}",
-            p.name,
-            p.entries.len(),
-            if p.entries.len() == 1 { "y" } else { "ies" }
-        );
+        if let Some(e) = &entry {
+            crate::logline!("boot menu      {} is to boot {}", p.name, e.id);
+        }
         let (tx, rx) = std::sync::mpsc::channel();
-        self.popup = match std::thread::Builder::new().name("boot-video".into()).spawn(move || {
-            let _ = tx.send(boot::set_video_out(&p, at).map(|()| false));
+        self.popup = match std::thread::Builder::new().name("boot-config".into()).spawn(move || {
+            let done = video
+                .map_or(Ok(()), |at| boot::set_video_out(&p, at))
+                .and_then(|()| entry.map_or(Ok(()), |e| boot::set_kernel(&p.dev, &e.id)));
+            let _ = tx.send(done.map(|()| false));
         }) {
             Ok(_) => Some(Popup::Busy("Saving".into(), Some(rx))),
             Err(_) => Some(Popup::Said("could not start the change".into())),
         };
-        Outcome::Stay
-    }
-
-    fn commit_kernel(&mut self, profile: &Option<Profile>) -> Outcome {
-        let Some(at) = self.kernel_pick.take() else {
-            return Outcome::Stay;
-        };
-        if at == 0 {
-            return Outcome::Stay;
-        }
-        let Some(p) = profile.clone() else { return Outcome::Stay };
-        let Some(entry) = p.entries.get(at).cloned() else { return Outcome::Stay };
-        crate::logline!("boot menu      {} is to boot {}", p.name, entry.id);
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.popup = match std::thread::Builder::new().name("boot-kernel".into()).spawn(move || {
-            let _ = tx.send(boot::set_kernel(&p.dev, &entry.id).map(|()| false));
-        }) {
-            Ok(_) => Some(Popup::Busy("Saving".into(), Some(rx))),
-            Err(_) => Some(Popup::Said("could not start the change".into())),
-        };
-        Outcome::Stay
     }
 
     /// What the kernel line shows: the spinner's kernel while one is picked, else the
@@ -1889,6 +1853,60 @@ mod tests {
         assert_eq!(menu.cheap, Some(true));
         // And the row under the cursor is loadable again straight away.
         assert!(worth_arming(menu.cheap, ARM_SETTLE, menu.asked.as_ref(), &aim));
+    }
+
+    fn config(menu: &mut BootMenu, line: usize) -> Option<Profile> {
+        menu.popup = Some(Popup::Config);
+        menu.popup_index = line;
+        Some(boot::Profile {
+            entries: vec![entry("7.3.0-new"), entry("7.2.0-old")],
+            ..Default::default()
+        })
+    }
+
+    /// Moving between Config's lines writes nothing and closes nothing. Saving on
+    /// leaving a line swapped the screen for the saving popup, which then closed, so
+    /// a person who changed the kernel and pressed Down was thrown out to the list.
+    #[test]
+    fn config_keeps_its_picks_while_the_cursor_moves() {
+        let mut menu = BootMenu::open(4, AutoStart::Off, Kernels::Modern);
+        let profile = config(&mut menu, CONFIG_KERNEL);
+        menu.config_key(FlipperKey::Right, &profile);
+        assert_eq!(menu.kernel_pick, Some(1));
+
+        menu.config_key(FlipperKey::Down, &profile);
+        assert!(matches!(menu.popup, Some(Popup::Config)), "Down left Config");
+        assert_eq!(menu.popup_index, 0);
+        assert_eq!(menu.kernel_pick, Some(1), "the pick was dropped on the way past");
+
+        menu.popup_index = CONFIG_VIDEO;
+        menu.config_key(FlipperKey::Right, &profile);
+        menu.config_key(FlipperKey::Up, &profile);
+        assert!(matches!(menu.popup, Some(Popup::Config)), "Up left Config");
+        assert_eq!(menu.video_pick, Some(1));
+
+        // OK on a spinner saves nothing either: that happens on the way out.
+        menu.popup_index = CONFIG_KERNEL;
+        menu.config_key(FlipperKey::Ok, &profile);
+        assert!(matches!(menu.popup, Some(Popup::Config)), "OK left Config");
+        assert_eq!((menu.kernel_pick, menu.video_pick), (Some(1), Some(1)));
+    }
+
+    /// Back with nothing changed goes up to View, which opened Config. A spinner
+    /// turned and turned back is nothing changed: there is nothing to save.
+    #[test]
+    fn config_with_nothing_changed_goes_back_to_view() {
+        let mut menu = BootMenu::open(4, AutoStart::Off, Kernels::Modern);
+        let profile = config(&mut menu, CONFIG_KERNEL);
+        menu.config_key(FlipperKey::Back, &profile);
+        assert!(matches!(menu.popup, Some(Popup::View)));
+
+        let profile = config(&mut menu, CONFIG_KERNEL);
+        menu.config_key(FlipperKey::Right, &profile);
+        menu.config_key(FlipperKey::Left, &profile);
+        menu.config_key(FlipperKey::Back, &profile);
+        assert!(matches!(menu.popup, Some(Popup::View)), "a round trip was saved");
+        assert_eq!((menu.kernel_pick, menu.video_pick), (None, None));
     }
 
     /// An image is remembered until something unloads it.
