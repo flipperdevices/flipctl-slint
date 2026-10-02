@@ -494,6 +494,10 @@ power_icon_x        = 162
 idle_line_h         = 12
 idle_card_gap       = 2
 
+# The square left blank in the middle of a QR code for an icon, in modules, which are
+# pixels: the code is drawn a pixel a module.
+qr_icon             = 34
+
 # Dimensionless counts. Kept apart from [metric] because those are pixel lengths;
 # a count used as a length is a type error in the generated Slint theme.
 [count]

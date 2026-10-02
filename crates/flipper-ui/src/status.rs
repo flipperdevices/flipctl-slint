@@ -498,7 +498,7 @@ fn power_mw() -> Option<i32> {
 /// Through `boot::display_name` rather than by trimming the `@` here: a profile has one
 /// name on this machine, and the idle screen showing `Desktop__Desktop-clone__` where
 /// the menu shows `[Desktop clone]` makes the same profile look like two.
-fn booted_profile() -> String {
+pub fn booted_profile() -> String {
     read("/proc/self/mountinfo")
         .unwrap_or_default()
         .lines()

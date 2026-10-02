@@ -204,6 +204,15 @@ tar czf - \
 # Where the binary to install ends up, which is what --cross changes.
 BUILT="~/$DEST/target/release/flipctl"
 
+# The commit Settings > System info names, worked out here because the copy above has
+# no .git. Marked dirty when tracked files differ from it, since what runs is then not
+# quite that commit.
+TREE=$(cd "$(dirname "$0")" && pwd)
+COMMIT=$(git -C "$TREE" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+if [ -n "$(git -C "$TREE" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    COMMIT="$COMMIT-dirty"
+fi
+
 if [ "$CROSS" = yes ]; then
     command -v docker >/dev/null || { echo "--cross needs docker" >&2; exit 2; }
     echo "== cross-building here for aarch64 =="
@@ -238,6 +247,7 @@ if [ "$CROSS" = yes ]; then
         -v "$XT:/target" -e CARGO_TARGET_DIR=/target \
         -v "$XT/home:/cargo" -e CARGO_HOME=/cargo \
         -e CARGO_PROFILE_RELEASE_LTO=false -e CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+        -e FLIPCTL_COMMIT="$COMMIT" \
         flipctl-cross \
         cargo build --release --target aarch64-unknown-linux-gnu \
             -p flipctl --features device,slint,remote,wayland,gpu
@@ -264,7 +274,8 @@ echo "== building on the device =="
 started=$SECONDS
 set +e
 run "cd ~/$DEST && export PATH=\$HOME/.cargo/bin:\$PATH \
-        CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 && \
+        CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+        FLIPCTL_COMMIT=$COMMIT && \
      cargo build --release -p flipctl --features device,slint,remote,wayland,gpu 2>&1" \
   | awk '
         { sub(/^[ \t]+/, "") }

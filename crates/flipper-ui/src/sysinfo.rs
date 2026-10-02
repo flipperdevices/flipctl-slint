@@ -882,3 +882,812 @@ pub fn format_method(method: &str) -> String {
         other => other.into(),
     }
 }
+
+// ── System info ─────────────────────────────────────────────────────────────
+
+/// What Settings > System info shows: what the machine is, what it runs, its
+/// storage, its radios and their addresses, and how long it has been up.
+///
+/// All of it from files and two ioctls a user may make, with no tool run: it is read
+/// every couple of seconds on a thread, and most of it never changes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct System {
+    pub model: String,
+    pub hostname: String,
+    pub soc: String,
+    pub cpu: String,
+    /// The serial U-Boot derives from the OTP, the one in the SSH banner and the
+    /// Wi-Fi access point's SSID.
+    pub serial: String,
+    pub mem_used: u64,
+    /// What is fitted, from the device tree, rather than what the kernel was left
+    /// with: `MemTotal` is short by the firmware's carve-out and the kernel's own.
+    pub mem_total: u64,
+    pub os: String,
+    pub build: String,
+    pub git: String,
+    pub profile: String,
+    /// When the running profile was made, from its root's birth time.
+    pub installed: String,
+    pub kernel: String,
+    pub kernel_built: String,
+    pub ufs: Option<Ufs>,
+    /// The card in the slot, or None with the slot empty.
+    pub sd: Option<SdCard>,
+    pub pack: Option<Pack>,
+    /// What each radio is, as (kind, what): `("Wi-Fi", "MediaTek mt7921u")`.
+    pub radios: Vec<(String, String)>,
+    /// The hardware addresses, as (what, address).
+    pub macs: Vec<(String, String)>,
+    pub uptime: String,
+}
+
+/// The UFS the system runs from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Ufs {
+    pub name: String,
+    pub size: String,
+    pub version: String,
+    pub link: String,
+    /// How much of its rated life is used, the worse of the two estimates.
+    pub life: String,
+    pub health: String,
+}
+
+pub fn system() -> System {
+    let release = read_str("/etc/os-release").unwrap_or_default();
+    let build = os_release_value(&release, "BUILD_ID").unwrap_or_default();
+    let (mem_total, mem_used) = memory();
+    let version = read_str("/proc/version").unwrap_or_default();
+    System {
+        model: dt_string("model"),
+        hostname: read_str("/proc/sys/kernel/hostname").unwrap_or_default(),
+        soc: soc(),
+        cpu: cpu_summary(&clusters()),
+        serial: read_cpuid().map(|id| cpu_serial(&id)).unwrap_or_default(),
+        mem_used,
+        mem_total,
+        os: os_release_value(&release, "PRETTY_NAME")
+            .map(|name| {
+                // Debian's name carries the major version only; the point release is
+                // in its own key and is the one worth reading.
+                match os_release_value(&release, "DEBIAN_VERSION_FULL") {
+                    Some(full) => name.replacen(
+                        &format!(
+                            " {} ",
+                            os_release_value(&release, "VERSION_ID").unwrap_or_default()
+                        ),
+                        &format!(" {full} "),
+                        1,
+                    ),
+                    None => name,
+                }
+            })
+            .unwrap_or_default(),
+        build,
+        git: os_release_value(&release, "BUILD_GIT").unwrap_or_default(),
+        profile: crate::status::booted_profile(),
+        installed: birth("/").map(date).unwrap_or_default(),
+        kernel: read_str("/proc/sys/kernel/osrelease").unwrap_or_default(),
+        kernel_built: kernel_built(&version),
+        ufs: ufs(),
+        sd: sd_card(),
+        pack: pack(),
+        radios: radios(),
+        macs: macs(),
+        uptime: read_str("/proc/uptime")
+            .and_then(|u| u.split_whitespace().next()?.parse::<f64>().ok())
+            .map(|s| uptime(s as u64))
+            .unwrap_or_default(),
+    }
+}
+
+/// One key of an os-release file, unquoted.
+pub fn os_release_value(text: &str, key: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let value = line.strip_prefix(key)?.strip_prefix('=')?;
+        Some(value.trim().trim_matches('"').to_string())
+    })
+}
+
+/// A device tree property as text, with its terminating NUL.
+fn dt_string(name: &str) -> String {
+    fs::read(Path::new("/proc/device-tree").join(name))
+        .map(|b| String::from_utf8_lossy(&b).trim_end_matches('\0').to_string())
+        .unwrap_or_default()
+}
+
+/// The SoC, from the last entry of the board's `compatible`: `rockchip,rk3576`.
+fn soc() -> String {
+    let compatible = dt_string("compatible");
+    let Some((vendor, part)) = compatible.split('\0').last().and_then(|c| c.split_once(',')) else {
+        return String::new();
+    };
+    let mut vendor = vendor.to_string();
+    if let Some(first) = vendor.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    format!("{vendor} {}", part.to_uppercase())
+}
+
+/// ARM's part numbers for the cores a board like this carries.
+fn core_name(part: u32) -> String {
+    match part {
+        0xd03 => "A53".into(),
+        0xd04 => "A35".into(),
+        0xd05 => "A55".into(),
+        0xd07 => "A57".into(),
+        0xd08 => "A72".into(),
+        0xd09 => "A73".into(),
+        0xd0a => "A75".into(),
+        0xd0b => "A76".into(),
+        0xd0d => "A77".into(),
+        0xd41 => "A78".into(),
+        0xd46 => "A510".into(),
+        0xd47 => "A710".into(),
+        0xd4d => "A715".into(),
+        other => format!("{other:#x}"),
+    }
+}
+
+/// One frequency domain: what its cores are, how many, and their top speed in kHz.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cluster {
+    pub core: String,
+    pub count: usize,
+    pub max_khz: u64,
+}
+
+/// The cores by cpufreq policy, which is one per cluster on big.LITTLE.
+fn clusters() -> Vec<Cluster> {
+    let cpuinfo = read_str("/proc/cpuinfo").unwrap_or_default();
+    let mut parts = std::collections::HashMap::new();
+    let mut cpu = None;
+    for line in cpuinfo.lines() {
+        let Some((key, value)) = line.split_once(':') else { continue };
+        match key.trim() {
+            "processor" => cpu = value.trim().parse::<u32>().ok(),
+            "CPU part" => {
+                if let (Some(n), Ok(p)) =
+                    (cpu, u32::from_str_radix(value.trim().trim_start_matches("0x"), 16))
+                {
+                    parts.insert(n, p);
+                }
+            }
+            _ => {}
+        }
+    }
+    let Ok(dir) = fs::read_dir("/sys/devices/system/cpu/cpufreq") else { return Vec::new() };
+    let mut policies: Vec<_> = dir.flatten().map(|e| e.path()).collect();
+    policies.sort();
+    policies
+        .iter()
+        .filter_map(|p| {
+            let cpus: Vec<u32> = read_str(p.join("affected_cpus"))?
+                .split_whitespace()
+                .filter_map(|c| c.parse().ok())
+                .collect();
+            let part = cpus.first().and_then(|c| parts.get(c)).copied()?;
+            Some(Cluster {
+                core: core_name(part),
+                count: cpus.len(),
+                max_khz: read_u64(p.join("cpuinfo_max_freq")).unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+fn read_u64(path: impl AsRef<Path>) -> Option<u64> {
+    read_str(path)?.parse().ok()
+}
+
+/// `4x A53 2.0GHz, 4x A72 2.2GHz`.
+pub fn cpu_summary(clusters: &[Cluster]) -> String {
+    clusters
+        .iter()
+        .map(|c| format!("{}x {} {:.1}GHz", c.count, c.core, c.max_khz as f64 / 1e6))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The OTP's cpuid, which the RK3576 keeps 16 bytes in at 0x0a. Readable by anyone.
+fn read_cpuid() -> Option<[u8; 16]> {
+    let otp = fs::read("/sys/bus/nvmem/devices/rockchip-otp0/nvmem").ok()?;
+    otp.get(0x0a..0x1a)?.try_into().ok()
+}
+
+/// The serial U-Boot makes of the cpuid, as `rockchip_cpuid_set` does: a CRC-32 with
+/// no complement over the odd bytes, then over the even ones seeded with the first,
+/// printed high word first. Same as `rk3576_cpu_serial.sh` in the image.
+pub fn cpu_serial(cpuid: &[u8; 16]) -> String {
+    fn crc(mut crc: u32, bytes: impl Iterator<Item = u8>) -> u32 {
+        for b in bytes {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        crc
+    }
+    let low = crc(0, cpuid.iter().skip(1).step_by(2).copied());
+    let high = crc(low, cpuid.iter().step_by(2).copied());
+    format!("{high:08x}{low:08x}")
+}
+
+/// Installed and used, in bytes. Used is what is not available, the figure `free`
+/// shows: cache that would be dropped on demand is not in use.
+fn memory() -> (u64, u64) {
+    let info = read_str("/proc/meminfo").unwrap_or_default();
+    let kb = |key: &str| {
+        info.lines()
+            .find_map(|l| l.strip_prefix(key)?.split_whitespace().next()?.parse::<u64>().ok())
+            .unwrap_or(0)
+            * 1024
+    };
+    let usable = kb("MemTotal:");
+    (installed().unwrap_or(usable), usable.saturating_sub(kb("MemAvailable:")))
+}
+
+/// The RAM the device tree describes: every `memory` node's ranges, summed.
+fn installed() -> Option<u64> {
+    let cells = |name: &str| {
+        fs::read(Path::new("/proc/device-tree").join(name))
+            .ok()
+            .and_then(|b| Some(u32::from_be_bytes(b.get(..4)?.try_into().ok()?) as usize))
+    };
+    let (addr, size) = (cells("#address-cells").unwrap_or(2), cells("#size-cells").unwrap_or(2));
+    let total: u64 = fs::read_dir("/proc/device-tree")
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("memory"))
+        .filter_map(|e| fs::read(e.path().join("reg")).ok())
+        .map(|reg| reg_size(&reg, addr, size))
+        .sum();
+    (total > 0).then_some(total)
+}
+
+/// The sizes in a `reg` property: (address, size) pairs of big-endian cells.
+pub fn reg_size(reg: &[u8], address_cells: usize, size_cells: usize) -> u64 {
+    let pair = (address_cells + size_cells) * 4;
+    if pair == 0 {
+        return 0;
+    }
+    reg.chunks_exact(pair)
+        .map(|entry| {
+            entry[address_cells * 4..].chunks_exact(4).fold(0u64, |acc, cell| {
+                acc << 32 | u64::from(u32::from_be_bytes(cell.try_into().expect("4 bytes")))
+            })
+        })
+        .sum()
+}
+
+/// `0.7/8 GB`: used to a tenth, and what is fitted in whole gigabytes, both binary,
+/// the units RAM is sold in. The firmware's couple of megabytes below the ranges the
+/// tree describes is why the total is rounded rather than truncated.
+pub fn memory_text(used: u64, installed: u64) -> String {
+    format!("{:.1}/{}", used as f64 / GIB, installed_text(installed))
+}
+
+/// What is fitted, in whole binary gigabytes: `8 GB`.
+pub fn installed_text(installed: u64) -> String {
+    format!("{:.0} GB", (installed as f64 / GIB).round())
+}
+
+const GIB: f64 = (1u64 << 30) as f64;
+
+/// The build date of the kernel: the last six words of /proc/version, which end in
+/// `Mon Sep 28 11:35:23 BST 2026`, read as `Sep 28 2026`.
+pub fn kernel_built(version: &str) -> String {
+    let words: Vec<&str> = version.split_whitespace().collect();
+    match words.len().checked_sub(6).map(|at| &words[at..]) {
+        Some([_, month, day, _, _, year]) if year.parse::<u32>().is_ok() => {
+            format!("{month} {day} {year}")
+        }
+        _ => String::new(),
+    }
+}
+
+/// A path's birth time, in seconds. For the root of a profile that is when its
+/// subvolume was made: when it was installed, or cloned from another.
+fn birth(path: &str) -> Option<i64> {
+    let c = std::ffi::CString::new(path).ok()?;
+    let mut st: libc::statx = unsafe { std::mem::zeroed() };
+    // SAFETY: c is NUL-terminated and st is a statx the call fills in.
+    let rc = unsafe { libc::statx(libc::AT_FDCWD, c.as_ptr(), 0, libc::STATX_BTIME, &mut st) };
+    (rc == 0 && st.stx_mask & libc::STATX_BTIME != 0).then_some(st.stx_btime.tv_sec)
+}
+
+/// `2026-09-30`, in UTC.
+pub fn date(secs: i64) -> String {
+    // Howard Hinnant's days-to-civil, the inverse of `boot::days_from_civil`.
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// `5m`, `3h 47m`, or `2d 4h` past a day.
+pub fn uptime(secs: u64) -> String {
+    let (d, h, m) = (secs / 86_400, secs / 3600 % 24, secs / 60 % 60);
+    match (d, h) {
+        (0, 0) => format!("{m}m"),
+        (0, _) => format!("{h}h {m}m"),
+        _ => format!("{d}d {h}h"),
+    }
+}
+
+/// An SD card, from what the kernel read of its CID, CSD and SD Status registers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SdCard {
+    pub name: String,
+    pub size: String,
+    /// SD, SDHC or SDXC.
+    pub kind: String,
+    /// What its SD Status says it is rated for: `C10 U3 V30 A2`.
+    pub classes: String,
+    pub made: String,
+    pub serial: String,
+    pub oem: String,
+    pub rev: String,
+}
+
+fn sd_card() -> Option<SdCard> {
+    let card = fs::read_dir("/sys/bus/mmc/devices")
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| read_str(p.join("type")).as_deref() == Some("SD"))?;
+    let attr = |f: &str| read_str(card.join(f)).unwrap_or_default();
+    let bytes = fs::read_dir(card.join("block"))
+        .ok()
+        .and_then(|mut d| d.next()?.ok())
+        .and_then(|b| read_u64(b.path().join("size")))
+        .unwrap_or(0)
+        * 512;
+    let id = |hex: &str| u32::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
+    Some(SdCard {
+        name: format!("{} {}", sd_maker(id(&attr("manfid"))), attr("name")).trim().to_string(),
+        size: format_bytes(bytes),
+        kind: sd_kind(bytes).into(),
+        classes: sd_classes(&attr("ssr")),
+        made: sd_date(&attr("date")),
+        serial: attr("serial"),
+        oem: sd_oem(id(&attr("oemid"))),
+        rev: format!("hw {} fw {}", attr("hwrev"), attr("fwrev")),
+    })
+}
+
+/// The manufacturer IDs the SD Association hands out, for the makers a person is
+/// likely to hold. The list is not published, so an unknown one stays a number.
+pub fn sd_maker(id: u32) -> String {
+    match id {
+        0x01 => "Panasonic".into(),
+        0x02 => "Toshiba".into(),
+        0x03 => "SanDisk".into(),
+        0x1b => "Samsung".into(),
+        0x1d => "ADATA".into(),
+        0x27 => "Phison".into(),
+        0x28 => "Lexar".into(),
+        0x31 => "Silicon Power".into(),
+        0x41 => "Kingston".into(),
+        0x74 => "Transcend".into(),
+        0x76 => "Patriot".into(),
+        0x82 => "Sony".into(),
+        other => format!("{other:#04x}"),
+    }
+}
+
+/// The two OEM bytes are ASCII when a maker set them, `SM` or `PH`.
+pub fn sd_oem(id: u32) -> String {
+    let pair = [(id >> 8) as u8, id as u8];
+    if pair.iter().all(|b| b.is_ascii_graphic()) {
+        String::from_utf8_lossy(&pair).into_owned()
+    } else {
+        format!("{id:#06x}")
+    }
+}
+
+/// The family a capacity puts a card in: SDHC up to 32GB, SDXC up to 2TB.
+pub fn sd_kind(bytes: u64) -> &'static str {
+    match bytes {
+        0..=2_147_483_648 => "SD",
+        ..=34_359_738_368 => "SDHC",
+        ..=2_199_023_255_552 => "SDXC",
+        _ => "SDUC",
+    }
+}
+
+/// `05/2023` as the kernel prints the CID's date, as `2023-05`.
+pub fn sd_date(date: &str) -> String {
+    match date.split_once('/') {
+        Some((month, year)) => format!("{year}-{month:0>2}"),
+        None => date.to_string(),
+    }
+}
+
+/// The ratings in the SD Status register, 512 bits as hex, bit 511 first:
+/// SPEED_CLASS in 447:440, UHS_SPEED_GRADE in 399:396, VIDEO_SPEED_CLASS in 391:384
+/// and APP_PERF_CLASS in 339:336.
+pub fn sd_classes(ssr: &str) -> String {
+    let byte = |at: usize| {
+        ssr.get(at * 2..at * 2 + 2).and_then(|h| u8::from_str_radix(h, 16).ok()).unwrap_or(0)
+    };
+    let mut out = Vec::new();
+    match byte(8) {
+        1 => out.push("C2".to_string()),
+        2 => out.push("C4".into()),
+        3 => out.push("C6".into()),
+        4 => out.push("C10".into()),
+        _ => {}
+    }
+    if let u @ 1.. = byte(14) >> 4 {
+        out.push(format!("U{u}"));
+    }
+    if let v @ 1.. = byte(15) {
+        out.push(format!("V{v}"));
+    }
+    if let a @ 1.. = byte(21) & 0x0f {
+        out.push(format!("A{a}"));
+    }
+    if out.is_empty() {
+        "-".into()
+    } else {
+        out.join(" ")
+    }
+}
+
+/// The battery pack: what it is and how worn.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Pack {
+    pub technology: String,
+    pub capacity: Option<i32>,
+    pub status: String,
+    /// Full-charge and design capacity, in microamp-hours.
+    pub full: Option<u64>,
+    pub design: Option<u64>,
+    pub cycles: Option<u64>,
+    pub health: String,
+}
+
+/// The pack, by type rather than by name: its driver has been called both bq28z610
+/// and bq28z620.
+fn pack() -> Option<Pack> {
+    let dir = fs::read_dir("/sys/class/power_supply")
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| read_str(p.join("type")).as_deref() == Some("Battery"))?;
+    let text = |f: &str| read_str(dir.join(f)).unwrap_or_default();
+    let num = |f: &str| read_u64(dir.join(f));
+    Some(Pack {
+        technology: text("technology"),
+        capacity: read_str(dir.join("capacity")).and_then(|c| c.parse().ok()),
+        status: text("status"),
+        full: num("charge_full"),
+        design: num("charge_full_design"),
+        cycles: num("cycle_count"),
+        health: text("health"),
+    })
+}
+
+/// The UFS host, if there is one, and the disk it serves.
+fn ufs() -> Option<Ufs> {
+    let host = fs::read_dir("/sys/devices/platform/soc")
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".ufshc")))?;
+    let string = |d: &str, f: &str| read_str(host.join(d).join(f)).unwrap_or_default();
+    let hex =
+        |d: &str, f: &str| u32::from_str_radix(string(d, f).trim_start_matches("0x"), 16).ok();
+    // The data LUN is the largest disk the host serves: the others are boot LUNs of a
+    // few megabytes.
+    let size = fs::read_dir("/sys/block")
+        .ok()?
+        .flatten()
+        .filter(|e| {
+            fs::canonicalize(e.path().join("device"))
+                .is_ok_and(|d| d.starts_with(fs::canonicalize(&host).unwrap_or_default()))
+        })
+        .filter_map(|e| read_u64(e.path().join("size")))
+        .max()
+        .unwrap_or(0)
+        * 512;
+    let life = [
+        hex("health_descriptor", "life_time_estimation_a"),
+        hex("health_descriptor", "life_time_estimation_b"),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
+    Some(Ufs {
+        name: format!(
+            "{} {}",
+            string("string_descriptors", "manufacturer_name"),
+            string("string_descriptors", "product_name")
+        )
+        .trim()
+        .to_string(),
+        size: format_bytes(size),
+        version: hex("device_descriptor", "specification_version")
+            .map(ufs_version)
+            .unwrap_or_default(),
+        link: ufs_link(&string("power_info", "gear"), &string("power_info", "lane")),
+        life: life.map(ufs_life).unwrap_or_default(),
+        health: hex("health_descriptor", "eol_info").map(ufs_eol).unwrap_or_default(),
+    })
+}
+
+/// `wSpecVersion`, BCD: 0x0220 is UFS 2.2, 0x0310 is 3.1.
+pub fn ufs_version(bcd: u32) -> String {
+    format!("UFS {}.{}", bcd >> 8, (bcd >> 4) & 0xf)
+}
+
+/// `HS_GEAR3` on 2 lanes, as `HS-G3 x2`.
+pub fn ufs_link(gear: &str, lanes: &str) -> String {
+    match gear.strip_prefix("HS_GEAR") {
+        Some(n) if !lanes.is_empty() => format!("HS-G{n} x{lanes}"),
+        Some(n) => format!("HS-G{n}"),
+        None => gear.to_string(),
+    }
+}
+
+/// JEDEC's device life time estimate: 0x01 is 0-10% of rated life used, each step
+/// another tenth, 0x0B past it.
+pub fn ufs_life(code: u32) -> String {
+    match code {
+        1..=10 => format!("{}-{}%", (code - 1) * 10, code * 10),
+        11 => "past rated life".into(),
+        _ => "-".into(),
+    }
+}
+
+/// `bPreEOLInfo`: how much of the reserved blocks are spent.
+pub fn ufs_eol(code: u32) -> String {
+    match code {
+        1 => "normal".into(),
+        2 => "warning".into(),
+        3 => "critical".into(),
+        _ => "-".into(),
+    }
+}
+
+/// The USB device a sysfs class device sits on, for its manufacturer's name.
+fn usb_maker(class_dev: &Path) -> String {
+    let Ok(mut at) = fs::canonicalize(class_dev.join("device")) else { return String::new() };
+    for _ in 0..4 {
+        if let Some(maker) = read_str(at.join("manufacturer")) {
+            return maker;
+        }
+        if !at.pop() {
+            break;
+        }
+    }
+    String::new()
+}
+
+fn driver_of(class_dev: &Path) -> String {
+    fs::read_link(class_dev.join("device/driver"))
+        .ok()
+        .and_then(|d| Some(d.file_name()?.to_string_lossy().to_string()))
+        .unwrap_or_default()
+}
+
+/// What each radio is: its maker and the driver that runs it.
+fn radios() -> Vec<(String, String)> {
+    let describe = |dev: &Path| format!("{} {}", usb_maker(dev), driver_of(dev)).trim().to_string();
+    let mut out = Vec::new();
+    for name in hardware_ifaces() {
+        let dev = Path::new("/sys/class/net").join(&name);
+        if dev.join("wireless").is_dir() {
+            out.push(("Wi-Fi".to_string(), describe(&dev)));
+        }
+    }
+    if let Ok(dir) = fs::read_dir("/sys/class/bluetooth") {
+        for e in dir.flatten().filter(|e| !e.file_name().to_string_lossy().contains(':')) {
+            out.push(("Bluetooth".to_string(), describe(&e.path())));
+        }
+    }
+    if let Ok(dir) = fs::read_dir("/sys/class/usbmisc") {
+        for e in dir.flatten() {
+            let product = fs::canonicalize(e.path().join("device"))
+                .ok()
+                .and_then(|d| read_str(d.parent()?.join("product")));
+            out.push(("Modem".to_string(), product.unwrap_or_else(|| describe(&e.path()))));
+        }
+    }
+    out
+}
+
+/// Every hardware address: the network ports by the names the other screens give
+/// them, and Bluetooth's.
+///
+/// A wireless card's own address rather than what it is using: NetworkManager
+/// randomises the one it scans with, so `address` changes and says nothing about the
+/// card.
+fn macs() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = hardware_ifaces()
+        .into_iter()
+        .map(|name| {
+            let dev = Path::new("/sys/class/net").join(&name);
+            let wireless = dev.join("wireless").is_dir();
+            let label = if wireless { "WIFI".to_string() } else { iface_display_name(&name) };
+            let address = wireless
+                .then(|| permanent_mac(&name))
+                .flatten()
+                .or_else(|| read_str(dev.join("address")))
+                .unwrap_or_default();
+            (label, address)
+        })
+        .collect();
+    if let Some(bt) = bluetooth_mac() {
+        out.push(("BT".to_string(), bt));
+    }
+    out
+}
+
+fn mac(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":")
+}
+
+/// The address burned into a network card, from `ETHTOOL_GPERMADDR`.
+fn permanent_mac(iface: &str) -> Option<String> {
+    #[repr(C)]
+    struct PermAddr {
+        cmd: u32,
+        size: u32,
+        data: [u8; 32],
+    }
+    #[repr(C)]
+    struct Ifreq {
+        name: [u8; libc::IFNAMSIZ],
+        data: *mut PermAddr,
+        _pad: [u8; 16],
+    }
+    const ETHTOOL_GPERMADDR: u32 = 0x20;
+    let mut addr = PermAddr { cmd: ETHTOOL_GPERMADDR, size: 32, data: [0; 32] };
+    let mut req = Ifreq { name: [0; libc::IFNAMSIZ], data: &mut addr, _pad: [0; 16] };
+    let name = iface.as_bytes();
+    if name.len() >= libc::IFNAMSIZ {
+        return None;
+    }
+    req.name[..name.len()].copy_from_slice(name);
+    // SAFETY: a datagram socket for the ioctl, closed below.
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: req names the interface and points at addr, both live across the call.
+    let rc = unsafe { libc::ioctl(fd, libc::SIOCETHTOOL, &mut req) };
+    // SAFETY: fd is ours.
+    unsafe { libc::close(fd) };
+    let len = (addr.size as usize).min(addr.data.len());
+    (rc == 0 && len > 0 && addr.data[..len].iter().any(|&b| b != 0)).then(|| mac(&addr.data[..len]))
+}
+
+/// hci0's address, from `HCIGETDEVINFO`, which any user may ask: sysfs does not
+/// carry it.
+fn bluetooth_mac() -> Option<String> {
+    const BTPROTO_HCI: libc::c_int = 1;
+    const HCIGETDEVINFO: libc::c_ulong = 0x8004_48d3;
+    // dev_id, then the name, then the address little-endian, then the rest of
+    // hci_dev_info, which is ignored here.
+    let mut info = [0u8; 128];
+    // SAFETY: a raw HCI socket for the ioctl, closed below.
+    let fd = unsafe {
+        libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW | libc::SOCK_CLOEXEC, BTPROTO_HCI)
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: info is larger than hci_dev_info and its dev_id, 0, is hci0.
+    let rc = unsafe { libc::ioctl(fd, HCIGETDEVINFO as _, info.as_mut_ptr()) };
+    // SAFETY: fd is ours.
+    unsafe { libc::close(fd) };
+    let mut addr = info[10..16].to_vec();
+    addr.reverse();
+    (rc == 0 && addr.iter().any(|&b| b != 0)).then(|| mac(&addr))
+}
+
+#[cfg(test)]
+mod system_tests {
+    use super::*;
+
+    /// The pair `rk3576_cpu_serial.sh` printed on a Flipper One, which is also what
+    /// its SSH banner and its AP's SSID say.
+    #[test]
+    fn the_serial_is_the_one_u_boot_makes() {
+        let id: [u8; 16] = [0x4e, 0x59, 0x31, 0x37, 0x48, 0, 0, 0, 0, 0, 0, 0, 0, 0x16, 0x14, 0x0c];
+        assert_eq!(cpu_serial(&id), "45d2488f32838acd");
+    }
+
+    #[test]
+    fn os_release_values_are_unquoted() {
+        let text =
+            "PRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nBUILD_ID=1136\nBUILD_GIT=\"x y\"\n";
+        assert_eq!(os_release_value(text, "BUILD_ID").as_deref(), Some("1136"));
+        assert_eq!(os_release_value(text, "BUILD_GIT").as_deref(), Some("x y"));
+        assert_eq!(os_release_value(text, "BUILD").as_deref(), None);
+    }
+
+    #[test]
+    fn the_cpu_is_summed_up_by_cluster() {
+        let clusters = [
+            Cluster { core: "A53".into(), count: 4, max_khz: 2_016_000 },
+            Cluster { core: "A72".into(), count: 4, max_khz: 2_208_000 },
+        ];
+        assert_eq!(cpu_summary(&clusters), "4x A53 2.0GHz, 4x A72 2.2GHz");
+    }
+
+    /// This board's own node: 8GiB less the 2MiB the firmware keeps, which is
+    /// still 8 on the screen.
+    #[test]
+    fn the_installed_ram_is_what_the_tree_describes() {
+        let reg = [0, 0, 0, 0, 0x40, 0x20, 0, 0, 0, 0, 0, 1, 0xff, 0xe0, 0, 0];
+        assert_eq!(reg_size(&reg, 2, 2), 0x1_ffe0_0000);
+        assert_eq!(memory_text(700 << 20, reg_size(&reg, 2, 2)), "0.7/8 GB");
+        assert_eq!(reg_size(&[], 2, 2), 0);
+    }
+
+    #[test]
+    fn the_kernel_build_date_is_read_off_proc_version() {
+        let v = "Linux version 7.3.0-rc2-gd83595fdc473 (buildbot@host) (gcc 14.2.0) \
+                 #1 SMP PREEMPT Mon Sep 28 11:35:23 BST 2026";
+        assert_eq!(kernel_built(v), "Sep 28 2026");
+        assert_eq!(kernel_built("garbage"), "");
+    }
+
+    #[test]
+    fn dates_and_durations() {
+        assert_eq!(date(1_790_768_081), "2026-09-30");
+        assert_eq!(date(0), "1970-01-01");
+        assert_eq!(uptime(13_621), "3h 47m");
+        assert_eq!(uptime(330), "5m");
+        assert_eq!(uptime(2 * 86_400 + 4 * 3600 + 59), "2d 4h");
+    }
+
+    /// The classes sit where the SD spec puts them in the SD Status register, here
+    /// a card rated C10 U3 V30 A2.
+    #[test]
+    fn an_sd_cards_ratings_come_from_its_status_register() {
+        let mut ssr = vec![0u8; 64];
+        ssr[8] = 4;
+        ssr[14] = 0x30;
+        ssr[15] = 30;
+        ssr[21] = 0x02;
+        let hex: String = ssr.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(sd_classes(&hex), "C10 U3 V30 A2");
+        assert_eq!(sd_classes(&"0".repeat(128)), "-");
+        assert_eq!(sd_classes(""), "-");
+    }
+
+    #[test]
+    fn an_sd_cards_identity_reads_as_words() {
+        assert_eq!(sd_maker(0x03), "SanDisk");
+        assert_eq!(sd_maker(0x99), "0x99");
+        assert_eq!(sd_oem(0x5344), "SD");
+        assert_eq!(sd_oem(0x0000), "0x0000");
+        assert_eq!(sd_date("05/2023"), "2023-05");
+        assert_eq!(sd_date("5/2023"), "2023-05");
+        assert_eq!(sd_kind(64_000_000_000), "SDXC");
+        assert_eq!(sd_kind(16_000_000_000), "SDHC");
+        assert_eq!(sd_kind(1_000_000_000), "SD");
+    }
+
+    #[test]
+    fn the_ufs_descriptors_read_as_words() {
+        assert_eq!(ufs_version(0x0220), "UFS 2.2");
+        assert_eq!(ufs_version(0x0310), "UFS 3.1");
+        assert_eq!(ufs_link("HS_GEAR3", "2"), "HS-G3 x2");
+        assert_eq!(ufs_life(1), "0-10%");
+        assert_eq!(ufs_life(10), "90-100%");
+        assert_eq!(ufs_life(11), "past rated life");
+        assert_eq!(ufs_eol(1), "normal");
+    }
+}

@@ -137,7 +137,8 @@ usage: flipctl [--panel [--kms-device PATH]] [--png PATH]
   --assets DIR   where device.png lives (default: crates/flipper-ui/assets/remote)
   --png PATH     render one frame headlessly and write an 8-bit greyscale PNG
   --screen NAME  with --png, render a menu level: main, network or settings;
-                 a detail screen by name; or manager and manager-info
+                 a detail screen by name (system, ethernet, routing, disk,
+                 battery, modem, update); or manager and manager-info
   --select N     with --screen, which row is selected
   --modal        with --png, draw the airplane-block dialog over the screen
   --press SLOT   with --png, draw soft slot SLOT in its pressed state. The real
@@ -327,6 +328,7 @@ mod demo {
     /// builder that mirrors what its scene draws.
     #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub enum Detail {
+        System,
         Ethernet,
         Routing,
         Disk,
@@ -339,6 +341,7 @@ mod demo {
         /// The breadcrumb crumb, which is also the screen's name.
         pub fn title(self) -> &'static str {
             match self {
+                Detail::System => "System info",
                 Detail::Ethernet => "Ethernet",
                 Detail::Routing => "Routing info",
                 Detail::Disk => "Disk info",
@@ -420,7 +423,7 @@ mod demo {
     pub static SETTINGS: Menu = Menu {
         title: "Settings",
         rows: &[
-            Row { label: "System info", icon: 0, frames: 1, stat: Stat::None, act: Act::Nothing },
+            Row { label: "System info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::System) },
             Row { label: "Battery info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Battery) },
             Row { label: "Disk info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
             Row { label: "Update", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
@@ -501,7 +504,7 @@ mod detail {
     use std::time::Duration;
 
     use flipper_ui::boot;
-    use flipper_ui::sysinfo::{self, Battery, Disk, Modem, Route};
+    use flipper_ui::sysinfo::{self, Battery, Disk, Modem, Route, System};
     use flipper_ui::ui::DetailRow;
     use flipper_ui::update::{self, Channel, Image};
     use flipper_ui::watch::Watch;
@@ -533,6 +536,36 @@ mod detail {
     /// A full-width line with no value column.
     fn text(label: &str) -> DetailRow {
         DetailRow { kind: 3, ..row(label, "") }
+    }
+
+    /// A label and its value, or, when the two do not fit on one row, the label on
+    /// its own and the value wrapped onto full-width lines under it: tokens.toml's
+    /// rule is that long text wraps on a detail screen rather than being cut. An
+    /// unknown value is a dash, since the fonts have nothing else to show it with.
+    fn long(label: &str, value: &str) -> Vec<DetailRow> {
+        use flipper_ui::font::ROW;
+        use flipper_ui::theme::metric::MARGIN_H;
+        let value = if value.is_empty() { "-" } else { value };
+        let room = i32::from(flipper_ui::PANEL_W) - 2 * MARGIN_H;
+        let width = |t: &str| i32::from(ROW.text_width(t));
+        if width(label) + MARGIN_H + width(value) <= room {
+            return vec![row(label, value)];
+        }
+        let mut out = vec![row(label, "")];
+        let mut line = String::new();
+        for word in value.split_whitespace() {
+            let next = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if width(&next) <= room || line.is_empty() {
+                line = next;
+            } else {
+                out.push(text(&line));
+                line = word.to_string();
+            }
+        }
+        if !line.is_empty() {
+            out.push(text(&line));
+        }
+        out
     }
 
     /// A value the left and right keys change, between the chevrons the settings
@@ -567,6 +600,7 @@ mod detail {
     /// One variant per screen rather than one struct with five options: only one
     /// screen is ever open, and dropping this stops exactly one thread.
     pub enum Live {
+        System(Watch<System>),
         Ethernet(Watch<Vec<flipper_ui::sysinfo::Iface>>),
         /// Not a `Watch`: the kernel says when a route changes, so there is
         /// nothing to poll. See `route_watch`.
@@ -736,6 +770,14 @@ mod detail {
         /// Start the poller for `which` at its prototype's cadence.
         pub fn open(which: Detail) -> Self {
             match which {
+                // Most of it never changes; uptime and memory do, and two
+                // seconds is the cadence of the other pages that move.
+                Detail::System => Live::System(Watch::spawn(
+                    "watch-system",
+                    Duration::from_secs(2),
+                    System::default(),
+                    sysinfo::system,
+                )),
                 // ethernet.js polls every two seconds.
                 Detail::Ethernet => Live::Ethernet(Watch::spawn(
                     "watch-ethernet",
@@ -783,6 +825,7 @@ mod detail {
 
         pub fn take_dirty(&self) -> bool {
             match self {
+                Live::System(w) => w.take_dirty(),
                 Live::Ethernet(w) => w.take_dirty(),
                 Live::Routing(w) => w.take_dirty(),
                 Live::Disk(w) => w.take_dirty(),
@@ -800,6 +843,7 @@ mod detail {
             match self {
                 // The Ethernet page draws cards, not rows.
                 Live::Ethernet(_) => Vec::new(),
+                Live::System(w) => system_rows(&w.get()),
                 Live::Routing(w) => routing_rows(&w.get()),
                 Live::Disk(w) => disk_rows(&w.get()),
                 Live::Battery(w) => battery_rows(&w.get()),
@@ -808,8 +852,8 @@ mod detail {
             }
         }
 
-        /// Soft-key labels. Only Update has actions of its own.
-        pub fn buttons(&self, applying: &Applying) -> [&'static str; 5] {
+        /// Soft-key labels, for the page scrolled to `offset`.
+        pub fn buttons(&self, applying: &Applying, offset: i32) -> [&'static str; 5] {
             match self {
                 Live::Update(u) if *applying == Applying::No && !u.loading() => {
                     // The channel is a soft key rather than a second chevron row: a
@@ -818,8 +862,29 @@ mod detail {
                     let update = if u.chosen().is_some() { "Update" } else { "" };
                     ["Back", "Channel", "", "", update]
                 }
+                // A long page, read a section at a time, or taken away whole as a
+                // QR code.
+                Live::System(_) => {
+                    ["Back", "", "", "QR", self.next_stop(offset).map_or("", |s| s.1)]
+                }
                 _ => ["Back", "", "", "", ""],
             }
+        }
+
+        /// The text of the page's QR code, on the page that has one.
+        pub fn qr_lines(&self) -> Option<Vec<String>> {
+            let Live::System(w) = self else { return None };
+            Some(system_qr(&w.get()))
+        }
+
+        /// Where the next-section key goes from `offset`, on the page that has one.
+        pub fn next_stop(&self, offset: i32) -> Option<(i32, &'static str)> {
+            let Live::System(w) = self else { return None };
+            let sections: Vec<_> = system_sections(&w.get())
+                .into_iter()
+                .map(|(name, rows)| (name, rows.len()))
+                .collect();
+            Some(next_stop(&sections, offset))
         }
 
         /// Start the update, if this is the screen that has one to start.
@@ -884,6 +949,246 @@ mod detail {
             row(label, &format!("{:.1}/{:.1} GB", d.used_gb, d.total_gb)),
             gauge(&format!("{pct}%"), pct),
         ]
+    }
+
+    /// The largest QR version the panel holds a pixel a module, with the four modules
+    /// of quiet zone above and below that the standard asks for.
+    fn qr_max_version() -> u8 {
+        let room = i32::from(flipper_ui::PANEL_H) - 2 * 4;
+        ((room - 17) / 4).clamp(1, 40) as u8
+    }
+
+    /// A page as a QR code of plain text, a pixel a module in the two tokens the panel
+    /// has, with a square left white in the middle for an icon.
+    ///
+    /// The icon's square is modules the decoder has to rebuild from error correction,
+    /// so the code is always the largest the panel holds, where the square is the
+    /// smallest share of it, and at least level M, which mends about 15% of the
+    /// codewords against the square's nine or so. The boost takes it higher whenever
+    /// the text leaves room. When the text is more than that holds, lines come off the
+    /// end until it fits, so the identity at the top always does.
+    pub fn qr_image(lines: &[String]) -> Option<slint::Image> {
+        use flipper_ui::theme::color::{BLACK, WHITE};
+        use qrcodegen::{QrCode, QrCodeEcc, QrSegment, Version};
+        let version = Version::new(qr_max_version());
+        let code = (1..=lines.len()).rev().find_map(|n| {
+            let text = lines[..n].join("\n");
+            let segs = [QrSegment::make_bytes(text.as_bytes())];
+            QrCode::encode_segments_advanced(&segs, QrCodeEcc::Medium, version, version, None, true)
+                .ok()
+        })?;
+        let n = code.size() as u32;
+        let icon = flipper_ui::theme::metric::QR_ICON;
+        let from = (code.size() - icon) / 2;
+        let hole = from..from + icon;
+        let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(n, n);
+        for (i, px) in buffer.make_mut_slice().iter_mut().enumerate() {
+            let (x, y) = ((i as u32 % n) as i32, (i as u32 / n) as i32);
+            let blank = hole.contains(&x) && hole.contains(&y);
+            let v = if code.get_module(x, y) && !blank { BLACK.0 } else { WHITE.0 };
+            *px = slint::Rgb8Pixel { r: v, g: v, b: v };
+        }
+        Some(slint::Image::from_rgb8(buffer))
+    }
+
+    /// The commit this flipctl was built from, which `build.rs` records.
+    const COMMIT: &str = env!("FLIPCTL_COMMIT");
+
+    /// What the machine is, what it runs, its storage, its radios and their
+    /// addresses, and how long it has been up. Long, so it scrolls.
+    fn system_sections(s: &System) -> Vec<(&'static str, Vec<DetailRow>)> {
+        let mut sections = Vec::new();
+        let mut out = Vec::new();
+        for (label, value) in [
+            ("Model", s.model.as_str()),
+            ("Hostname", &s.hostname),
+            ("SoC", &s.soc),
+            ("CPU", &s.cpu),
+            ("CPU serial", &s.serial),
+        ] {
+            out.extend(long(label, value));
+        }
+        out.push(row("Memory", &sysinfo::memory_text(s.mem_used, s.mem_total)));
+        sections.push(("Device", std::mem::take(&mut out)));
+        for (label, value) in [
+            ("OS", s.os.as_str()),
+            ("Build", &s.build),
+            ("Git", &s.git),
+            ("Profile", &s.profile),
+            ("Installed", &s.installed),
+            ("Kernel", &s.kernel),
+            ("Kernel built", &s.kernel_built),
+            ("flipctl", COMMIT),
+        ] {
+            out.extend(long(label, value));
+        }
+        sections.push(("Software", std::mem::take(&mut out)));
+        if let Some(u) = &s.ufs {
+            for (label, value) in [
+                ("UFS", u.name.as_str()),
+                ("Size", &u.size),
+                ("Version", &u.version),
+                ("Link", &u.link),
+                ("Life used", &u.life),
+                ("Health", &u.health),
+            ] {
+                out.extend(long(label, value));
+            }
+            sections.push(("UFS", std::mem::take(&mut out)));
+        }
+        match &s.sd {
+            Some(c) => {
+                for (label, value) in [
+                    ("SD card", c.name.as_str()),
+                    ("SD size", &c.size),
+                    ("SD type", &c.kind),
+                    ("SD class", &c.classes),
+                    ("SD made", &c.made),
+                    ("SD serial", &c.serial),
+                    ("SD OEM", &c.oem),
+                    ("SD rev", &c.rev),
+                ] {
+                    out.extend(long(label, value));
+                }
+            }
+            None => out.push(row("SD card", "none")),
+        }
+        sections.push(("SD", std::mem::take(&mut out)));
+        if let Some(p) = &s.pack {
+            let b = battery(p);
+            for (label, value) in [
+                ("Battery", b.what),
+                ("Capacity", b.capacity),
+                ("Cycles", b.cycles),
+                ("Batt health", b.health),
+            ] {
+                out.extend(long(label, &value));
+            }
+            sections.push(("Battery", std::mem::take(&mut out)));
+        }
+        for (kind, what) in &s.radios {
+            out.extend(long(kind, what));
+        }
+        sections.push(("Radios", std::mem::take(&mut out)));
+        for (what, address) in &s.macs {
+            out.extend(long(&format!("{what} MAC"), address));
+        }
+        sections.push(("MACs", std::mem::take(&mut out)));
+        // Radios and addresses are pushed whether or not they found anything, and an
+        // empty section is dropped below: a divider between nothing and nothing is a
+        // line with no reason.
+        out.extend(long("Uptime", &s.uptime));
+        sections.push(("Uptime", out));
+        sections.retain(|(_, rows)| !rows.is_empty());
+        sections
+    }
+
+    /// The pack, as the page and its QR code both say it.
+    struct BatteryText {
+        what: String,
+        capacity: String,
+        cycles: String,
+        health: String,
+    }
+
+    fn battery(p: &sysinfo::Pack) -> BatteryText {
+        let mah = |ua: u64| ua / 1000;
+        let capacity = match (p.full, p.design) {
+            (Some(f), Some(d)) => format!("{}/{} mAh", mah(f), mah(d)),
+            _ => String::new(),
+        };
+        // How much of its design capacity the pack still holds, which is its wear.
+        let worn = match (p.full, p.design) {
+            (Some(f), Some(d)) if d > 0 => format!(" ({}%)", f * 100 / d),
+            _ => String::new(),
+        };
+        let charge = p.capacity.map(|c| format!("{c}%")).unwrap_or_default();
+        let mut what = [p.technology.as_str(), &charge]
+            .into_iter()
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !p.status.is_empty() {
+            what = format!("{what} ({})", p.status.to_lowercase());
+        }
+        BatteryText {
+            what,
+            capacity,
+            cycles: p.cycles.map_or(String::new(), |c| c.to_string()),
+            health: format!("{}{worn}", p.health).trim().to_string(),
+        }
+    }
+
+    /// What the page's QR code carries: less than the page, so the code can afford
+    /// the error correction its icon costs. Identity, software, the UFS, the pack and
+    /// the addresses; the SD card, radios and anything that changes by the minute
+    /// stay on the screen.
+    fn system_qr(s: &System) -> Vec<String> {
+        let dash = |v: &str| if v.is_empty() { "-".to_string() } else { v.to_string() };
+        let mut out: Vec<(String, String)> = vec![
+            ("Model".into(), s.model.clone()),
+            ("Host".into(), s.hostname.clone()),
+            ("SoC".into(), s.soc.clone()),
+            ("CPU".into(), s.cpu.clone()),
+            ("CPU serial".into(), s.serial.clone()),
+            ("Memory".into(), sysinfo::installed_text(s.mem_total)),
+            ("OS".into(), format!("{} Build {}", s.os, s.build).trim().to_string()),
+            ("Git".into(), s.git.clone()),
+            ("Profile".into(), s.profile.clone()),
+            ("Kernel".into(), s.kernel.clone()),
+            ("flipctl".into(), COMMIT.into()),
+        ];
+        if let Some(u) = &s.ufs {
+            out.extend([
+                ("UFS".into(), u.name.clone()),
+                ("Size".into(), u.size.clone()),
+                ("Version".into(), u.version.clone()),
+                ("Link".into(), u.link.clone()),
+                ("Life used".into(), u.life.clone()),
+                ("Health".into(), u.health.clone()),
+            ]);
+        }
+        if let Some(p) = &s.pack {
+            let b = battery(p);
+            out.extend([
+                ("Battery".into(), b.what),
+                ("Capacity".into(), b.capacity),
+                ("Cycles".into(), b.cycles),
+                ("Health".into(), b.health),
+            ]);
+        }
+        out.extend(s.macs.iter().map(|(what, address)| (format!("{what} MAC"), address.clone())));
+        out.into_iter().map(|(k, v)| format!("{k}: {}", dash(&v))).collect()
+    }
+
+    /// The page: its sections, a divider between each.
+    fn system_rows(s: &System) -> Vec<DetailRow> {
+        let mut out = Vec::new();
+        for (i, (_, rows)) in system_sections(s).into_iter().enumerate() {
+            if i > 0 {
+                out.push(divider());
+            }
+            out.extend(rows);
+        }
+        out
+    }
+
+    /// Where the next-section key goes and what it says: the first row of the next
+    /// section below the top of the screen, by name, or the top from the last one.
+    /// Clamped to the last full screen, so a short last section is reached and not
+    /// passed, and the sections sharing that screen are skipped together.
+    pub fn next_stop(sections: &[(&'static str, usize)], offset: i32) -> (i32, &'static str) {
+        let total =
+            sections.iter().map(|(_, n)| n).sum::<usize>() + sections.len().saturating_sub(1);
+        let last = (total as i32 - flipper_ui::theme::count::DETAIL_VISIBLE_ROWS).max(0);
+        let mut start = 0i32;
+        for (i, (name, rows)) in sections.iter().enumerate() {
+            if i > 0 && start.min(last) > offset {
+                return (start.min(last), name);
+            }
+            start += *rows as i32 + 1;
+        }
+        (0, "Top")
     }
 
     /// Both disks: the UFS the system runs from, then the SD card.
@@ -2677,6 +2982,7 @@ fn png(
     // runs on actually reports.
     if let Some(name) = which.as_deref() {
         let want = match name {
+            "system" | "system-qr" => Some(demo::Detail::System),
             "ethernet" => Some(demo::Detail::Ethernet),
             "routing" => Some(demo::Detail::Routing),
             "disk" => Some(demo::Detail::Disk),
@@ -2710,9 +3016,18 @@ fn png(
                 }
             }
             let rows = open.rows(&applying);
+            if name == "system-qr" {
+                screen.set_detail_qr(
+                    open.qr_lines().and_then(|l| detail::qr_image(&l)).unwrap_or_default(),
+                );
+                screen.set_detail_buttons(demo::labels(&["Back", "", "", "", ""]));
+            } else {
+                screen.set_detail_buttons(demo::labels(
+                    &open.buttons(&applying, select.unwrap_or(0)),
+                ));
+            }
             screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
             screen.set_detail_offset(select.unwrap_or(0));
-            screen.set_detail_buttons(demo::labels(&open.buttons(&applying)));
             let (at_start, at_end) = open.chevron_ends();
             screen.set_detail_at_start(at_start);
             screen.set_detail_at_end(at_end);
@@ -3113,6 +3428,8 @@ fn panel(
     // the equivalent of the prototype's `exit()`: the polling thread stops.
     let mut live: Option<detail::Live> = None;
     let mut detail_offset = 0i32;
+    // Whether the detail page is showing as its QR code.
+    let mut detail_qr = false;
     // Installing an app's dependencies.
     //
     // Three stages, each off the render loop because dpkg-query, apt and pip all
@@ -5202,6 +5519,14 @@ fn panel(
             }
 
             if let Some(open) = live.as_ref() {
+                // The code covers the page, so only the key that closes it does
+                // anything while it is up.
+                if detail_qr {
+                    if matches!(event.key, FlipperKey::Escape | FlipperKey::Back) {
+                        press.soft(FlipperKey::Escape, 0, Instant::now() + flash);
+                    }
+                    continue;
+                }
                 let total = open.rows(&applying).len() as i32;
                 let max = (total - flipper_ui::theme::count::DETAIL_VISIBLE_ROWS).max(0);
                 match event.key {
@@ -5213,7 +5538,9 @@ fn panel(
                         detail_offset = (detail_offset - 1).max(0);
                         detail_dirty = true;
                     }
-                    FlipperKey::Run | FlipperKey::Ok if !open.buttons(&applying)[4].is_empty() => {
+                    FlipperKey::Run | FlipperKey::Ok
+                        if !open.buttons(&applying, detail_offset)[4].is_empty() =>
+                    {
                         press.soft(FlipperKey::Run, 4, Instant::now() + flash);
                     }
                     FlipperKey::Escape | FlipperKey::Back => {
@@ -5224,8 +5551,11 @@ fn panel(
                     // moves at once, as the Wi-Fi page's toggle does. A detail
                     // screen has no cursor, so these reach the one row that takes
                     // them wherever they are pressed.
-                    FlipperKey::View if !open.buttons(&applying)[1].is_empty() => {
+                    FlipperKey::View if !open.buttons(&applying, detail_offset)[1].is_empty() => {
                         press.soft(FlipperKey::View, 1, Instant::now() + flash);
+                    }
+                    FlipperKey::Edit if !open.buttons(&applying, detail_offset)[3].is_empty() => {
+                        press.soft(FlipperKey::Edit, 3, Instant::now() + flash);
                     }
                     FlipperKey::Left | FlipperKey::Right => {
                         let forward = event.key == FlipperKey::Right;
@@ -5878,11 +6208,27 @@ fn panel(
                     match key {
                         // Back to the menu that opened this screen. Dropping the
                         // watch stops its poller.
+                        FlipperKey::Escape if detail_qr => {
+                            detail_qr = false;
+                            detail_dirty = true;
+                        }
                         FlipperKey::Escape => {
                             live = None;
                             eth_open = false;
                             eth_scroll = 0.0;
                             menu_again!();
+                        }
+                        FlipperKey::Edit if matches!(live, Some(detail::Live::System(_))) => {
+                            detail_qr = true;
+                            detail_dirty = true;
+                        }
+                        FlipperKey::Run if matches!(live, Some(detail::Live::System(_))) => {
+                            if let Some((at, _)) =
+                                live.as_ref().and_then(|l| l.next_stop(detail_offset))
+                            {
+                                detail_offset = at;
+                                detail_dirty = true;
+                            }
                         }
                         FlipperKey::Run => {
                             if let Some(rx) = live.as_ref().and_then(|l| l.start_update()) {
@@ -6129,6 +6475,7 @@ fn panel(
                         demo::Act::Detail(which) => {
                             live = Some(detail::Live::open(*which));
                             detail_offset = 0;
+                            detail_qr = false;
                             // Build the rows now rather than waiting for the
                             // poller: its first fetch can equal the value the
                             // watch started with, in which case it never reports
@@ -6556,9 +6903,18 @@ fn panel(
                 let max =
                     (rows.len() as i32 - flipper_ui::theme::count::DETAIL_VISIBLE_ROWS).max(0);
                 detail_offset = detail_offset.clamp(0, max);
+                screen.set_detail_qr(if detail_qr {
+                    open.qr_lines().and_then(|l| detail::qr_image(&l)).unwrap_or_default()
+                } else {
+                    slint::Image::default()
+                });
                 screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
                 screen.set_detail_offset(detail_offset);
-                screen.set_detail_buttons(demo::labels(&open.buttons(&applying)));
+                screen.set_detail_buttons(demo::labels(&if detail_qr {
+                    ["Back", "", "", "", ""]
+                } else {
+                    open.buttons(&applying, detail_offset)
+                }));
                 let (at_start, at_end) = open.chevron_ends();
                 screen.set_detail_at_start(at_start);
                 screen.set_detail_at_end(at_end);

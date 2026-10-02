@@ -105,6 +105,8 @@ export component Root inherits Window {
     in property <[DetailRow]> detail_rows;
     in property <int> detail_offset;
     in property <[string]> detail_buttons;
+    // A detail page as a QR code, drawn over its rows while set. Empty otherwise.
+    in property <image> detail_qr;
     in property <int> detail_pressed_slot: -1;
     // Whether the chevron row's value is at either end of its range, so that chevron
     // is not drawn. One pair for the screen: a detail screen has at most one such row.
@@ -298,6 +300,34 @@ export component Root inherits Window {
         at_end: root.detail_at_end;
         buttons: root.detail_buttons;
         pressed_slot: root.detail_pressed_slot;
+    }
+
+    // The whole panel, status bar and soft keys included: every row of height is
+    // modules the code can use. One pixel a module, so it is never scaled, centred,
+    // and the white around it is the code's quiet zone.
+    if root.screen == Screen.detail && root.detail_qr.width > 0: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: FlipperTheme.white;
+        qr := Image {
+            source: root.detail_qr;
+            width: root.detail_qr.width * 1px;
+            height: root.detail_qr.height * 1px;
+            x: Math.floor((parent.width - self.width) / 2px) * 1px;
+            y: Math.floor((parent.height - self.height) / 2px) * 1px;
+            image-rendering: pixelated;
+        }
+        // In the square the code leaves white for it.
+        Image {
+            source: @image-url("../assets/icons/system_info.png");
+            width: self.source.width * 1px;
+            height: self.source.height * 1px;
+            x: qr.x + Math.floor((qr.width - self.width) / 2px) * 1px;
+            y: qr.y + Math.floor((qr.height - self.height) / 2px) * 1px;
+            image-rendering: pixelated;
+        }
     }
 
     if root.screen == Screen.ethernet: EthernetBody {

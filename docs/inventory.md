@@ -392,6 +392,50 @@ hosted app's pad unless the app opens it. The browser reads it on a thread of it
 through `TouchpadSource`, which `flipctl-app` now exports behind its `device`
 feature, together with `Haptic`, the keyboard and `Key::flipper`.
 
+## System info, added 2026-10-01
+
+`menu.js` lists "System info" first under Settings and opens nothing from it: there is
+no scene behind the row. This one is ours, a detail screen like Battery info, with no
+prototype to transcribe.
+
+It shows what the machine is (model, hostname, SoC, CPU, CPU serial, memory), what it
+runs (OS, build, git, profile, when the profile was made, kernel, when that was built,
+flipctl's own commit), the UFS (part, size, version, link, life used, health), the
+SD card, the battery, the radios, every hardware address, and uptime. Long, so it
+scrolls, and a value too wide for its row wraps onto full-width lines under its
+label, per `rule.overflow`. Everything is read from files and two unprivileged
+ioctls, on a two-second `Watch`; nothing shells out.
+
+**The right soft key jumps a section and names it**: Software, UFS, SD, Battery and
+so on, then Top from the last screen.
+
+**QR shows the page as a QR code, full screen.** Plain text, one `label: value` a
+line: Apple's Camera acts only on the payloads it knows (URLs, geo, SMS, mail, tel,
+contacts, events, Wi-Fi) and says "No usable data found" for text, which a scanner
+app or Google Lens shows. The code is always version 29, 133 modules a pixel each,
+with `qr_icon` modules left white in the middle for the icon. It carries less than
+the page (no SD card, radios, or anything that changes by the minute) so the text
+fits error correction Q, which pays for the icon's square with room to spare.
+
+**The SD card's ratings come from its SD Status register** (speed class, UHS grade,
+video class, app performance class), the way the SD spec lays them out. The bus mode
+is only in debugfs, so it is not shown.
+
+**Memory is what is fitted**, from the device tree, in binary gigabytes, beside what
+is in use. `MemTotal` is short by the firmware's carve-out and what the kernel keeps.
+
+**The CPU serial is U-Boot's**, worked out from the OTP's cpuid the way
+`rockchip_cpuid_set` does it, so it agrees with the SSH banner and the access point's
+SSID. The OTP is world-readable; no tool is run.
+
+**The Wi-Fi address is the card's own**, from `ETHTOOL_GPERMADDR`: NetworkManager
+randomises the one it scans with, so `address` says nothing about the card.
+Bluetooth's comes from `HCIGETDEVINFO`, since sysfs does not carry it.
+
+**`BUILD_GIT` is shown as the image wrote it**, which is with its `@`, `:` and `-`
+stripped by the build's `tr -dc '[:alnum:][:space:]'`. The clean form is not kept
+anywhere on the device.
+
 ## The idle screen's addresses, revisited 2026-10-01
 
 `drawEthCard` gives each interface a two-line card, one IPv4 and one IPv6, and the

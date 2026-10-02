@@ -13,7 +13,7 @@ particular is CC BY-SA 3.0 rather than MIT.
 This file is generated from `Cargo.lock` by `scripts/gen-third-party-licenses.sh`.
 Do not edit it by hand.
 
-- **MIT License**: 274 crate(s)
+- **MIT License**: 275 crate(s)
 - **Unicode License v3**: 26 crate(s)
 - **BSD 3-Clause "New" or "Revised" License**: 10 crate(s)
 - **GNU General Public License v3.0 only**: 9 crate(s)
@@ -4408,6 +4408,7 @@ Used by:
   * profiling-procmacros 1.0.18 (https://github.com/aclysma/profiling)
   * profiling 1.0.18 (https://github.com/aclysma/profiling)
   * pulp-wasm-simd-flag 0.1.1 (https://github.com/sarah-quinones/pulp/)
+  * qrcodegen 1.8.0 (https://github.com/nayuki/QR-Code-generator)
   * rspolib 0.1.2 (https://github.com/mondeja/rspolib)
   * simd_helpers 0.1.0 (https://github.com/lu-zero/simd_helpers)
   * siphasher 1.0.3 (https://github.com/jedisct1/rust-siphash)
