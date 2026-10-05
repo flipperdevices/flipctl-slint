@@ -353,10 +353,10 @@ fn summary(view: &View) -> Vec<(String, String)> {
         Some((num, unit)) => format!("{num} {unit}"),
         None => "press View to measure".into(),
     };
-    let status = row.map(|r| r.status.clone()).unwrap_or_default();
+    let last_used = row.map(|r| r.last_used.clone()).unwrap_or_default();
     vec![
         ("Size".into(), size),
-        ("Last used".into(), if status.is_empty() { "never".into() } else { status }),
+        ("Last used".into(), if last_used.is_empty() { "never".into() } else { last_used }),
         (
             "Auto start".into(),
             match row.map(|r| r.auto) {
@@ -723,6 +723,7 @@ mod tests {
         Row {
             label: label.into(),
             status: status.into(),
+            last_used: status.into(),
             icon: 1,
             icon_w: 10.0,
             icon_h: 8.0,

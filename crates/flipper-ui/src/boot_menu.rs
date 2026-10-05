@@ -129,8 +129,11 @@ pub enum Outcome {
 /// One row of the list.
 pub struct Row {
     pub label: String,
-    /// "Running", "Used 3 hours ago", or empty for one never booted.
+    /// What the row shows on the right: `FAILED`, else `last_used` when it fits beside
+    /// the label, else nothing.
     pub status: String,
+    /// "Running", "Used 3 hours ago", or empty for one never booted.
+    pub last_used: String,
     /// 0 none, else 1-based into the icon table the drawing side holds.
     pub icon: i32,
     pub icon_w: f32,
@@ -273,12 +276,13 @@ pub struct View {
 /// The heart or the medium badge sits right after the name, so it is part of what has to
 /// fit; only one of the two is ever drawn.
 pub fn status_fits(label: &str, status: &str, auto: bool, medium: boot::Medium) -> bool {
-    use crate::font::TITLE;
+    status.is_empty() || crate::font::tw(label) <= label_room(status, auto, medium)
+}
+
+/// How wide a row's label can be with `status` drawn beside it.
+fn label_room(status: &str, auto: bool, medium: boot::Medium) -> i32 {
     use crate::theme::metric::{BOOT_ICON_BOX_W, BOOT_SD_W, BOOT_TEXT_GAP, ICON_PAD, STATUS_PAD_R};
 
-    if status.is_empty() {
-        return true;
-    }
     let badge = if auto {
         BADGE_GAP + HEART_W
     } else if medium != boot::Medium::Internal {
@@ -287,14 +291,15 @@ pub fn status_fits(label: &str, status: &str, auto: bool, medium: boot::Medium) 
         0
     };
     let label_x = ICON_PAD + BOOT_ICON_BOX_W + BOOT_TEXT_GAP;
-    let used = label_x
-        + i32::from(TITLE.text_width(label))
-        + badge
-        + GAP
-        + i32::from(TITLE.text_width(status))
-        + STATUS_PAD_R;
-    used <= crate::PANEL_W as i32
+    crate::PANEL_W as i32 - label_x - badge - GAP - crate::font::tw(status) - STATUS_PAD_R
 }
+
+/// What a failed profile's row says in place of when it was last used.
+pub const FAILED: &str = "Failed";
+
+/// Why Auto Start refuses a failed profile, and the way out: a clean boot by hand
+/// blesses it again.
+const AUTO_START_FAILED: &str = "Last boot failed\nBoot it once first";
 
 /// The gap boot.slint leaves between a label and the badge after it, and the least this
 /// leaves between either of them and the status.
@@ -729,6 +734,11 @@ impl BootMenu {
                     // Auto Start is reversible and immediate; the rest change or
                     // destroy a profile, so they ask first.
                     match actions.get(self.popup_index).copied() {
+                        // The digit would move, but a spent entry sorts last whatever
+                        // its digit, so the profile still would not boot by itself.
+                        Some("Auto Start") if profile.as_ref().is_some_and(Profile::failed) => {
+                            self.popup = Some(Popup::Said(AUTO_START_FAILED.into()))
+                        }
                         Some("Auto Start") => {
                             self.popup = self.start_action("Auto Start", &profile)
                         }
@@ -1397,13 +1407,19 @@ impl BootMenu {
                     _ => (6, (14.0, 14.0)),
                 };
                 let label = boot::display_name(&p.name);
-                let status = boot::used_ago(&p.last_used, now);
+                let last_used = boot::used_ago(&p.last_used, now);
+                // A failed profile keeps its mark and gives up the end of its name instead.
+                let (label, status) = if p.failed() {
+                    let room = label_room(FAILED, p.auto_boot, p.medium);
+                    (crate::font::fit(&label, room), FAILED.to_string())
+                } else if status_fits(&label, &last_used, p.auto_boot, p.medium) {
+                    (label, last_used.clone())
+                } else {
+                    (label, String::new())
+                };
                 Row {
-                    status: if status_fits(&label, &status, p.auto_boot, p.medium) {
-                        status
-                    } else {
-                        String::new()
-                    },
+                    status,
+                    last_used,
                     label,
                     icon,
                     icon_w,
@@ -1592,7 +1608,7 @@ impl BootMenu {
                 None => what.clone(),
             }),
             Some(Popup::Said(msg)) => {
-                message.push(msg.clone());
+                message.extend(msg.lines().map(str::to_string));
                 button = "Press any key".into();
             }
             None => {}
@@ -1853,6 +1869,48 @@ mod tests {
         assert_eq!(menu.cheap, Some(true));
         // And the row under the cursor is loadable again straight away.
         assert!(worth_arming(menu.cheap, ARM_SETTLE, menu.asked.as_ref(), &aim));
+    }
+
+    fn failed(name: &str) -> boot::Profile {
+        boot::Profile {
+            name: name.into(),
+            entries: vec![boot::Entry { tries: Some(0), ..entry("7.3.0") }],
+            ..Default::default()
+        }
+    }
+
+    /// Auto Start on a failed profile says why not instead of moving the digit, which
+    /// would leave it sorting last and something else booting by itself.
+    #[test]
+    fn auto_start_refuses_a_failed_profile() {
+        let mut menu = BootMenu::open(4, AutoStart::Off, Kernels::Modern);
+        menu.profiles = vec![failed("@Desktop")];
+        let at = boot::edit_actions(&menu.profiles[0]).iter().position(|a| *a == "Auto Start");
+        menu.popup_index = at.expect("Auto Start is offered");
+
+        menu.popup_key(Popup::Edit, FlipperKey::Ok);
+        assert!(
+            matches!(&menu.popup, Some(Popup::Said(m)) if m == AUTO_START_FAILED),
+            "nothing was said"
+        );
+        assert_eq!(menu.view().popup_message, ["Last boot failed", "Boot it once first"]);
+    }
+
+    /// A failed row says so, and keeps saying so on a name too long to sit beside it.
+    /// What it was last used stays available to whoever has the room to show it.
+    #[test]
+    fn a_failed_row_is_marked_whatever_its_name() {
+        let mut menu = BootMenu::open(4, AutoStart::Off, Kernels::Modern);
+        let long = "@Desktop__A-Very-Long-Name-For-A-Profile-That-Was-Cloned__";
+        menu.profiles = vec![failed("@Desktop"), failed(long)];
+        let rows = menu.view().rows;
+
+        assert_eq!(rows[0].status, FAILED);
+        assert_eq!(rows[0].label, boot::display_name("@Desktop"));
+        assert_eq!(rows[1].status, FAILED);
+        assert!(rows[1].label.ends_with(".."), "{}", rows[1].label);
+        assert!(status_fits(&rows[1].label, FAILED, false, boot::Medium::Internal));
+        assert_eq!(rows[1].last_used, boot::used_ago("", std::time::SystemTime::now()));
     }
 
     fn config(menu: &mut BootMenu, line: usize) -> Option<Profile> {

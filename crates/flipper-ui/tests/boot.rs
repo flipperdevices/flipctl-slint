@@ -497,6 +497,21 @@ fn an_entry_reports_whether_its_boot_is_proven() {
     assert!(!armed.bad() && !tried.bad() && !blessed.bad());
 }
 
+/// A profile fails when its first entry is spent, which, spent entries sorting last,
+/// means every one is. One spent kernel beside a good one still boots the good one.
+#[test]
+fn a_profile_fails_only_when_every_kernel_is_spent() {
+    let spent = boot::Entry { tries: Some(0), ..Default::default() };
+    let good = boot::Entry { tries: None, ..Default::default() };
+    let with = |entries: Vec<boot::Entry>| boot::Profile { entries, ..Default::default() };
+
+    assert!(with(vec![spent.clone()]).failed());
+    assert!(with(vec![spent.clone(), spent.clone()]).failed());
+    assert!(!with(vec![good.clone(), spent]).failed(), "the good kernel still boots");
+    assert!(!with(vec![good]).failed());
+    assert!(!with(vec![]).failed(), "no kernel shown is no row, not a failure");
+}
+
 /// The boot order, which is the whole of the menu's state.
 ///
 /// The same four rules `libs/flipper-blsname.sh` sorts by in shell, so the menu and the

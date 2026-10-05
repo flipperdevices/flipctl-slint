@@ -55,6 +55,16 @@ pub struct Profile {
     pub kind: &'static str,
 }
 
+impl Profile {
+    /// Whether every kernel the menu shows for it has spent its tries.
+    ///
+    /// Spent entries sort last, so the first one being spent means all of them are. Such a
+    /// profile boots only when asked for by hand, and a clean boot that way blesses it again.
+    pub fn failed(&self) -> bool {
+        self.entries.first().is_some_and(Entry::bad)
+    }
+}
+
 /// One boot entry: one kernel of one profile, as its file states it.
 ///
 /// `id` is the file name without its boot counter or `.conf`, which is what

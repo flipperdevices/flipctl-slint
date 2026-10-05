@@ -15,6 +15,7 @@ fn row(label: &str, status: &str, auto: bool, medium: i32) -> Row {
     Row {
         label: label.into(),
         status: status.into(),
+        last_used: status.into(),
         icon: 1,
         icon_w: 10.0,
         icon_h: 8.0,
