@@ -60,14 +60,26 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<()> {
-    let mut sink = KmsSink::open(card.map(std::path::Path::new))?;
-    let (w, h) = sink.size();
-    if (w, h) != (PANEL_W, PANEL_H) {
-        return Err(std::io::Error::other(format!(
-            "panel reports {w}x{h}, this build is compiled for {PANEL_W}x{PANEL_H}"
-        )));
-    }
-    flipper_ui::logline!("panel          {w}x{h}, {}", sink.format());
+    // A board without the panel still has to boot: exiting here had init respawn the
+    // menu forever and the countdown never ran. Only a panel that is absent; one that
+    // is there and fails to open is a fault and stays fatal.
+    let mut sink = match KmsSink::open(card.map(std::path::Path::new)) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && card.is_none() => {
+            flipper_ui::logline!("panel          none: {e}");
+            None
+        }
+        sink => {
+            let sink = sink?;
+            let (w, h) = sink.size();
+            if (w, h) != (PANEL_W, PANEL_H) {
+                return Err(std::io::Error::other(format!(
+                    "panel reports {w}x{h}, this build is compiled for {PANEL_W}x{PANEL_H}"
+                )));
+            }
+            flipper_ui::logline!("panel          {w}x{h}, {}", sink.format());
+            Some(sink)
+        }
+    };
     // The buttons are on i2c and their probe can fail, which it has: the menu then exited
     // for want of them and init respawned it about once a second, so the panel showed
     // nothing and the countdown never ran. Draw regardless and keep looking, because a
@@ -106,7 +118,8 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
     // for the terminal: that is opened after the first frame and never before.
     // Somebody holding the device is waiting on the panel, and setting a terminal up
     // (termios, the alternate screen, its first draw) is work that belongs behind it.
-    let mut drawn = false;
+    // Without a panel nothing is waiting, so the terminal comes up at once.
+    let mut drawn = sink.is_none();
     let mut tui: Option<Terminal> = None;
     let mut tui_tried = !want_tui;
     // The same 8ms flipctl paces its loop at: the panel takes a frame every 16 to 19
@@ -248,7 +261,7 @@ fn run(card: Option<&str>, kernels: Kernels, want_tui: bool) -> std::io::Result<
                 }
                 None => {}
             }
-            if !booting || !takeover_committed {
+            if let Some(sink) = sink.as_mut().filter(|_| !booting || !takeover_committed) {
                 if let Some(damage) = render_into(&window, &mut frame) {
                     sink.commit(Frame::new(&frame, PANEL_W, PANEL_H), damage)?;
                     if !drawn {
