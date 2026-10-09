@@ -91,6 +91,9 @@ impl KmsSink {
     /// Auto-detection matters because card numbers are renumbered by kernel
     /// rebuilds, which has already broken flipctl once; a by-path symlink is
     /// stable but only if the SPI address never changes.
+    ///
+    /// A board with no panel fails the search with `ErrorKind::NotFound`, which is
+    /// how a caller tells it apart from a panel that is there and failed to open.
     pub fn open(explicit: Option<&Path>) -> std::io::Result<Self> {
         let path = match explicit {
             Some(p) => p.to_path_buf(),
@@ -221,10 +224,10 @@ impl KmsSink {
             }
         }
 
-        Err(std::io::Error::other(format!(
-            "no /dev/dri/card* is driven by {DRIVER:?} (tried {})",
-            candidates.len()
-        )))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no /dev/dri/card* is driven by {DRIVER:?} (tried {})", candidates.len()),
+        ))
     }
 
     pub fn size(&self) -> (u16, u16) {

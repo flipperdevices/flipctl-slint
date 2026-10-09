@@ -3131,14 +3131,29 @@ fn panel(
         #[cfg(not(feature = "wayland"))]
         return Err(std::io::Error::other("rebuild with --features wayland"));
     } else {
-        let sink = KmsSink::open(kms_device.map(std::path::Path::new))?;
-        let (w, h) = sink.size();
-        if (w, h) != (PANEL_W, PANEL_H) {
-            return Err(std::io::Error::other(format!(
-                "panel reports {w}x{h}, this build is compiled for {PANEL_W}x{PANEL_H}"
-            )));
+        // A board without the panel still gets the browser view: it runs as headless
+        // does, except that the buttons are still read. Only a panel that is absent;
+        // one that is there and fails to open is a fault and stays fatal.
+        match KmsSink::open(kms_device.map(std::path::Path::new)) {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && kms_device.is_none()
+                    && remote.is_some() =>
+            {
+                eprintln!("panel          none: {e}");
+                None
+            }
+            sink => {
+                let sink = sink?;
+                let (w, h) = sink.size();
+                if (w, h) != (PANEL_W, PANEL_H) {
+                    return Err(std::io::Error::other(format!(
+                        "panel reports {w}x{h}, this build is compiled for {PANEL_W}x{PANEL_H}"
+                    )));
+                }
+                Some(PanelOut::Kms(sink))
+            }
         }
-        Some(PanelOut::Kms(sink))
     };
     // Buttons are left alone in headless mode: whoever owns the panel owns them
     // too, and two readers both reacting would be confusing.
