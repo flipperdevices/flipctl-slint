@@ -511,9 +511,6 @@ mod detail {
 
     use super::demo::Detail;
 
-    /// The SD card. The partition is chosen by size, not hardcoded: see
-    /// `one_disk`.
-    const SD_DISK: &str = "/dev/mmcblk0";
     /// QMI control device for the cell-identity calls.
     const QMI_DEV: &str = "/dev/cdc-wdm0";
     fn row(label: &str, value: &str) -> DetailRow {
@@ -577,22 +574,33 @@ mod detail {
 
     /// The two disks the Disk info screen shows.
     ///
-    /// The prototype shows only the SD card. The UFS is where the system actually
-    /// lives, so it is the one a person is more likely to be asking about.
+    /// The prototype shows only the SD card. The internal storage is where the system
+    /// usually lives, so it is the one a person is more likely to be asking about.
     #[derive(Clone, Default, PartialEq)]
     pub struct Disks {
-        pub ufs: Disk,
+        pub internal: Disk,
+        /// What the internal storage is: UFS, eMMC, or Disk when sysfs names neither.
+        pub internal_kind: &'static str,
         pub sd: Disk,
     }
 
-    /// Read both, discovering the devices rather than hardcoding them: the root
-    /// filesystem's own mount point for the UFS, and the card's largest partition
-    /// for the SD.
+    /// Read both, each found by what it is and then by its largest partition. Not by
+    /// what is mounted at `/`, nor by a fixed `/dev/mmcblk0`: a board booted from its
+    /// card, or one whose card is `mmcblk1`, showed the card's numbers as the UFS and
+    /// an empty eMMC as the card.
     fn read_disks() -> Disks {
-        let sd = sysinfo::largest_partition(SD_DISK)
-            .map(|part| sysinfo::disk(&part))
-            .unwrap_or_default();
-        Disks { ufs: sysinfo::disk_at("/"), sd }
+        let usage = |disk: Option<String>| {
+            disk.and_then(|d| sysinfo::largest_partition(&d))
+                .map(|part| sysinfo::disk(&part))
+                .unwrap_or_default()
+        };
+        let sd = usage(sysinfo::sd_disk());
+        match sysinfo::internal_disk() {
+            Some((disk, kind)) => Disks { internal: usage(Some(disk)), internal_kind: kind, sd },
+            // Nothing sysfs names, which is some other board: what it runs from is the
+            // best guess at its own storage.
+            None => Disks { internal: sysinfo::disk_at("/"), internal_kind: "Disk", sd },
+        }
     }
 
     /// Whichever screen is open, with its poller.
@@ -1191,9 +1199,9 @@ mod detail {
         (0, "Top")
     }
 
-    /// Both disks: the UFS the system runs from, then the SD card.
+    /// Both disks: the machine's own storage, then the SD card.
     fn disk_rows(d: &Disks) -> Vec<DetailRow> {
-        let mut out = one_disk("UFS", &d.ufs);
+        let mut out = one_disk(d.internal_kind, &d.internal);
         out.push(divider());
         out.extend(one_disk("SD Card", &d.sd));
         out

@@ -1237,12 +1237,18 @@ pub struct SdCard {
     pub rev: String,
 }
 
-fn sd_card() -> Option<SdCard> {
-    let card = fs::read_dir("/sys/bus/mmc/devices")
+/// The sysfs directory of the mmc device whose `type` is `kind`: `SD` for a card,
+/// `MMC` for soldered eMMC.
+fn mmc_device(kind: &str) -> Option<std::path::PathBuf> {
+    fs::read_dir("/sys/bus/mmc/devices")
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .find(|p| read_str(p.join("type")).as_deref() == Some("SD"))?;
+        .find(|p| read_str(p.join("type")).as_deref() == Some(kind))
+}
+
+fn sd_card() -> Option<SdCard> {
+    let card = mmc_device("SD")?;
     let attr = |f: &str| read_str(card.join(f)).unwrap_or_default();
     let bytes = fs::read_dir(card.join("block"))
         .ok()
@@ -1376,29 +1382,56 @@ fn pack() -> Option<Pack> {
     })
 }
 
-/// The UFS host, if there is one, and the disk it serves.
-fn ufs() -> Option<Ufs> {
-    let host = fs::read_dir("/sys/devices/platform/soc")
+/// The UFS host's sysfs directory, if there is one.
+fn ufs_host() -> Option<std::path::PathBuf> {
+    fs::read_dir("/sys/devices/platform/soc")
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".ufshc")))?;
+        .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".ufshc")))
+}
+
+/// The UFS data LUN as a block name and its size in sectors. It is the largest disk
+/// the host serves: the others are boot LUNs of a few megabytes.
+fn ufs_data_lun(host: &std::path::Path) -> Option<(String, u64)> {
+    let host = fs::canonicalize(host).ok()?;
+    fs::read_dir("/sys/block")
+        .ok()?
+        .flatten()
+        .filter(|e| fs::canonicalize(e.path().join("device")).is_ok_and(|d| d.starts_with(&host)))
+        .filter_map(|e| {
+            Some((e.file_name().to_string_lossy().into_owned(), read_u64(e.path().join("size"))?))
+        })
+        .max_by_key(|(_, size)| *size)
+}
+
+/// The block name of the mmc device whose `type` is `kind`.
+fn mmc_disk(kind: &str) -> Option<String> {
+    let block = fs::read_dir(mmc_device(kind)?.join("block")).ok()?.next()?.ok()?;
+    Some(block.file_name().to_string_lossy().into_owned())
+}
+
+/// The SD card's disk, e.g. `/dev/mmcblk1`, wherever the board numbers it.
+pub fn sd_disk() -> Option<String> {
+    mmc_disk("SD").map(|name| format!("/dev/{name}"))
+}
+
+/// The machine's own storage and what to call it: UFS on the Flipper, eMMC on a
+/// board that has that instead. Neither is necessarily what the system booted from.
+pub fn internal_disk() -> Option<(String, &'static str)> {
+    if let Some((name, _)) = ufs_host().and_then(|host| ufs_data_lun(&host)) {
+        return Some((format!("/dev/{name}"), "UFS"));
+    }
+    mmc_disk("MMC").map(|name| (format!("/dev/{name}"), "eMMC"))
+}
+
+/// The UFS host, if there is one, and the disk it serves.
+fn ufs() -> Option<Ufs> {
+    let host = ufs_host()?;
     let string = |d: &str, f: &str| read_str(host.join(d).join(f)).unwrap_or_default();
     let hex =
         |d: &str, f: &str| u32::from_str_radix(string(d, f).trim_start_matches("0x"), 16).ok();
-    // The data LUN is the largest disk the host serves: the others are boot LUNs of a
-    // few megabytes.
-    let size = fs::read_dir("/sys/block")
-        .ok()?
-        .flatten()
-        .filter(|e| {
-            fs::canonicalize(e.path().join("device"))
-                .is_ok_and(|d| d.starts_with(fs::canonicalize(&host).unwrap_or_default()))
-        })
-        .filter_map(|e| read_u64(e.path().join("size")))
-        .max()
-        .unwrap_or(0)
-        * 512;
+    let size = ufs_data_lun(&host).map_or(0, |(_, size)| size) * 512;
     let life = [
         hex("health_descriptor", "life_time_estimation_a"),
         hex("health_descriptor", "life_time_estimation_b"),
