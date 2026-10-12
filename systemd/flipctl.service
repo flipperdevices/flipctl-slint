@@ -42,6 +42,13 @@ DeviceAllow=/dev/kmsg rw
 # An app is an AppImage, and its runtime mounts the bundle over FUSE through
 # fusermount3, a setuid child of ours and so inside this filter like everything else.
 DeviceAllow=/dev/fuse rw
+# The boot menu's profile tools mount each btrfs top level to read it, the booted one
+# included, and btrfs opens a device for writing on its first mount. Without these the
+# list is empty. The Flipper never showed it, because the seat1 session moves flipctl
+# out of this cgroup; a board with no seat1 stays here.
+DeviceAllow=block-sd rw
+DeviceAllow=block-mmc rw
+DeviceAllow=block-blkext rw
 # Hardware a hosted app may drive, by class name from /proc/devices. Resolved when
 # the unit starts, and a class whose driver is not loaded yet is silently absent, so
 # flipctl-devices.conf loads usbserial, cdc-acm and spidev at boot.
