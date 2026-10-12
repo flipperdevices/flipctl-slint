@@ -23,7 +23,7 @@
   body.nophoto #photo { display: none; }
   body.nophoto #wrap { min-width: 0; min-height: 0; }
   body.nophoto #glow { position: static; width: 512px; height: 288px; }
-  body.nophoto #panel {
+  body.nophoto #panel, body.nophoto #nosignal {
     position: absolute; left: 0; top: 0; width: 512px; height: 288px;
   }
   /* Layers, low to high: amber ground, the live panel multiplied over it so
@@ -41,7 +41,7 @@
   }
   #photo {
     position: relative; z-index: 2; display: block;
-    width: auto; height: auto; max-width: 98vw; max-height: 92vh;
+    width: auto; height: auto; max-width: 98vw; max-height: calc(92vh - 48px);
     pointer-events: none;
   }
   .zone {
@@ -57,37 +57,60 @@
   }
   .show .zone { background: rgba(255,130,0,.35); border: 1px solid rgba(255,255,255,.85); }
   .show .zone span { display: block; }
-  /* Two rows: the link above, the controls below. The link is a way out of this
-     page rather than one of its controls, so it does not sit in their line. */
-  #hud {
-    position: fixed; top: 8px; left: 8px; z-index: 10;
-    background: #1D2026; padding: 6px 10px; border-radius: 5px;
-    display: flex; flex-direction: column; gap: 4px;
-    align-items: flex-start; user-select: none;
+  /* Over the panel and under the photo, so the bezel frames it like the glass. The
+     panel goes dark rather than keeping its last frame, which would read as a
+     device that is up and simply not changing. */
+  #nosignal {
+    position: absolute; z-index: 1; display: none;
+    align-items: center; justify-content: center;
+    background: #000; container-type: inline-size;
   }
-  #hud-controls { display: flex; gap: 12px; align-items: center; }
-  #hud label { cursor: pointer; }
-  #hud a { color: #FF8200; text-decoration: none; }
-  #hud a:hover { text-decoration: underline; }
-  #stat { font-variant-numeric: tabular-nums; opacity: .7; }
+  #nosignal span {
+    font: bold 11cqw monospace; letter-spacing: .08em; color: #FF8200;
+  }
+  body.nosignal #nosignal { display: flex; }
+  /* The page's controls and its status, one above the other under the tab bar. */
+  #hud {
+    position: fixed; top: 60px; left: 24px; z-index: 10;
+    display: flex; flex-direction: column; gap: 8px; user-select: none;
+  }
+  #hud label {
+    cursor: pointer; display: flex; align-items: center; gap: 8px;
+    font: 600 15px system-ui, sans-serif; color: #FF8200;
+  }
+  /* A switch rather than a checkbox: the box itself, restyled, so the label and the
+     keyboard still work as they would on any checkbox. */
+  #toggle {
+    appearance: none; margin: 0; cursor: pointer; position: relative;
+    width: 36px; height: 20px; border-radius: 10px; box-sizing: border-box;
+    border: 2px solid #8A9099; background: transparent;
+  }
+  #toggle::before {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px; border-radius: 50%; background: #8A9099;
+    transition: left .12s;
+  }
+  #toggle:checked { border-color: #FF8200; background: rgba(255, 130, 0, .25); }
+  #toggle:checked::before { left: 18px; background: #FF8200; }
+  #status { font-variant-numeric: tabular-nums; color: #8A9099; }
 </style>
 
 <div id="hud">
-  <a href="apps">Application Manager</a>
-  <div id="hud-controls">
-    <label><input type="checkbox" id="toggle"> Show controls</label>
-    <span id="stat">connecting</span>
-  </div>
+  <label>Show controls <input type="checkbox" id="toggle"></label>
+  <div id="status">Status: <span id="stat">connecting</span></div>
 </div>
 
 <div id="wrap">
   <div id="glow"></div>
   <canvas id="panel" width="256" height="144"></canvas>
+  <div id="nosignal"><span>NO SIGNAL</span></div>
   <img id="photo" src="device.png" alt="">
 </div>
 
 <script src="remote.js"></script>
 <script>
+flipperTabs();
+
 const SCREEN = { l: 33.94, t: 28.89, w: 28.76, h: 30.65 };
 
 const ZONES = [
@@ -109,6 +132,7 @@ const ZONES = [
 const wrap = document.getElementById('wrap');
 const glow = document.getElementById('glow');
 const panel = document.getElementById('panel');
+const nosignal = document.getElementById('nosignal');
 const photo = document.getElementById('photo');
 const stat = document.getElementById('stat');
 // The backlight colour, multiplied into every pixel. Same value as the ground
@@ -118,8 +142,7 @@ const blitter = new GreyBlitter(panel.getContext('2d'), 256, 144, AMBER);
 
 for (const k of ['left', 'top', 'width', 'height']) {
   const v = SCREEN[k[0]] + '%';
-  glow.style[k] = v;
-  panel.style[k] = v;
+  for (const el of [glow, panel, nosignal]) el.style[k] = v;
 }
 
 // Say so in the HUD rather than leaving a blank page: without the photo the wrap
@@ -152,5 +175,8 @@ document.getElementById('toggle').addEventListener('change', e => {
 });
 
 flipperStream((grey, x, y, w, h) => blitter.draw(grey, x, y, w, h),
-              text => { stat.textContent = text; });
+              (text, ok) => {
+                stat.textContent = text;
+                document.body.classList.toggle('nosignal', ok === false);
+              });
 </script>

@@ -18,14 +18,7 @@
     background: var(--ground);
     font: 13px/1.5 system-ui, sans-serif; color: var(--ink);
   }
-  header {
-    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
-    padding: 16px 20px; border-bottom: 1px solid var(--line);
-  }
-  h1 { font-size: 15px; margin: 0; font-weight: 600; }
-  a { color: var(--amber); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  #stat { color: var(--dim); margin-left: auto; }
+  #stat { color: var(--dim); }
   #stat.bad { color: var(--bad); }
 
   /* Two columns on a screen with room, stacked on a phone. The device itself is
@@ -88,11 +81,7 @@
   .error { color: var(--bad); }
 </style>
 
-<header>
-  <h1>Application Manager</h1>
-  <a href="/">Panel view</a>
-  <span id="stat"></span>
-</header>
+<div id="side"><span id="stat"></span></div>
 
 <main>
   <section>
@@ -109,7 +98,10 @@
   </section>
 </main>
 
+<script src="remote.js"></script>
 <script>
+flipperTabs(document.getElementById('side'));
+
 // The two lists are whatever the device reports: what it found in its apps
 // folders, and what the catalogue on the server offers it. Nothing here decides
 // which is which, so this page cannot disagree with the panel.

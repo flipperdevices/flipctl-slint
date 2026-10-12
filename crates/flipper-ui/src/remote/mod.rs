@@ -49,6 +49,11 @@ const MAX_ACTION_BODY: usize = 1024; // not-a-panel-dimension
 
 const HEADER: usize = 8;
 
+/// How long a still screen goes without sending anything before a heartbeat does.
+/// The page counts 3s of silence as no signal, so this is what bounds how soon a
+/// viewer sees a device go away.
+const HEARTBEAT: Duration = Duration::from_secs(1);
+
 /// How many frames may wait to be sent. Three is enough to carry a 30ms flash
 /// through a 33ms send interval without letting a stalled viewer accumulate
 /// megabytes.
@@ -787,10 +792,8 @@ fn pump(stream: &mut TcpStream, viewer: &Arc<ViewerQueue>) -> std::io::Result<()
             if !queue.is_empty() {
                 break;
             }
-            let (guard, timed_out) = viewer
-                .ready
-                .wait_timeout(queue, Duration::from_secs(2))
-                .unwrap_or_else(|e| e.into_inner());
+            let (guard, timed_out) =
+                viewer.ready.wait_timeout(queue, HEARTBEAT).unwrap_or_else(|e| e.into_inner());
             queue = guard;
             if !queue.is_empty() {
                 break;

@@ -59,21 +59,43 @@ class GreyBlitter {
 
 /// Keep a connection to the frame stream, calling `onFrame(grey, x, y, w, h)`.
 ///
-/// `onStatus` is handed a short description for a HUD: whether the stream is
-/// connected, not how much has come down it. Reconnects on its own, because a
-/// device that restarts mid-session should not need a page reload.
+/// `onStatus(text, ok)` is handed a short description for a HUD and whether the
+/// stream is live: connecting (ok undefined, nothing known yet), connected, or no
+/// signal. Reconnects on its own,
+/// because a device that restarts mid-session should not need a page reload.
+///
+/// A deadline is what makes that true. A rebooting device never closes the
+/// connection, so the read it was parked on waited forever and only a reload got
+/// out. The device sends a heartbeat every second on a still screen, so anything
+/// silent past FLIPPER_DEADLINE_MS is dead and is dropped and retried.
+const FLIPPER_DEADLINE_MS = 3000;
+
 function flipperStream(onFrame, onStatus) {
-  let last = 0;
+  const say = (text, ok) => { if (onStatus) onStatus(text, ok); };
+  let ctl = null;
+  let heard = 0;
+  setInterval(() => {
+    if (ctl && performance.now() - heard > FLIPPER_DEADLINE_MS) ctl.abort();
+  }, 250);
   (async () => {
+    say('connecting');
     for (;;) {
+      let live = false;
+      ctl = new AbortController();
+      heard = performance.now();
       try {
-        const res = await fetch('stream');
+        const res = await fetch('stream', { signal: ctl.signal, cache: 'no-store' });
         if (!res.ok || !res.body) throw new Error('stream ' + res.status);
         const reader = res.body.getReader();
         let buf = new Uint8Array(0);
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          heard = performance.now();
+          if (!live) {
+            live = true;
+            say('connected', true);
+          }
           const merged = new Uint8Array(buf.length + value.length);
           merged.set(buf);
           merged.set(value, buf.length);
@@ -85,31 +107,18 @@ function flipperStream(onFrame, onStatus) {
             const w = head.getUint16(4, true), h = head.getUint16(6, true);
             const need = FLIPPER_HEADER + w * h;
             if (buf.length < need) break;
-            if (w === 0 || h === 0) { buf = buf.subarray(need); continue; }
-            onFrame(buf.subarray(FLIPPER_HEADER, need), x, y, w, h);
+            if (w !== 0 && h !== 0) onFrame(buf.subarray(FLIPPER_HEADER, need), x, y, w, h);
             buf = buf.subarray(need);
-            const first = last === 0;
-            last = performance.now();
-            if (first && onStatus) onStatus('connected');
           }
         }
       } catch (e) {
-        if (onStatus) onStatus('reconnecting');
+        // Refused, timed out or cut off: all the same to a viewer.
       }
-      await new Promise(r => setTimeout(r, 500));
+      ctl = null;
+      say('no signal', false);
+      await new Promise(r => setTimeout(r, 1000));
     }
   })();
-  // Only report a stream that has actually gone quiet. A running count was
-  // misleading twice over: it measured the device's repaint rate rather than
-  // anything the viewer cares about, and it kept climbing on a screen that had not
-  // changed, because the panel was repainting regardless.
-  if (onStatus) {
-    setInterval(() => {
-      if (!last) return;
-      const age = (performance.now() - last) / 1000;
-      onStatus(age > 5 ? `idle ${age.toFixed(0)}s` : 'connected');
-    }, 1000);
-  }
 }
 
 /// Post one key event. The same endpoint the panel's own buttons feed.
@@ -195,4 +204,50 @@ function flipperCoalesce(fn) {
     queued = true;
     requestAnimationFrame(() => { queued = false; fn(); });
   };
+}
+
+/// The tab bar both pages open with, so each is one click from the other.
+///
+/// Built here rather than written into each page, so the two cannot drift apart.
+/// `side` is the page's own status and controls, moved into the bar's right end.
+/// The links are relative, as the old one was, so the pages still find each other
+/// behind a proxy that serves them under a prefix.
+function flipperTabs(side) {
+  const style = document.createElement('style');
+  style.textContent = `
+    nav.tabs {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10; height: 48px;
+      display: flex; align-items: center; gap: 8px; padding: 0 12px;
+      background: #1D2026; border-bottom: 1px solid #2B2F37;
+      font: 600 15px system-ui, sans-serif; user-select: none; box-sizing: border-box;
+    }
+    nav.tabs > a {
+      padding: 6px 12px; border-radius: 6px;
+      color: #FF8200; text-decoration: none;
+    }
+    nav.tabs > a:hover { background: rgba(255, 130, 0, .12); }
+    nav.tabs > a.here, nav.tabs > a.here:hover { background: #FF8200; color: #000; }
+    nav.tabs > .tabs-side {
+      margin-left: auto; display: flex; align-items: center; gap: 12px;
+      min-width: 0; white-space: nowrap; overflow: hidden;
+    }
+    body { padding-top: 48px; box-sizing: border-box; }
+  `;
+  document.head.appendChild(style);
+
+  const nav = document.createElement('nav');
+  nav.className = 'tabs';
+  const apps = /\/apps(\.html)?$/.test(location.pathname);
+  for (const [href, label, here] of [['./', 'FlipCTL Remote Control', !apps], ['apps', 'App Manager', apps]]) {
+    const a = document.createElement('a');
+    a.href = href;
+    a.textContent = label;
+    if (here) a.className = 'here';
+    nav.appendChild(a);
+  }
+  if (side) {
+    side.classList.add('tabs-side');
+    nav.appendChild(side);
+  }
+  document.body.prepend(nav);
 }
