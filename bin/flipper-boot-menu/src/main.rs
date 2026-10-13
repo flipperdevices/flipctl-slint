@@ -401,6 +401,7 @@ fn apply(ui: &Menu, view: &BootView, kb: Option<&keyboard::TextInput>, warning: 
     ui.set_popup_icon_h(14.0);
     ui.set_popup_size_number(view.size_num.as_str().into());
     ui.set_popup_size_unit(view.size_unit.as_str().into());
+    ui.set_popup_show_size(view.show_size);
     // While loading, the slot keeps the widest spinner frame's width; once the value
     // lands it is the value's own.
     ui.set_popup_size_slot_w(view.size_slot_w);
@@ -416,6 +417,8 @@ fn apply(ui: &Menu, view: &BootView, kb: Option<&keyboard::TextInput>, warning: 
             text: l.text.as_str().into(),
             selected: l.selected,
             heart: l.heart,
+            at_start: l.at_start,
+            at_end: l.at_end,
             value: l.value.as_str().into(),
         })
         .collect();

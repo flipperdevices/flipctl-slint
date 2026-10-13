@@ -40,6 +40,7 @@ export component Menu inherits Window {
     in property <length> popup_icon_h;
     in property <string> popup_size_number;
     in property <string> popup_size_unit;
+    in property <bool> popup_show_size: true;
     in property <length> popup_size_slot_w;
     in property <[BootPopupRow]> popup_rows;
     in property <[string]> popup_message;
@@ -84,6 +85,7 @@ export component Menu inherits Window {
         popup_icon_h: root.popup_icon_h;
         popup_size_number: root.popup_size_number;
         popup_size_unit: root.popup_size_unit;
+        popup_show_size: root.popup_show_size;
         popup_size_slot_w: root.popup_size_slot_w;
         popup_rows: root.popup_rows;
         popup_message: root.popup_message;

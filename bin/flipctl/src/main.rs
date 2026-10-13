@@ -2503,6 +2503,7 @@ fn apply_boot(screen: &flipper_ui::ui::Root, menu: &flipper_ui::boot_menu::BootM
     screen.set_boot_popup_icon_h(14.0);
     screen.set_boot_popup_size_number(view.size_num.as_str().into());
     screen.set_boot_popup_size_unit(view.size_unit.as_str().into());
+    screen.set_boot_popup_show_size(view.show_size);
     screen.set_boot_popup_size_slot_w(view.size_slot_w);
     screen.set_boot_popup_w(view.popup_w);
     screen.set_boot_popup_body_h(view.popup_body_h);
@@ -2515,6 +2516,8 @@ fn apply_boot(screen: &flipper_ui::ui::Root, menu: &flipper_ui::boot_menu::BootM
             text: l.text.as_str().into(),
             selected: l.selected,
             heart: l.heart,
+            at_start: l.at_start,
+            at_end: l.at_end,
             value: l.value.as_str().into(),
         })
         .collect();

@@ -391,6 +391,7 @@ kb_space_stub_h     = 2
 # The Info and Edit popups, from boot_menu.js. The header band carries the icon,
 # the name and a centred size line; the body starts below it.
 popup_hdr_h         = 38    # boot_menu.js HDR
+popup_hdr_bare_h    = 22    # the band with no size line under the name
 popup_line_h        = 11    # its Info line pitch
 popup_row_h         = 16    # its Edit action pitch
 popup_pad_h         = 8     # boot_menu.js padH

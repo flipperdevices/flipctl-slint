@@ -53,6 +53,8 @@ pub struct Profile {
     /// The drive that partition is on, e.g. `/dev/sda`, and what to call it.
     pub disk: String,
     pub kind: &'static str,
+    /// Which of `SWAP` its root is set to.
+    pub swap: usize,
 }
 
 impl Profile {
@@ -91,6 +93,8 @@ pub struct Entry {
     /// changing one of its settings has to edit.
     pub dtdir: String,
     pub file: String,
+    /// The `options` line, verbatim: the command line it boots with.
+    pub options: String,
     /// When its file was written, in seconds since the epoch. Which kernel is newest,
     /// since git-describe releases do not compare; see `order`.
     pub at: u64,
@@ -155,6 +159,8 @@ pub struct Conf {
     /// The `devicetreedir` line, verbatim: where this entry's trees and overlays are,
     /// written as the loader sees them.
     pub dtdir: String,
+    /// The `options` line, verbatim.
+    pub options: String,
     /// When the file was written, in seconds since the epoch, or 0 when unknown, and
     /// the file's own name. Both are tiebreaks in the order; see `order`.
     pub at: u64,
@@ -174,6 +180,7 @@ impl Conf {
             user: self.user.clone(),
             dtdir: self.dtdir.clone(),
             file: self.file.clone(),
+            options: self.options.clone(),
             at: self.at,
         }
     }
@@ -432,6 +439,14 @@ fn classify(subsystems: &str, tran: &str, disk: &str, hotplug: bool) -> (Medium,
     }
 }
 
+/// The device the running root is on, without the subvolume that follows it in
+/// brackets. None in the boot menu's initramfs, whose root is no device.
+fn booted_dev() -> Option<String> {
+    output(&["findmnt", "-no", "SOURCE", "/"])
+        .map(|s| s.trim().split('[').next().unwrap_or("").to_string())
+        .filter(|d| d.starts_with("/dev/"))
+}
+
 /// Every filesystem of ours the machine can see, the booted one first.
 ///
 /// Found by partition type rather than by filesystem label, because the label
@@ -446,10 +461,7 @@ pub fn stores() -> Vec<Store> {
     else {
         return Vec::new();
     };
-    // The booted device, without the subvolume that follows it in brackets.
-    let booted = output(&["findmnt", "-no", "SOURCE", "/"])
-        .map(|s| s.trim().split('[').next().unwrap_or("").to_string())
-        .unwrap_or_default();
+    let booted = booted_dev().unwrap_or_default();
 
     let mut out: Vec<Store> = Vec::new();
     for line in listing.lines() {
@@ -561,6 +573,8 @@ pub fn listing(kernels: Kernels) -> Listing {
             }
             let mut profile = profile.clone();
             profile.entries = mine.iter().map(|c| c.entry()).collect();
+            profile.swap =
+                drive.swaps.iter().find(|(name, _)| *name == profile.name).map_or(0, |(_, s)| *s);
             profiles.push(profile);
         }
     }
@@ -607,6 +621,8 @@ struct Drive {
     store: Store,
     profiles: Vec<Profile>,
     confs: Vec<Conf>,
+    /// What each subvolume an entry mounts is set to for swap, by subvolume.
+    swaps: Vec<(String, usize)>,
 }
 
 /// Every filesystem of ours, read at once: its profiles and the entries that boot them.
@@ -672,7 +688,7 @@ fn read_drives() -> Vec<Drive> {
                     } else {
                         sudo(&["list-profiles", "-d", &store.dev])
                     };
-                    let confs = drive_confs(store);
+                    let (confs, swaps) = drive_confs(store);
                     crate::logline!(
                         "boot           read {} in {:.3}s, {} rows and {} entries",
                         dev_label(store),
@@ -680,18 +696,18 @@ fn read_drives() -> Vec<Drive> {
                         listing.as_deref().map_or(0, |l| l.lines().count()),
                         confs.len()
                     );
-                    (listing, confs)
+                    (listing, confs, swaps)
                 })
             })
             .collect();
         reads
             .into_iter()
-            .map(|r| r.join().unwrap_or((None, Vec::new())))
-            .collect::<Vec<(Option<String>, Vec<Conf>)>>()
+            .map(|r| r.join().unwrap_or((None, Vec::new(), Vec::new())))
+            .collect::<Vec<(Option<String>, Vec<Conf>, Vec<(String, usize)>)>>()
     });
 
     let mut out = Vec::new();
-    for (store, (listing, confs)) in stores.into_iter().zip(read) {
+    for (store, (listing, confs, swaps)) in stores.into_iter().zip(read) {
         let Some(listing) = listing else {
             // A drive that answers nothing is not the same as a drive with no profiles,
             // and only the log can tell the two apart afterwards.
@@ -705,7 +721,7 @@ fn read_drives() -> Vec<Drive> {
         // way a profile carries one only when saying which is the point.
         let dev = if store.booted { "" } else { store.dev.as_str() };
         let profiles = parse_listing(&listing, store.medium, dev, &store.disk, store.kind);
-        out.push(Drive { store, profiles, confs });
+        out.push(Drive { store, profiles, confs, swaps });
     }
     out
 }
@@ -720,21 +736,34 @@ fn dev_label(store: &Store) -> &str {
     }
 }
 
-/// The boot entries one drive carries.
+/// The boot entries one drive carries, and the swap setting of every root they mount.
 ///
 /// A profile's entries live on the profile's own drive: a card's entry names kernels
 /// only that card has, and profile names repeat across drives, so the booted /boot
 /// would answer with the wrong entry rather than with none. For the booted filesystem
 /// that is /boot itself; any other drive is read through a read-only top-level mount,
 /// as the tools do.
-fn drive_confs(store: &Store) -> Vec<Conf> {
-    if store.booted {
-        return read_confs(std::path::Path::new(BOOTED_ENTRIES));
+///
+/// The swap setting is in each profile's own root, which only a top-level mount
+/// reaches, so the booted drive is mounted too, for that alone. Read here because the
+/// other drives are mounted here already, and only for roots an entry mounts: a
+/// subvolume nothing boots has no row to show it on.
+fn drive_confs(store: &Store) -> (Vec<Conf>, Vec<(String, usize)>) {
+    let top = if store.dev.is_empty() { None } else { TopLevel::ro(&store.dev) };
+    let confs = match (&top, store.booted) {
+        (_, true) => read_confs(std::path::Path::new(BOOTED_ENTRIES)),
+        (Some(top), false) => read_confs(&top.path.join("boot/loader/entries")),
+        (None, false) => Vec::new(),
+    };
+    let mut swaps: Vec<(String, usize)> = Vec::new();
+    if let Some(top) = &top {
+        for conf in &confs {
+            if valid_name(&conf.subvol) && !swaps.iter().any(|(name, _)| *name == conf.subvol) {
+                swaps.push((conf.subvol.clone(), read_swap(&top.path.join(&conf.subvol))));
+            }
+        }
     }
-    match TopLevel::ro(&store.dev) {
-        Some(top) => read_confs(&top.path.join("boot/loader/entries")),
-        None => Vec::new(),
-    }
+    (confs, swaps)
 }
 
 /// Every entry in one directory, parsed.
@@ -842,6 +871,7 @@ pub fn parse_conf(name: &str, text: &str) -> Option<Conf> {
         system,
         user,
         dtdir: field("devicetreedir").to_string(),
+        options: field("options").to_string(),
         at: 0,
         file: name.to_string(),
     })
@@ -946,15 +976,20 @@ pub fn with_video_out(text: &str, choice: usize) -> String {
 /// its own kernel's tree directory, so each gets the overlay from under its own, which
 /// is why the path is read out of every file rather than built once.
 ///
-/// The booted filesystem is written in place; any other drive is mounted at its top
-/// level for as long as the rewrite takes, because that is where its entries are. Both
-/// are the same file edit: nothing here knows or cares which drive it is on, and the
-/// kernel row beside this one has always reached any profile the same way.
-///
 /// Entries below `MIN_KERNEL` are skipped, and `video_out_of` reads the first entry
 /// at or above it, so a profile that still carries a 6.1 entry answers for the
 /// kernels it actually boots.
 pub fn set_video_out(p: &Profile, choice: usize) -> Result<(), String> {
+    rewrite_entries(p, |text| with_video_out(text, choice))
+}
+
+/// Rewrite every entry of a profile at or above `MIN_KERNEL` with `edit`.
+///
+/// The booted filesystem is written in place; any other drive is mounted at its top
+/// level for as long as the rewrite takes, because that is where its entries are. Both
+/// are the same file edit: nothing here knows or cares which drive it is on, and the
+/// kernel row beside these settings has always reached any profile the same way.
+fn rewrite_entries(p: &Profile, edit: impl Fn(&str) -> String) -> Result<(), String> {
     // Held for the whole loop, so one mount covers every entry, and dropped with it.
     let hold = match p.dev.is_empty() {
         true => None,
@@ -967,10 +1002,10 @@ pub fn set_video_out(p: &Profile, choice: usize) -> Result<(), String> {
         None => std::path::PathBuf::from(BOOTED_ENTRIES),
     };
     for entry in &p.entries {
-        // The BSP kernels are not written to. These overlays are nodes of our own
-        // tree and a 6.1 entry's directory does not hold them, so an overlay line
-        // there would name a file that is not there and the loader would fail on an
-        // entry that boots today. Those entries are hidden from the menu anyway;
+        // The BSP kernels are not written to. Our overlays are nodes of our own tree
+        // and a 6.1 entry's directory does not hold them, so an overlay line there
+        // would name a file that is not there and the loader would fail on an entry
+        // that boots today. Those entries are hidden from the menu anyway;
         // --all-kernels brings them back for a bisect and this still leaves them be.
         if !version_at_least(&entry.version, MIN_KERNEL) {
             continue;
@@ -978,29 +1013,33 @@ pub fn set_video_out(p: &Profile, choice: usize) -> Result<(), String> {
         if entry.file.is_empty() || entry.file.contains('/') {
             return Err("an entry with no file".into());
         }
-        set_one_video_out(&dir.join(&entry.file), choice)?;
+        rewrite_one(&dir.join(&entry.file), &edit)?;
     }
     // The lines are written, but on btrfs metadata reaches the disk with the next
-    // transaction commit, up to `commit=` seconds later, and what this row changes is
-    // what the next boot does. Somebody who picks an output and pulls the power should
+    // transaction commit, up to `commit=` seconds later, and what these rows change is
+    // what the next boot does. Somebody who picks a setting and pulls the power should
     // not come back to the old one. Once for the whole change, since a profile can have
     // four entries, and `sync` needs no privilege, unlike the writes above.
     unsafe { libc::sync() };
     Ok(())
 }
 
-/// One entry file, rewritten.
-///
-/// The file belongs to root and flipctl does not, so the bytes go through `tee`:
-/// deciding what the file should say is `with_video_out`'s job, and the privileged
-/// step is as small as writing what it decided.
-fn set_one_video_out(path: &std::path::Path, choice: usize) -> Result<(), String> {
-    let shown = path.display();
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{shown}: {e}"))?;
-    let next = with_video_out(&text, choice);
+/// One file, rewritten by `edit`, and left alone when that changes nothing.
+fn rewrite_one(path: &std::path::Path, edit: impl Fn(&str) -> String) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let next = edit(&text);
     if next == text {
         return Ok(());
     }
+    write_file(path, &next)
+}
+
+/// Write a root-owned file.
+///
+/// flipctl is not root, so the bytes go through `tee`: deciding what the file should
+/// say is the caller's job, and the privileged step is as small as writing it.
+fn write_file(path: &std::path::Path, text: &str) -> Result<(), String> {
+    let shown = path.display();
     let Some(target) = path.to_str() else {
         return Err(format!("{shown}: not a path a tool can take"));
     };
@@ -1014,13 +1053,220 @@ fn set_one_video_out(path: &std::path::Path, choice: usize) -> Result<(), String
         .stdin
         .take()
         .ok_or_else(|| "tee: no stdin".to_string())?
-        .write_all(next.as_bytes())
+        .write_all(text.as_bytes())
         .map_err(|e| format!("tee: {e}"))?;
     match child.wait() {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(format!("tee {shown}: {status}")),
         Err(e) => Err(format!("tee {shown}: {e}")),
     }
+}
+
+// ── RAM ────────────────────────────────────────────────────────────────────
+
+/// What the RAM line offers, and the `mem=` each choice boots with.
+///
+/// Smallest first, so Right gives more. The last is all of it and writes no argument at
+/// all, which is also what an entry without one reads as. The default has to cost
+/// nothing: `mem=` is fixed when the kernel boots, so a profile that carries one can
+/// never be pivoted into from a kernel started without it, and has to be kexec'd.
+pub const RAM: &[(&str, &str)] = &[("2G", "2 GB"), ("4G", "4 GB"), ("6G", "6 GB"), ("", "8 GB")];
+/// The choice that is all of it.
+pub const RAM_ALL: usize = RAM.len() - 1;
+
+/// Which of them a command line is on. The last `mem=` counts, as the kernel takes it,
+/// and a value not in the table reads as the default.
+pub fn ram_of(options: &str) -> usize {
+    let value = options
+        .split_whitespace()
+        .filter_map(|a| a.strip_prefix("mem="))
+        .last()
+        .unwrap_or_default();
+    RAM.iter().position(|(v, _)| *v == value).unwrap_or(RAM_ALL)
+}
+
+/// Which of them a profile is on: what its newest entry that this setting is written
+/// to says, so the row reads back what the write put there.
+pub fn ram_for(p: &Profile) -> usize {
+    p.entries
+        .iter()
+        .find(|e| version_at_least(&e.version, MIN_KERNEL))
+        .map_or(RAM_ALL, |e| ram_of(&e.options))
+}
+
+/// The entry file's text with `choice` on its command line.
+///
+/// Pure, for the same reason as `with_video_out`. Every `mem=` comes off and the chosen
+/// one goes on the end; every other argument stays where it was, and so does the
+/// spacing after `options`.
+pub fn with_ram(text: &str, choice: usize) -> String {
+    let value = RAM.get(choice).map_or("", |(v, _)| *v);
+    let mut out = String::with_capacity(text.len() + 16);
+    for line in text.lines() {
+        match line.strip_prefix("options").filter(|r| r.starts_with(char::is_whitespace)) {
+            Some(rest) => {
+                let lead = &line[..line.len() - rest.trim_start().len()];
+                let mut args: Vec<&str> =
+                    rest.split_whitespace().filter(|a| !a.starts_with("mem=")).collect();
+                let mem = format!("mem={value}");
+                if !value.is_empty() {
+                    args.push(&mem);
+                }
+                out.push_str(lead);
+                out.push_str(&args.join(" "));
+            }
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Put `choice` on every entry of a profile, as `set_video_out` does.
+pub fn set_ram(p: &Profile, choice: usize) -> Result<(), String> {
+    rewrite_entries(p, |text| with_ram(text, choice))
+}
+
+// ── Swap ───────────────────────────────────────────────────────────────────
+
+/// What the Swap line offers: none, the shared swap file in @swap, or that file with
+/// zswap's compressed pool in front of it.
+///
+/// Kept in the profile's own root rather than on its command line, so a profile is
+/// still pivoted into whatever it is set to: whichever way it is entered, it is its own
+/// systemd that reads its own fstab and tmpfiles.d.
+pub const SWAP: &[&str] = &["Off", "On", "ZSwap"];
+const SWAP_ZSWAP: usize = 2;
+
+/// The swap file, as the fstab line that turns it on names it, and where @swap is mounted.
+const SWAP_FILE: &str = "/swap/swapfile";
+const SWAP_LINE: &str = "/swap/swapfile none swap defaults,discard=pages 0 0";
+const SWAP_MOUNT: &str = "/swap";
+/// Where in a profile zswap is set, and its settings.
+const ZSWAP_CONF: &str = "etc/tmpfiles.d/zswap.conf";
+const ZSWAP_ENABLED: &str = "/sys/module/zswap/parameters/enabled";
+const ZSWAP_COMPRESSOR: &str = "/sys/module/zswap/parameters/compressor";
+const ZSWAP_SHRINKER: &str = "/sys/module/zswap/parameters/shrinker_enabled";
+
+/// Which of `SWAP` a profile's fstab and zswap drop-in say.
+///
+/// No drop-in reads as zswap on, because that is the kernel's own default: a profile
+/// somebody gave a swap line by hand gets zswap, and the row says so.
+pub fn swap_of(fstab: &str, zswap: &str) -> usize {
+    let on = fstab.lines().any(|l| {
+        let mut f = l.split_whitespace();
+        f.next() == Some(SWAP_FILE) && f.nth(1) == Some("swap")
+    });
+    let zswap = zswap
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            (f.len() == 7 && f[0] == "w" && f[1] == ZSWAP_ENABLED).then(|| f[6])
+        })
+        .last()
+        .is_none_or(|v| matches!(v, "Y" | "y" | "1"));
+    match (on, zswap) {
+        (false, _) => 0,
+        (true, false) => 1,
+        (true, true) => SWAP_ZSWAP,
+    }
+}
+
+/// The fstab with swap put on or taken off: @swap mounted at /swap, and the swap file in
+/// it. Every other line stays, and a file that does not end in a newline gets one before
+/// the lines go on.
+///
+/// @swap is mounted from whatever the root line mounts, so a profile on a card swaps to
+/// the card's own file. `nofail` because a mount that fails here would otherwise stop
+/// the boot at local-fs.target, for the want of swap. Err when on and there is no root
+/// line to take the filesystem from.
+pub fn with_swap(fstab: &str, on: bool) -> Result<String, String> {
+    let ours = |l: &str| {
+        let mut f = l.split_whitespace();
+        let (spec, at) = (f.next(), f.next());
+        spec == Some(SWAP_FILE) || at == Some(SWAP_MOUNT)
+    };
+    let mut out = String::with_capacity(fstab.len() + 128);
+    for line in fstab.lines().filter(|l| !ours(l)) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if on {
+        let root = fstab
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .find_map(|l| {
+                let mut f = l.split_whitespace();
+                let spec = f.next()?;
+                (f.next() == Some("/")).then_some(spec)
+            })
+            .ok_or("the profile's fstab mounts no root")?;
+        out.push_str(&format!("{root} {SWAP_MOUNT} btrfs subvol=@swap,noatime,nofail 0 0\n"));
+        out.push_str(SWAP_LINE);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// The zswap drop-in for a choice.
+///
+/// Written for every choice, Off included. The switch is the kernel's, not the
+/// profile's, so it outlives a pivot: a profile that left it unsaid would run with
+/// whatever the profile before it chose. ZSwap also moves it from the kernel's lzo to
+/// zstd, which is a module here and loads on demand, and turns the shrinker on, so cold
+/// compressed pages go out to the swap file under memory pressure rather than holding
+/// RAM until the pool is full. Both are set before it is enabled, so the pool starts
+/// out in zstd.
+pub fn zswap_conf(choice: usize) -> String {
+    match choice == SWAP_ZSWAP {
+        true => format!(
+            "w {ZSWAP_COMPRESSOR} - - - - zstd\nw {ZSWAP_SHRINKER} - - - - Y\n\
+             w {ZSWAP_ENABLED} - - - - Y\n"
+        ),
+        false => format!("w {ZSWAP_ENABLED} - - - - N\n"),
+    }
+}
+
+/// What one profile's root says, or Off when it cannot be read.
+fn read_swap(root: &std::path::Path) -> usize {
+    let fstab = std::fs::read_to_string(root.join("etc/fstab")).unwrap_or_default();
+    let zswap = std::fs::read_to_string(root.join(ZSWAP_CONF)).unwrap_or_default();
+    swap_of(&fstab, &zswap)
+}
+
+/// Write `choice` into a profile's root.
+///
+/// Through a writable top-level mount on every drive, the booted one included: the
+/// profile may be the one running, or another one beside it, and a top-level mount is
+/// the one place both are the same path.
+pub fn set_swap(p: &Profile, choice: usize) -> Result<(), String> {
+    if !valid_name(&p.name) {
+        return Err("invalid name".into());
+    }
+    let dev = match p.dev.is_empty() {
+        true => booted_dev().ok_or("cannot find the booted drive")?,
+        false => p.dev.clone(),
+    };
+    // The file every profile on the drive shares, made the first time one turns swap on.
+    if choice != 0 {
+        run(&on_dev("create-swap", &p.dev, &[]))?;
+    }
+    let top = TopLevel::rw(&dev).ok_or_else(|| format!("could not mount {dev} to write to"))?;
+    let root = top.path.join(&p.name);
+    let fstab = root.join("etc/fstab");
+    let text = std::fs::read_to_string(&fstab).map_err(|e| format!("{}: {e}", fstab.display()))?;
+    let next = with_swap(&text, choice != 0)?;
+    if next != text {
+        write_file(&fstab, &next)?;
+    }
+    let conf = root.join(ZSWAP_CONF);
+    let want = zswap_conf(choice);
+    if std::fs::read_to_string(&conf).ok().as_deref() != Some(want.as_str()) {
+        write_file(&conf, &want)?;
+    }
+    // As for the entries: what this changes is the next boot.
+    unsafe { libc::sync() };
+    Ok(())
 }
 
 /// An entry file name split into its id and the tries left in its boot counter.
@@ -1114,8 +1360,9 @@ pub fn parse_listing(
         let strip_id = |s: &str| s.split(" (").next().unwrap_or(s).trim().to_string();
         let dash_to_empty = |s: String| if s == "-" { String::new() } else { s };
         out.push(Profile {
-            // Filled in by `listing`, which is what reads the entries.
+            // Filled in by `listing`, which is what reads the entries and the roots.
             entries: Vec::new(),
+            swap: 0,
             auto_boot: false,
             medium,
             dev: dev.to_string(),
@@ -2101,6 +2348,131 @@ mod mount_tests {
             assert!(!name.contains('/'), "{dev:?} -> {name}");
             assert!(name.starts_with("flipctl-entries."), "{dev:?} -> {name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod ram_tests {
+    use super::*;
+
+    const ENTRY: &str = "\
+title      Desktop 7.2.0-ge8750f615eb
+version    7.2.0-ge8750f615ebf
+options    root=UUID=fe225468 rootflags=subvol=@Desktop flipper.entry=900-x
+linux      /@Desktop/usr/lib/modules/7.2.0-ge8750f615ebf/vmlinuz
+";
+
+    fn options(text: &str) -> &str {
+        text.lines().find_map(|l| l.strip_prefix("options")).unwrap_or_default()
+    }
+
+    /// All of it writes nothing, so a profile nobody configured is still one the boot
+    /// menu can pivot into.
+    #[test]
+    fn the_default_leaves_the_file_alone() {
+        assert_eq!(with_ram(ENTRY, RAM_ALL), ENTRY);
+        assert_eq!(ram_of(options(ENTRY)), RAM_ALL);
+    }
+
+    /// A choice is one argument, read back as the same choice, and replaced rather
+    /// than added to when it changes.
+    #[test]
+    fn a_choice_reads_back_and_replaces_itself() {
+        let four = with_ram(ENTRY, 1);
+        assert!(options(&four).ends_with(" mem=4G"), "{four}");
+        assert_eq!(ram_of(options(&four)), 1);
+        let two = with_ram(&four, 0);
+        assert_eq!(options(&two).matches("mem=").count(), 1, "{two}");
+        assert_eq!(ram_of(options(&two)), 0);
+        assert_eq!(with_ram(&two, RAM_ALL), ENTRY);
+    }
+
+    /// Only `mem=` itself: an argument that merely starts the same way is somebody
+    /// else's, and the spacing kernel-install wrote after `options` stays.
+    #[test]
+    fn other_arguments_are_untouched() {
+        let busy = ENTRY.replace("flipper.entry", "memmap=1G$4G flipper.entry");
+        let two = with_ram(&busy, 0);
+        assert!(two.contains("options    root=UUID"), "{two}");
+        assert!(two.contains(" memmap=1G$4G flipper.entry=900-x mem=2G\n"), "{two}");
+    }
+
+    /// A value not in the table reads as the default rather than as some other row,
+    /// and the last of several is the one the kernel takes.
+    #[test]
+    fn an_unknown_value_reads_as_the_default() {
+        assert_eq!(ram_of("root=x mem=3G"), RAM_ALL);
+        assert_eq!(ram_of("mem=2G root=x mem=6G"), 2);
+    }
+}
+
+#[cfg(test)]
+mod swap_tests {
+    use super::*;
+
+    const FSTAB: &str = "\
+UUID=fe225468 / btrfs defaults 0 1
+UUID=fe225468 /home btrfs subvol=@home 0 0
+";
+
+    fn on(fstab: &str) -> String {
+        with_swap(fstab, true).expect("a root line")
+    }
+
+    /// Each choice reads back as itself from what it writes.
+    #[test]
+    fn every_choice_reads_back() {
+        for choice in 0..SWAP.len() {
+            let fstab = with_swap(FSTAB, choice != 0).unwrap();
+            assert_eq!(swap_of(&fstab, &zswap_conf(choice)), choice, "{}", SWAP[choice]);
+        }
+    }
+
+    /// A stock profile: no swap line and no drop-in, so Off.
+    #[test]
+    fn a_stock_profile_is_off() {
+        assert_eq!(swap_of(FSTAB, ""), 0);
+    }
+
+    /// A swap line with no drop-in is zswap on, because that is the kernel's default.
+    #[test]
+    fn no_drop_in_reads_as_the_kernel_default() {
+        assert_eq!(swap_of(&on(FSTAB), ""), 2);
+    }
+
+    /// @swap is mounted from the root's own filesystem, before the file in it, and
+    /// with nofail so a mount that fails cannot stop the boot.
+    #[test]
+    fn swap_is_mounted_from_the_root_filesystem() {
+        let lines: Vec<String> = on(FSTAB).lines().map(str::to_string).collect();
+        assert_eq!(lines[2], "UUID=fe225468 /swap btrfs subvol=@swap,noatime,nofail 0 0");
+        assert_eq!(lines[3], SWAP_LINE);
+        assert!(with_swap("tmpfs /tmp tmpfs defaults 0 0\n", true).is_err());
+    }
+
+    /// The other lines stay as they were, the swap lines are never doubled, and turning
+    /// swap off gives back the file it started as.
+    #[test]
+    fn the_fstab_keeps_its_other_lines() {
+        let twice = on(&on(FSTAB));
+        assert_eq!(twice.lines().filter(|l| l.contains("/swap")).count(), 2, "{twice}");
+        assert!(twice.starts_with(FSTAB), "{twice}");
+        assert_eq!(with_swap(&twice, false).unwrap(), FSTAB);
+        // A file missing its last newline still gets the lines on lines of their own.
+        let ragged = on(FSTAB.trim_end());
+        assert!(ragged.contains("0 0\nUUID=fe225468 /swap"), "{ragged}");
+    }
+
+    /// Off still says zswap is off: the switch outlives a pivot. ZSwap names zstd
+    /// before it switches on.
+    #[test]
+    fn every_choice_sets_the_switch() {
+        assert!(zswap_conf(0).ends_with("enabled - - - - N\n"));
+        assert!(zswap_conf(1).ends_with("enabled - - - - N\n"));
+        let z = zswap_conf(2);
+        assert!(z.ends_with("enabled - - - - Y\n"), "{z}");
+        assert!(z.starts_with("w /sys/module/zswap/parameters/compressor - - - - zstd\n"), "{z}");
+        assert!(z.contains("\nw /sys/module/zswap/parameters/shrinker_enabled - - - - Y\n"), "{z}");
     }
 }
 

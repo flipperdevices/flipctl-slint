@@ -180,7 +180,7 @@ enum Line {
     /// Centred in the box: the size, a message, the hint under it.
     Centred(String),
     /// A name on the left and, for a settings row, a value against the right edge.
-    Split { text: String, value: String, selected: bool },
+    Split { text: String, value: String, selected: bool, at_start: bool, at_end: bool },
 }
 
 /// The width a value slot takes: the value, and the chevrons either side.
@@ -196,12 +196,14 @@ fn slot(value: &str) -> String {
 fn popup_content(view: &View) -> Vec<Line> {
     let mut out = Vec::new();
     // The size the panel centres under the title: what deleting this profile alone
-    // would free.
-    out.push(Line::Centred(if view.size_unit.is_empty() {
-        format!("Size: {}", view.size_num)
-    } else {
-        format!("Size: {} {}", view.size_num, view.size_unit)
-    }));
+    // would free. Not on a screen that has dropped it.
+    if view.show_size {
+        out.push(Line::Centred(if view.size_unit.is_empty() {
+            format!("Size: {}", view.size_num)
+        } else {
+            format!("Size: {} {}", view.size_num, view.size_unit)
+        }));
+    }
     for l in &view.popup_lines {
         let mut text = l.text.clone();
         if l.heart {
@@ -211,6 +213,8 @@ fn popup_content(view: &View) -> Vec<Line> {
             text,
             value: if l.kind == 2 { l.value.clone() } else { String::new() },
             selected: l.selected,
+            at_start: l.at_start,
+            at_end: l.at_end,
         });
     }
     for m in &view.popup_message {
@@ -244,11 +248,15 @@ pub fn popup_body(view: &View, inner: usize) -> Vec<(String, bool)> {
         .iter()
         .map(|l| match l {
             Line::Centred(s) => (centred(s, inner), false),
-            Line::Split { text, value, selected } => {
+            Line::Split { text, value, selected, at_start, at_end } => {
                 let right = if value.is_empty() {
                     String::new()
                 } else if *selected {
-                    format!("< {value} >")
+                    // A chevron past the end of the range is a space, so the value
+                    // stays put.
+                    let left = if *at_start { ' ' } else { '<' };
+                    let right = if *at_end { ' ' } else { '>' };
+                    format!("{left} {value} {right}")
                 } else {
                     slot(value)
                 };
@@ -837,6 +845,8 @@ mod tests {
             value: "7.0.1".into(),
             selected: true,
             heart: false,
+            at_start: false,
+            at_end: false,
         }];
         let selected = popup_body(&view, 30);
         assert!(selected[1].0.contains("< 7.0.1 >"), "{:?}", selected[1]);
@@ -866,6 +876,8 @@ mod tests {
             value: String::new(),
             selected: false,
             heart: false,
+            at_start: false,
+            at_end: false,
         }];
         let (x, _, w, h) = popup_rect(&view, 80, 24);
         // Its longest line is "Drive: /dev/sda (UFS)": a border and a gutter each
@@ -967,6 +979,7 @@ mod tests {
             size_num: "?".into(),
             size_unit: String::new(),
             size_loading: false,
+            show_size: true,
             popup_w: 0.0,
             popup_body_h: 0.0,
             size_slot_w: 0.0,

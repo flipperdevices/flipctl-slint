@@ -173,6 +173,7 @@ export component Root inherits Window {
     in property <length> boot_popup_icon_h;
     in property <string> boot_popup_size_number;
     in property <string> boot_popup_size_unit;
+    in property <bool> boot_popup_show_size: true;
     in property <length> boot_popup_size_slot_w;
     in property <[BootPopupRow]> boot_popup_rows;
     in property <[string]> boot_popup_message;
@@ -447,6 +448,7 @@ export component Root inherits Window {
         popup_icon_h: root.boot_popup_icon_h;
         popup_size_number: root.boot_popup_size_number;
         popup_size_unit: root.boot_popup_size_unit;
+        popup_show_size: root.boot_popup_show_size;
         popup_size_slot_w: root.boot_popup_size_slot_w;
         popup_rows: root.boot_popup_rows;
         popup_message: root.boot_popup_message;
