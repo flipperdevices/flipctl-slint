@@ -98,6 +98,14 @@ text_draw_y         = 3     # MenuLine.js TEXT_DRAW_Y, puts cap top at line y+6
 # script is run through. Wider than the icon gap, so the pair reads as a name and an
 # aside rather than as two words of one name.
 label_tag_gap       = 6
+# A three-column table on a detail screen, Software Revisions': a left column, a
+# cell, and a right column, a gap between each. The cell takes the rest of the line,
+# so the three and their gaps fill it: 76 + 6 + 68 + 6 + 84 is the 240 between the
+# margins. The left column holds the widest codebase, `linux-mainline` at 74; the
+# right one twelve of the widest hex digit, 84, and more of the narrower ones.
+table_left_w        = 76
+table_gap           = 6
+table_right_w       = 84
 status_pad_r        = 5     # MenuLine.js STATUS_PAD_R
 
 # Gap between each chevron and the value in a "< ON >" status. MenuLine.js pins

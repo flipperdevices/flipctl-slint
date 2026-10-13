@@ -103,6 +103,7 @@ export component Root inherits Window {
 
     // Detail screens behind Settings and Network.
     in property <[DetailRow]> detail_rows;
+    in property <[string]> detail_asides;
     in property <int> detail_offset;
     in property <[string]> detail_buttons;
     // A detail page as a QR code, drawn over its rows while set. Empty otherwise.
@@ -293,6 +294,7 @@ export component Root inherits Window {
         access_tech: root.access_tech;
         modem_quality: root.modem_quality;
         rows: root.detail_rows;
+        asides: root.detail_asides;
         breadcrumb: root.breadcrumb;
         offset: root.detail_offset;
         arrow_pressed: root.arrow_pressed;

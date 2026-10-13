@@ -19,7 +19,12 @@ import { ChevronStatus } from "list.slint";
 // One row. `kind` picks the shape; the unused fields are ignored.
 export struct DetailRow {
     // 0 label and value, 1 divider, 2 gauge, 3 full-width text, 4 a value the
-    // left and right keys change, drawn between the chevrons the settings rows use.
+    // left and right keys change, drawn between the chevrons the settings rows use,
+    // 5 label and value with the label in the bold face, 6 to 8 a line of a
+    // three-column table, the label left, the row's aside right and the value in the
+    // cell between: 7 right-aligned against the right column, 6 a cell that wraps,
+    // starting one gap after its own label, and 8 that cell's next line, its label
+    // measured to find the same edge but not drawn.
     kind: int,
     label: string,
     value: string,
@@ -31,6 +36,9 @@ export struct DetailRow {
 
 export component DetailBody inherits Rectangle {
     in property <[DetailRow]> rows;
+    // A table row's right column, by row index. Kept out of DetailRow, whose fields
+    // apps fill in by name: a new one would have to be added to every one of them.
+    in property <[string]> asides;
     // Breadcrumb trail above the rows. flipctl's own screens draw it; an app has
     // none, and its rows start in that band instead of under an empty one.
     in property <string> breadcrumb;
@@ -122,7 +130,8 @@ export component DetailBody inherits Rectangle {
         // Label. Kind 3 is a full-width line with no value; a gauge keeps its
         // label in the same column as every other row so the left edge is one
         // straight line down the screen.
-        if row.kind == 0 || row.kind == 2 || row.kind == 3 || row.kind == 4: Text {
+        if row.kind == 0 || row.kind == 2 || row.kind == 3 || row.kind == 4
+            || row.kind == 6 || row.kind == 7: Text {
             x: root.left;
             y: 0;
             text: row.label;
@@ -131,9 +140,49 @@ export component DetailBody inherits Rectangle {
             color: parent.ink;
         }
 
+        // A label in the bold face, for a row that heads what follows it.
+        if row.kind == 5: Text {
+            x: root.left;
+            y: 0;
+            text: row.label;
+            font-size: 16px;
+            font-family: "Born2bSportyV2";
+            color: parent.ink;
+        }
+
+        // A table's cell that wraps: left-aligned one gap after the row's label, its
+        // next lines on the same edge. Rust cut it to the room left there.
+        if row.kind == 6 || row.kind == 8: Text {
+            x: root.left + parent.label_w + FlipperTheme.table_gap;
+            y: 0;
+            text: row.value;
+            font-size: 16px;
+            font-family: "Busy9px";
+            color: parent.ink;
+        }
+        // A cell on one line, right-aligned against the right column.
+        if row.kind == 7: Text {
+            x: root.right - FlipperTheme.table_right_w - FlipperTheme.table_gap
+                - (self.width - 1px);
+            y: 0;
+            text: row.value;
+            font-size: 16px;
+            font-family: "Busy9px";
+            color: parent.ink;
+        }
+        // And its right column, right-aligned on the margin.
+        if row.kind == 6 || row.kind == 7: Text {
+            x: root.right - (self.width - 1px);
+            y: 0;
+            text: root.asides[i];
+            font-size: 16px;
+            font-family: "Busy9px";
+            color: parent.ink;
+        }
+
         // Value, right-aligned. Same one-pixel correction as everywhere else:
         // the prototype's textWidth is one less than Slint's measured width.
-        if row.kind == 0: Text {
+        if row.kind == 0 || row.kind == 5: Text {
             x: root.right - (self.width - 1px);
             y: 0;
             text: row.value;

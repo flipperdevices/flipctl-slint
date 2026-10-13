@@ -184,3 +184,66 @@ fn no_breadcrumb_starts_under_the_status_bar() {
         "row {visible} should be scrolled out of view, not drawn above the soft strip"
     );
 }
+
+/// The inked columns of row `index`, left to right.
+fn ink_columns(frame: &[flipper_ui::pixel::Gray8], index: usize) -> Vec<usize> {
+    let w = usize::from(theme::PANEL_W);
+    let top = usize::from(metric::SUBMENU_CONTAINER_Y as u16)
+        + index * usize::from(metric::ITEM_H as u16);
+    (0..w)
+        .filter(|&x| {
+            (top..top + usize::from(metric::ITEM_H as u16)).any(|y| frame[y * w + x].0 < 0xd0)
+        })
+        .collect()
+}
+
+/// A three-column table keeps its columns. Each edge is checked against a plain row
+/// drawing the same word, so a glyph's own bearing cancels out: a one-line cell ends
+/// the right column and a gap short of the margin, the right column ends on the
+/// margin as a plain value does, and a cell that wraps starts a gap after its own
+/// label, with its next line on that edge.
+#[test]
+fn a_table_keeps_its_columns() {
+    let window = FlipperSlintPlatform::install();
+    let screen = Root::new().expect("create Root");
+
+    let rows = vec![
+        row(0, "refs", "dev", 0),
+        row(7, "", "dev", 0),
+        row(6, "buildscripts", "refs", 0),
+        row(8, "buildscripts", "refs", 0),
+    ];
+    let asides: Vec<slint::SharedString> = vec!["".into(), "dev".into(), "".into(), "".into()];
+    screen.set_screen(Screen::Detail);
+    screen.set_breadcrumb("> Software Revisions".into());
+    screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    screen.set_detail_asides(slint::ModelRc::new(slint::VecModel::from(asides)));
+    screen.set_detail_offset(0);
+    screen.show().expect("show");
+    slint::platform::update_timers_and_animations();
+    let frame = render_frame(&window).expect("a fresh screen always paints");
+
+    let reference = ink_columns(&frame, 0);
+    let (label_start, value_end) = (reference[0] as i32, *reference.last().unwrap() as i32);
+
+    let line = ink_columns(&frame, 1);
+    assert_eq!(*line.last().unwrap() as i32, value_end, "the right column is off the margin");
+    let cell_end = line
+        .iter()
+        .map(|&x| x as i32)
+        .filter(|&x| x <= value_end - metric::TABLE_RIGHT_W)
+        .max()
+        .expect("the cell has ink");
+    assert_eq!(cell_end, value_end - metric::TABLE_RIGHT_W - metric::TABLE_GAP);
+
+    let after = label_start
+        + i32::from(flipper_ui::font::ROW.text_width("buildscripts"))
+        + metric::TABLE_GAP;
+    let wrapped = ink_columns(&frame, 2);
+    let cell_start = wrapped.iter().map(|&x| x as i32).find(|&x| x >= after - 1).unwrap();
+    assert_eq!(cell_start, after, "the wrapped cell is off its label");
+    // From the cell's edge on: the line above's descenders reach into this band.
+    let next = ink_columns(&frame, 3);
+    let next_start = next.iter().map(|&x| x as i32).find(|&x| x >= after - 1).unwrap();
+    assert_eq!(next_start, cell_start, "the next line is off the cell's edge");
+}

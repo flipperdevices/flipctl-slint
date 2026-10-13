@@ -288,7 +288,7 @@ fn tool(args: &[&str]) -> Command {
     cmd
 }
 
-fn sudo(args: &[&str]) -> Option<String> {
+pub(crate) fn sudo(args: &[&str]) -> Option<String> {
     let out = tool(args).stderr(Stdio::null()).output().ok()?;
     if !out.status.success() {
         return None;

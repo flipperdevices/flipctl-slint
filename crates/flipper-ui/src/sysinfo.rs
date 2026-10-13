@@ -904,13 +904,10 @@ pub struct System {
     /// with: `MemTotal` is short by the firmware's carve-out and the kernel's own.
     pub mem_total: u64,
     pub os: String,
-    pub build: String,
-    pub git: String,
     pub profile: String,
     /// When the running profile was made, from its root's birth time.
     pub installed: String,
     pub kernel: String,
-    pub kernel_built: String,
     pub ufs: Option<Ufs>,
     /// The card in the slot, or None with the slot empty.
     pub sd: Option<SdCard>,
@@ -920,6 +917,89 @@ pub struct System {
     /// The hardware addresses, as (what, address).
     pub macs: Vec<(String, String)>,
     pub uptime: String,
+    /// What the installer put on the machine, from the metadata partition. Left
+    /// empty by [`system`]; whoever shows it reads it with [`install`].
+    pub install: Install,
+}
+
+/// The installer's record: the bundle it installed from, or, for a custom install,
+/// each component it wrote from a build of its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Install {
+    /// The bundle, named by its channel. None for a custom install.
+    pub bundle: Option<Installed>,
+    /// A custom install's components, in [`PARTS`] order.
+    pub parts: Vec<Installed>,
+}
+
+impl Install {
+    /// Whether there is a record at all.
+    pub fn is_empty(&self) -> bool {
+        self.bundle.is_none() && self.parts.is_empty()
+    }
+}
+
+/// The components of a custom install, in the order they are shown: the system
+/// first, then what boots it.
+pub const PARTS: [&str; 4] = ["rootfs", "u-boot", "boot-menu", "recovery"];
+
+/// A build the installer wrote and the sources it was made from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Installed {
+    /// The component, or a bundle's channel.
+    pub name: String,
+    pub number: Option<u64>,
+    /// When it was built, as the build server stamps it: `2026-10-10T02:19:12Z`.
+    pub built: String,
+    pub sources: Vec<Source>,
+}
+
+/// One codebase a build was made from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Source {
+    pub codebase: String,
+    pub branch: String,
+    pub revision: String,
+}
+
+/// The installer's record, as the metadata partition holds it now. It takes root
+/// and a subprocess, so it is not part of [`system`]: read it once per look, not
+/// every poll. Empty without one, or without the tool to read it.
+pub fn install() -> Install {
+    crate::boot::sudo(&["flipmeta", "get", "install"])
+        .map(|json| parse_install(&json))
+        .unwrap_or_default()
+}
+
+/// `flipmeta get install`: `bundle` for a bundle install, `components` for a custom
+/// one, each holding the `build` and `sourcestamps` records of its manifest.
+pub fn parse_install(text: &str) -> Install {
+    use crate::update::json;
+    let read = |name: &str, part: &str| {
+        let build = json::object(part, "build").unwrap_or("");
+        let field = |record: &str, key: &str| json::string(record, key).unwrap_or_default();
+        Installed {
+            name: name.to_string(),
+            number: json::number(build, "number"),
+            built: field(build, "timestamp"),
+            sources: json::records(part, "sourcestamps")
+                .into_iter()
+                .map(|s| Source {
+                    codebase: field(s, "codebase"),
+                    branch: field(s, "branch"),
+                    revision: field(s, "revision"),
+                })
+                .collect(),
+        }
+    };
+    let bundle = json::object(text, "bundle")
+        .map(|b| read(&json::string(b, "channel").unwrap_or_default(), b));
+    let parts = json::object(text, "components")
+        .map(|c| {
+            PARTS.iter().filter_map(|name| json::object(c, name).map(|p| read(name, p))).collect()
+        })
+        .unwrap_or_default();
+    Install { bundle, parts }
 }
 
 /// The UFS the system runs from.
@@ -936,9 +1016,7 @@ pub struct Ufs {
 
 pub fn system() -> System {
     let release = read_str("/etc/os-release").unwrap_or_default();
-    let build = os_release_value(&release, "BUILD_ID").unwrap_or_default();
     let (mem_total, mem_used) = memory();
-    let version = read_str("/proc/version").unwrap_or_default();
     System {
         model: dt_string("model"),
         hostname: read_str("/proc/sys/kernel/hostname").unwrap_or_default(),
@@ -964,12 +1042,9 @@ pub fn system() -> System {
                 }
             })
             .unwrap_or_default(),
-        build,
-        git: os_release_value(&release, "BUILD_GIT").unwrap_or_default(),
         profile: crate::status::booted_profile(),
         installed: birth("/").map(date).unwrap_or_default(),
         kernel: read_str("/proc/sys/kernel/osrelease").unwrap_or_default(),
-        kernel_built: kernel_built(&version),
         ufs: ufs(),
         sd: sd_card(),
         pack: pack(),
@@ -979,6 +1054,7 @@ pub fn system() -> System {
             .and_then(|u| u.split_whitespace().next()?.parse::<f64>().ok())
             .map(|s| uptime(s as u64))
             .unwrap_or_default(),
+        install: Install::default(),
     }
 }
 
@@ -1174,18 +1250,6 @@ pub fn installed_text(installed: u64) -> String {
 }
 
 const GIB: f64 = (1u64 << 30) as f64;
-
-/// The build date of the kernel: the last six words of /proc/version, which end in
-/// `Mon Sep 28 11:35:23 BST 2026`, read as `Sep 28 2026`.
-pub fn kernel_built(version: &str) -> String {
-    let words: Vec<&str> = version.split_whitespace().collect();
-    match words.len().checked_sub(6).map(|at| &words[at..]) {
-        Some([_, month, day, _, _, year]) if year.parse::<u32>().is_ok() => {
-            format!("{month} {day} {year}")
-        }
-        _ => String::new(),
-    }
-}
 
 /// A path's birth time, in seconds. For the root of a profile that is when its
 /// subvolume was made: when it was installed, or cloned from another.
@@ -1669,14 +1733,6 @@ mod system_tests {
     }
 
     #[test]
-    fn the_kernel_build_date_is_read_off_proc_version() {
-        let v = "Linux version 7.3.0-rc2-gd83595fdc473 (buildbot@host) (gcc 14.2.0) \
-                 #1 SMP PREEMPT Mon Sep 28 11:35:23 BST 2026";
-        assert_eq!(kernel_built(v), "Sep 28 2026");
-        assert_eq!(kernel_built("garbage"), "");
-    }
-
-    #[test]
     fn dates_and_durations() {
         assert_eq!(date(1_790_768_081), "2026-09-30");
         assert_eq!(date(0), "1970-01-01");
@@ -1711,6 +1767,53 @@ mod system_tests {
         assert_eq!(sd_kind(64_000_000_000), "SDXC");
         assert_eq!(sd_kind(16_000_000_000), "SDHC");
         assert_eq!(sd_kind(1_000_000_000), "SD");
+    }
+
+    #[test]
+    fn a_custom_install_reads_as_its_builds_in_order() {
+        let json = r#"{"mode":"custom","components":{
+            "boot-menu":{"build":{"builder":"falcon-bootmenu","number":23,
+                "timestamp":"2026-10-10T02:19:12Z"},"sourcestamps":[
+                {"codebase":"boot-menu","repository":"https://github.com/flipperdevices/flipperos-boot-menu.git",
+                 "branch":"dev","revision":"d31d71845fe48668fdeb1e684b359ecc761696b9"},
+                {"codebase":"u-boot","repository":"https://github.com/flipperdevices/u-boot.git",
+                 "branch":"rk3576","revision":"3dae058f611872bfe6ced6cadc7c5e794304568e"}]},
+            "u-boot":{"build":{"builder":"uboot","number":771,
+                "timestamp":"2026-10-12T16:57:08Z"},"sourcestamps":[
+                {"codebase":"buildscripts","repository":"https://github.com/flipperdevices/flipperone-linux-build-scripts",
+                 "branch":"refs/pull/189/head","revision":"e25025a2460ff064118fdeb132f676b00cea4623"}]}}}"#;
+        let install = parse_install(json);
+        assert_eq!(install.bundle, None);
+        let names: Vec<&str> = install.parts.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["u-boot", "boot-menu"]);
+        let menu = &install.parts[1];
+        assert_eq!(menu.number, Some(23));
+        assert_eq!(menu.built, "2026-10-10T02:19:12Z");
+        assert_eq!(menu.sources.len(), 2);
+        assert_eq!(
+            menu.sources[0],
+            Source {
+                codebase: "boot-menu".into(),
+                branch: "dev".into(),
+                revision: "d31d71845fe48668fdeb1e684b359ecc761696b9".into(),
+            }
+        );
+        assert_eq!(install.parts[0].sources[0].branch, "refs/pull/189/head");
+    }
+
+    #[test]
+    fn a_bundle_install_reads_as_its_channel_and_one_build() {
+        let json = r#"{"mode":"bundle","bundle":{"name":"flipperone-update",
+            "version":"20260812-83ddb68","channel":"nightly",
+            "build":{"builder":"update-bundle","number":15,"timestamp":"2026-08-12T03:00:00Z"},
+            "sourcestamps":[{"codebase":"u-boot","branch":"rk3576","revision":"fddd7e0"}]}}"#;
+        let install = parse_install(json);
+        assert!(install.parts.is_empty());
+        let bundle = install.bundle.expect("a bundle");
+        assert_eq!(bundle.name, "nightly");
+        assert_eq!(bundle.number, Some(15));
+        assert_eq!(bundle.sources[0].codebase, "u-boot");
+        assert!(parse_install("").is_empty());
     }
 
     #[test]

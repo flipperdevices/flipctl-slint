@@ -335,6 +335,8 @@ mod demo {
         Battery,
         Modem,
         Update,
+        /// Under System info, from its own soft key rather than a menu row.
+        Revisions,
     }
 
     impl Detail {
@@ -348,6 +350,7 @@ mod demo {
                 Detail::Battery => "Battery info",
                 Detail::Modem => "5G Modem",
                 Detail::Update => "Update",
+                Detail::Revisions => "Software Revisions",
             }
         }
     }
@@ -549,14 +552,35 @@ mod detail {
             return vec![row(label, value)];
         }
         let mut out = vec![row(label, "")];
+        out.extend(wrapped(value));
+        out
+    }
+
+    /// Text on full-width lines, broken between words, and inside a word only when
+    /// the word alone is wider than a line: a hash has no space to break at.
+    fn wrapped(value: &str) -> Vec<DetailRow> {
+        use flipper_ui::font::ROW;
+        use flipper_ui::theme::metric::MARGIN_H;
+        let room = i32::from(flipper_ui::PANEL_W) - 2 * MARGIN_H;
+        let width = |t: &str| i32::from(ROW.text_width(t));
+        let mut out = Vec::new();
         let mut line = String::new();
         for word in value.split_whitespace() {
             let next = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if width(&next) <= room || line.is_empty() {
+            if width(&next) <= room {
                 line = next;
-            } else {
+                continue;
+            }
+            if !line.is_empty() {
                 out.push(text(&line));
-                line = word.to_string();
+                line.clear();
+            }
+            for c in word.chars() {
+                if width(&format!("{line}{c}")) > room && !line.is_empty() {
+                    out.push(text(&line));
+                    line.clear();
+                }
+                line.push(c);
             }
         }
         if !line.is_empty() {
@@ -570,6 +594,82 @@ mod detail {
     /// and the keys act on it wherever they are pressed.
     fn chevron(label: &str, value: &str) -> DetailRow {
         DetailRow { kind: 4, ..row(label, value) }
+    }
+
+    /// One row of a three-column table, as its lines and their right-column text:
+    /// `left` in the left column, `middle` in the cell, `right` in the right column,
+    /// each cut to its width in pixels from tokens.toml. A one-line cell is
+    /// right-aligned against the right column. One too wide for that wraps, starting
+    /// a gap after `left` rather than at the column's edge, so a short `left` leaves
+    /// no hole, and its lines start together there.
+    fn table_row(left: &str, middle: &str, right: &str) -> Vec<(DetailRow, String)> {
+        use flipper_ui::font::ROW;
+        use flipper_ui::theme::metric::{MARGIN_H, TABLE_GAP, TABLE_LEFT_W, TABLE_RIGHT_W};
+        let width = |t: &str| i32::from(ROW.text_width(t));
+        let cell = i32::from(flipper_ui::PANEL_W)
+            - 2 * MARGIN_H
+            - TABLE_LEFT_W
+            - TABLE_RIGHT_W
+            - 2 * TABLE_GAP;
+        let left = cut(left, TABLE_LEFT_W, "..");
+        let right = cut(right, TABLE_RIGHT_W, "");
+        if width(middle) <= cell {
+            return vec![(DetailRow { kind: 7, ..row(&left, middle) }, right)];
+        }
+        let wide = cell + TABLE_LEFT_W - width(&left);
+        cell_lines(middle, wide, width)
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let (kind, aside) = if i == 0 { (6, right.clone()) } else { (8, String::new()) };
+                (DetailRow { kind, ..row(&left, line) }, aside)
+            })
+            .collect()
+    }
+
+    /// `text` cut to `budget` pixels of the row face, ending in `tail` when it had to
+    /// be: ".." for a name, nothing for a hash, whose prefix is how one is shortened.
+    fn cut(text: &str, budget: i32, tail: &str) -> String {
+        use flipper_ui::font::ROW;
+        let width = |t: &str| i32::from(ROW.text_width(t));
+        if width(text) <= budget {
+            return text.to_string();
+        }
+        let mut out = String::new();
+        for c in text.chars() {
+            out.push(c);
+            if width(&format!("{out}{tail}")) > budget {
+                out.pop();
+                break;
+            }
+        }
+        out + tail
+    }
+
+    /// `text` cut into lines no wider than `budget`, after a `/`, `-`, `.` or `_`
+    /// where one falls on the line, which is where a branch name reads as broken
+    /// rather than cut, and anywhere otherwise.
+    fn cell_lines(text: &str, budget: i32, width: impl Fn(&str) -> i32) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = text;
+        while width(rest) > budget {
+            let ends: Vec<usize> = rest
+                .char_indices()
+                .map(|(i, c)| i + c.len_utf8())
+                .take_while(|&end| width(&rest[..end]) <= budget)
+                .collect();
+            let Some(&last) = ends.last() else { break };
+            let cut = ends
+                .iter()
+                .rev()
+                .find(|&&end| rest[..end].ends_with(['/', '-', '.', '_']))
+                .copied()
+                .unwrap_or(last);
+            out.push(rest[..cut].to_string());
+            rest = &rest[cut..];
+        }
+        out.push(rest.to_string());
+        out
     }
 
     /// The two disks the Disk info screen shows.
@@ -619,6 +719,8 @@ mod detail {
         /// Not a poller either: the channel is a choice, not a measurement, and
         /// asking what it offers is a read rather than a watch.
         Update(UpdateScreen),
+        /// Not a poller: the installer's record is written once, at install.
+        Revisions(sysinfo::Install),
     }
 
     /// How far an update the user started has got.
@@ -780,12 +882,20 @@ mod detail {
             match which {
                 // Most of it never changes; uptime and memory do, and two
                 // seconds is the cadence of the other pages that move.
-                Detail::System => Live::System(Watch::spawn(
-                    "watch-system",
-                    Duration::from_secs(2),
-                    System::default(),
-                    sysinfo::system,
-                )),
+                // The installer's record is read once per opening, on the poller's
+                // thread: it takes sudo, and it only changes when someone writes it.
+                Detail::System => {
+                    let install = std::sync::OnceLock::new();
+                    Live::System(Watch::spawn(
+                        "watch-system",
+                        Duration::from_secs(2),
+                        System::default(),
+                        move || System {
+                            install: install.get_or_init(sysinfo::install).clone(),
+                            ..sysinfo::system()
+                        },
+                    ))
+                }
                 // ethernet.js polls every two seconds.
                 Detail::Ethernet => Live::Ethernet(Watch::spawn(
                     "watch-ethernet",
@@ -828,6 +938,7 @@ mod detail {
                     || sysinfo::modem(QMI_DEV),
                 )),
                 Detail::Update => Live::Update(UpdateScreen::open()),
+                Detail::Revisions => Live::Revisions(sysinfo::install()),
             }
         }
 
@@ -843,6 +954,7 @@ mod detail {
                     u.collect();
                     u.dirty.replace(false)
                 }
+                Live::Revisions(_) => false,
             }
         }
 
@@ -857,7 +969,17 @@ mod detail {
                 Live::Battery(w) => battery_rows(&w.get()),
                 Live::Modem(w) => modem_rows(&w.get()),
                 Live::Update(u) => update_rows(u, applying),
+                Live::Revisions(i) => joined(revisions_sections(i)),
             }
+        }
+
+        /// The right column of the screen's table, by row, on the screen that has one.
+        pub fn asides(&self) -> slint::ModelRc<slint::SharedString> {
+            let asides: Vec<slint::SharedString> = match self {
+                Live::Revisions(i) => revisions_asides(i).into_iter().map(Into::into).collect(),
+                _ => Vec::new(),
+            };
+            slint::ModelRc::new(slint::VecModel::from(asides))
         }
 
         /// Soft-key labels, for the page scrolled to `offset`.
@@ -872,7 +994,11 @@ mod detail {
                 }
                 // A long page, read a section at a time, or taken away whole as a
                 // QR code.
-                Live::System(_) => {
+                Live::System(w) => {
+                    let revisions = if w.get().install.is_empty() { "" } else { "Revisions" };
+                    ["Back", revisions, "", "QR", self.next_stop(offset).map_or("", |s| s.1)]
+                }
+                Live::Revisions(_) => {
                     ["Back", "", "", "QR", self.next_stop(offset).map_or("", |s| s.1)]
                 }
                 _ => ["Back", "", "", "", ""],
@@ -881,17 +1007,22 @@ mod detail {
 
         /// The text of the page's QR code, on the page that has one.
         pub fn qr_lines(&self) -> Option<Vec<String>> {
-            let Live::System(w) = self else { return None };
-            Some(system_qr(&w.get()))
+            match self {
+                Live::System(w) => Some(system_qr(&w.get())),
+                Live::Revisions(i) => Some(revisions_qr(i)),
+                _ => None,
+            }
         }
 
         /// Where the next-section key goes from `offset`, on the page that has one.
         pub fn next_stop(&self, offset: i32) -> Option<(i32, &'static str)> {
-            let Live::System(w) = self else { return None };
-            let sections: Vec<_> = system_sections(&w.get())
-                .into_iter()
-                .map(|(name, rows)| (name, rows.len()))
-                .collect();
+            let sections = match self {
+                Live::System(w) => system_sections(&w.get()),
+                Live::Revisions(i) => revisions_sections(i),
+                _ => return None,
+            };
+            let sections: Vec<_> =
+                sections.into_iter().map(|(name, rows)| (name, rows.len())).collect();
             Some(next_stop(&sections, offset))
         }
 
@@ -999,8 +1130,107 @@ mod detail {
         Some(slint::Image::from_rgb8(buffer))
     }
 
-    /// The commit this flipctl was built from, which `build.rs` records.
+    /// The commit this flipctl was built from, which `build.rs` records. In the QR
+    /// rather than on the page.
     const COMMIT: &str = env!("FLIPCTL_COMMIT");
+
+    /// What to call a component the installer wrote. Short, because it also names
+    /// the next-section key on Software Revisions.
+    fn part_label(name: &str) -> &'static str {
+        match name {
+            "u-boot" => "U-Boot",
+            "rootfs" => "Root FS",
+            "boot-menu" => "Boot menu",
+            "recovery" => "Recovery",
+            _ => "Install",
+        }
+    }
+
+    /// A build's number and when, to the minute: `#23 2026-10-10 02:19`.
+    fn build_text(build: &sysinfo::Installed) -> String {
+        let when: String = build.built.replacen('T', " ", 1).chars().take(16).collect();
+        let number = build.number.map(|n| format!("#{n}")).unwrap_or_default();
+        format!("{number} {when}").trim().to_string()
+    }
+
+    /// What the machine was installed from, each build with its label and what to
+    /// say about it: the bundle, by its channel, or each component of a custom install.
+    fn builds(install: &sysinfo::Install) -> Vec<(&'static str, String, &sysinfo::Installed)> {
+        match &install.bundle {
+            Some(b) => {
+                vec![("Bundle", format!("{} {}", b.name, build_text(b)).trim().to_string(), b)]
+            }
+            None => install.parts.iter().map(|p| (part_label(&p.name), build_text(p), p)).collect(),
+        }
+    }
+
+    /// How the machine was installed, under Installed: a bundle by its number, or a
+    /// custom install followed by the number of each build in it. The dates are on
+    /// Software Revisions.
+    fn install_rows(install: &sysinfo::Install) -> Vec<DetailRow> {
+        let number = |b: &sysinfo::Installed| b.number.map(|n| format!("#{n}")).unwrap_or_default();
+        match &install.bundle {
+            Some(b) => {
+                vec![row("Install type", &format!("Bundle {}", number(b)).trim().to_string())]
+            }
+            None if install.parts.is_empty() => Vec::new(),
+            None => std::iter::once(row("Install type", "Custom"))
+                .chain(install.parts.iter().map(|p| row(part_label(&p.name), &number(p))))
+                .collect(),
+        }
+    }
+
+    /// Software Revisions: what each installed build was made from, a section per
+    /// build, its sources as a table. A hash is cut to the right column's width, the
+    /// QR carries them whole.
+    fn revisions_table(
+        install: &sysinfo::Install,
+    ) -> Vec<(&'static str, Vec<(DetailRow, String)>)> {
+        builds(install)
+            .into_iter()
+            .map(|(label, summary, build)| {
+                let mut out: Vec<_> =
+                    long(label, &summary).into_iter().map(|r| (r, String::new())).collect();
+                for s in &build.sources {
+                    out.extend(table_row(&s.codebase, &s.branch, &s.revision));
+                }
+                (label, out)
+            })
+            .collect()
+    }
+
+    /// Software Revisions' sections, rows alone.
+    fn revisions_sections(install: &sysinfo::Install) -> Vec<(&'static str, Vec<DetailRow>)> {
+        revisions_table(install)
+            .into_iter()
+            .map(|(label, rows)| (label, rows.into_iter().map(|(r, _)| r).collect()))
+            .collect()
+    }
+
+    /// Software Revisions' right column, in step with `joined(revisions_sections(..))`:
+    /// nothing for the divider between two sections.
+    fn revisions_asides(install: &sysinfo::Install) -> Vec<String> {
+        let mut out = Vec::new();
+        for (i, (_, rows)) in revisions_table(install).into_iter().enumerate() {
+            if i > 0 {
+                out.push(String::new());
+            }
+            out.extend(rows.into_iter().map(|(_, aside)| aside));
+        }
+        out
+    }
+
+    /// Software Revisions as QR text: every build and every source, hashes whole.
+    fn revisions_qr(install: &sysinfo::Install) -> Vec<String> {
+        let mut out = Vec::new();
+        for (label, summary, build) in builds(install) {
+            out.push(format!("{label}: {summary}"));
+            out.extend(
+                build.sources.iter().map(|s| format!("{} {} {}", s.codebase, s.branch, s.revision)),
+            );
+        }
+        out
+    }
 
     /// What the machine is, what it runs, its storage, its radios and their
     /// addresses, and how long it has been up. Long, so it scrolls.
@@ -1018,18 +1248,12 @@ mod detail {
         }
         out.push(row("Memory", &sysinfo::memory_text(s.mem_used, s.mem_total)));
         sections.push(("Device", std::mem::take(&mut out)));
-        for (label, value) in [
-            ("OS", s.os.as_str()),
-            ("Build", &s.build),
-            ("Git", &s.git),
-            ("Profile", &s.profile),
-            ("Installed", &s.installed),
-            ("Kernel", &s.kernel),
-            ("Kernel built", &s.kernel_built),
-            ("flipctl", COMMIT),
-        ] {
+        out.extend(long("OS", &s.os));
+        for (label, value) in [("Profile", s.profile.as_str()), ("Installed", &s.installed)] {
             out.extend(long(label, value));
         }
+        out.extend(install_rows(&s.install));
+        out.extend(long("Kernel", &s.kernel));
         sections.push(("Software", std::mem::take(&mut out)));
         if let Some(u) = &s.ufs {
             for (label, value) in [
@@ -1140,12 +1364,14 @@ mod detail {
             ("CPU".into(), s.cpu.clone()),
             ("CPU serial".into(), s.serial.clone()),
             ("Memory".into(), sysinfo::installed_text(s.mem_total)),
-            ("OS".into(), format!("{} Build {}", s.os, s.build).trim().to_string()),
-            ("Git".into(), s.git.clone()),
+            ("OS".into(), s.os.clone()),
             ("Profile".into(), s.profile.clone()),
             ("Kernel".into(), s.kernel.clone()),
             ("flipctl".into(), COMMIT.into()),
         ];
+        // The builds and not their sources: those are a line of ninety characters
+        // each, and the code has to stay small enough for the panel to show.
+        out.extend(builds(&s.install).into_iter().map(|(k, v, _)| (k.into(), v)));
         if let Some(u) = &s.ufs {
             out.extend([
                 ("UFS".into(), u.name.clone()),
@@ -1171,14 +1397,35 @@ mod detail {
 
     /// The page: its sections, a divider between each.
     fn system_rows(s: &System) -> Vec<DetailRow> {
+        joined(system_sections(s))
+    }
+
+    /// Sections as one page, a divider between each.
+    fn joined(sections: Vec<(&'static str, Vec<DetailRow>)>) -> Vec<DetailRow> {
         let mut out = Vec::new();
-        for (i, (_, rows)) in system_sections(s).into_iter().enumerate() {
+        for (i, (_, mut rows)) in sections.into_iter().enumerate() {
             if i > 0 {
                 out.push(divider());
+            }
+            if let Some(first) = rows.first_mut() {
+                headed(first);
             }
             out.extend(rows);
         }
         out
+    }
+
+    /// The first row of a section, its label in the bold face so the section reads
+    /// by its name. Left plain when the bold label would run into the value.
+    fn headed(first: &mut DetailRow) {
+        use flipper_ui::font::{ROW, ROW_ACTIVE};
+        use flipper_ui::theme::metric::MARGIN_H;
+        let room = i32::from(flipper_ui::PANEL_W) - 2 * MARGIN_H;
+        let label = i32::from(ROW_ACTIVE.text_width(&first.label));
+        let value = i32::from(ROW.text_width(&first.value));
+        if first.kind == 0 && label + MARGIN_H + value <= room {
+            first.kind = 5;
+        }
     }
 
     /// Where the next-section key goes and what it says: the first row of the next
@@ -2991,6 +3238,7 @@ fn png(
     if let Some(name) = which.as_deref() {
         let want = match name {
             "system" | "system-qr" => Some(demo::Detail::System),
+            "revisions" | "revisions-qr" => Some(demo::Detail::Revisions),
             "ethernet" => Some(demo::Detail::Ethernet),
             "routing" => Some(demo::Detail::Routing),
             "disk" => Some(demo::Detail::Disk),
@@ -3024,7 +3272,7 @@ fn png(
                 }
             }
             let rows = open.rows(&applying);
-            if name == "system-qr" {
+            if name.ends_with("-qr") {
                 screen.set_detail_qr(
                     open.qr_lines().and_then(|l| detail::qr_image(&l)).unwrap_or_default(),
                 );
@@ -3035,6 +3283,7 @@ fn png(
                 ));
             }
             screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+            screen.set_detail_asides(open.asides());
             screen.set_detail_offset(select.unwrap_or(0));
             let (at_start, at_end) = open.chevron_ends();
             screen.set_detail_at_start(at_start);
@@ -3045,8 +3294,14 @@ fn png(
                 demo::Detail::Routing | demo::Detail::Modem | demo::Detail::Ethernet => "Network",
                 _ => "Settings",
             };
+            let leaf = match want {
+                demo::Detail::Revisions => {
+                    format!("{} > {}", demo::Detail::System.title(), want.title())
+                }
+                _ => want.title().to_string(),
+            };
             if !matches!(open, detail::Live::Ethernet(_)) {
-                screen.set_breadcrumb(format!("> {parent} > {}", want.title()).as_str().into());
+                screen.set_breadcrumb(format!("> {parent} > {leaf}").as_str().into());
                 screen.set_screen(Screen::Detail);
             }
         }
@@ -3453,6 +3708,10 @@ fn panel(
     let mut detail_offset = 0i32;
     // Whether the detail page is showing as its QR code.
     let mut detail_qr = false;
+    // System info while Software Revisions is open over it, with where it was
+    // scrolled to. Kept rather than reopened, so its poller stays warm and Back
+    // lands on the same line.
+    let mut parked: Option<(detail::Live, i32)> = None;
     // Installing an app's dependencies.
     //
     // Three stages, each off the render loop because dpkg-query, apt and pip all
@@ -6235,17 +6494,66 @@ fn panel(
                             detail_qr = false;
                             detail_dirty = true;
                         }
+                        FlipperKey::Escape if parked.is_some() => {
+                            if let Some((system, offset)) = parked.take() {
+                                live = Some(system);
+                                detail_offset = offset;
+                            }
+                            let trail = demo::crumb(&stack, demo::Detail::System.title());
+                            screen.set_breadcrumb(trail.as_str().into());
+                            detail_dirty = true;
+                        }
                         FlipperKey::Escape => {
                             live = None;
                             eth_open = false;
                             eth_scroll = 0.0;
                             menu_again!();
                         }
-                        FlipperKey::Edit if matches!(live, Some(detail::Live::System(_))) => {
+                        FlipperKey::Edit
+                            if matches!(
+                                live,
+                                Some(detail::Live::System(_) | detail::Live::Revisions(_))
+                            ) =>
+                        {
                             detail_qr = true;
                             detail_dirty = true;
                         }
-                        FlipperKey::Run if matches!(live, Some(detail::Live::System(_))) => {
+                        // Software Revisions, over System info, when there is a record
+                        // to show: the key is blank otherwise.
+                        FlipperKey::View
+                            if !detail_qr
+                                && live.as_ref().is_some_and(|l| {
+                                    l.buttons(&applying, detail_offset)[1] == "Revisions"
+                                }) =>
+                        {
+                            // The record System info already read, rather than
+                            // asking for it again on this thread.
+                            let install = match &live {
+                                Some(detail::Live::System(w)) => w.get().install,
+                                _ => Default::default(),
+                            };
+                            if let Some(system) = live.take() {
+                                parked = Some((system, detail_offset));
+                            }
+                            live = Some(detail::Live::Revisions(install));
+                            detail_offset = 0;
+                            let trail = demo::crumb(
+                                &stack,
+                                &format!(
+                                    "{} > {}",
+                                    demo::Detail::System.title(),
+                                    demo::Detail::Revisions.title()
+                                ),
+                            );
+                            screen.set_breadcrumb(trail.as_str().into());
+                            detail_dirty = true;
+                        }
+                        FlipperKey::Run
+                            if matches!(
+                                live,
+                                Some(detail::Live::System(_) | detail::Live::Revisions(_))
+                            ) =>
+                        {
                             if let Some((at, _)) =
                                 live.as_ref().and_then(|l| l.next_stop(detail_offset))
                             {
@@ -6497,6 +6805,7 @@ fn panel(
                         }
                         demo::Act::Detail(which) => {
                             live = Some(detail::Live::open(*which));
+                            parked = None;
                             detail_offset = 0;
                             detail_qr = false;
                             // Build the rows now rather than waiting for the
@@ -6932,6 +7241,7 @@ fn panel(
                     slint::Image::default()
                 });
                 screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+                screen.set_detail_asides(open.asides());
                 screen.set_detail_offset(detail_offset);
                 screen.set_detail_buttons(demo::labels(&if detail_qr {
                     ["Back", "", "", "", ""]

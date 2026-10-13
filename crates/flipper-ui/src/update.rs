@@ -286,16 +286,17 @@ pub fn latest(channel: Channel) -> Result<Image, String> {
 ///
 /// Both shapes are an array of flat objects: `directories` is `{name, mtime}`,
 /// `files` is `{path, size, sha256, mtime}`, `sourcestamps` is `{codebase, branch,
-/// revision, ...}`. Nothing nested is wanted out of any of them, so this finds an
-/// array by its key, cuts it into the objects inside it, and reads a string or a
-/// number out of one by name.
+/// revision, ...}`. This finds an array by its key, cuts it into the objects inside
+/// it, and reads a string or a number out of one by name. The installer's record in
+/// the metadata partition is the same `build` and `sourcestamps` records one object
+/// deeper, which is what `object` is for.
 ///
 /// It is not a JSON parser and must not be asked to be one: no nested objects inside
 /// a record, no arrays of arrays, no numbers that are not integers. What it does do
 /// is respect strings, because that is where a scan that counts brackets goes wrong
 /// -- a `}` inside a value is not the end of anything, and these manifests carry URLs
 /// and paths full of punctuation.
-mod json {
+pub(crate) mod json {
     /// Walk `text` from `at`, returning the index just past the value that starts
     /// there, with `open`/`close` the brackets it is delimited by.
     fn span_end(text: &str, at: usize, open: u8, close: u8) -> Option<usize> {
@@ -345,6 +346,16 @@ mod json {
             from = at + needle.len();
         }
         None
+    }
+
+    /// The object called `key`, as its own `{...}` text.
+    pub fn object<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+        let after = key_at(text, key)?;
+        let open = after + text[after..].find(|c: char| !c.is_whitespace())?;
+        if !text[open..].starts_with('{') {
+            return None;
+        }
+        Some(&text[open..span_end(text, open, b'{', b'}')?])
     }
 
     /// The objects inside the array called `key`, each as its own `{...}` text.
