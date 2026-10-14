@@ -211,6 +211,10 @@ build_app() {
     if [ -f "$HERE/apps/$app/deb.lock" ]; then
         "$HERE/tools/appimage/fetch-debs.sh" "$HERE/apps/$app"
     fi
+    # Or pinned upstream release files, laid out as the AppDir is.
+    if [ -f "$HERE/apps/$app/release.lock" ]; then
+        "$HERE/tools/appimage/fetch-release.sh" "$HERE/apps/$app"
+    fi
     echo "== staging $app =="
     in_bundle python3 "$SRCDIR/tools/appimage/bundle.py" stage "apps/$app" "$OUTDIR/$app/AppDir" \
         "${staged[@]}" --version "$version" --repo "$SRCDIR"

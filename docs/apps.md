@@ -118,11 +118,23 @@ program's link surface is checked on the way: a framework app needs `libc`, `lib
 and `libgcc_s` and nothing else, and anything more fails the build by name.
 `SOURCE_DATE_EPOCH` is the commit's time, so two builds of one tree give one hash.
 
-Only a Rust app on the framework is bundled today. Its `apt` packages stay the
-device's: the radio's `mpv` is in the Desktop image, and bundling Debian's mpv would
-drag ffmpeg's whole dependency fan-out in (measured: 118 packages, 177 MB extracted)
-for a 5 MB app. Bundling a package closure, a Python interpreter or a program out of
-the archive are extensions of the same tooling, not written yet.
+An app can carry programs of its own as well as name them in `apt`, from two
+places, each pinned by checksum in a lock file beside the manifest:
+
+| File | What | Unpacked by |
+|---|---|---|
+| `deb.lock` | Debian packages, as `url sha256 size` lines from `apt-get download --print-uris` | `tools/appimage/fetch-debs.sh` |
+| `release.lock` | files from upstream release pages, as `path url sha256` lines; a tarball gives up the member named like `path` | `tools/appimage/fetch-release.sh` |
+
+Both unpack into `<app>/runtime`, laid out as a `/usr`, at build time. A crate's
+staging copies that over the AppDir's root, so a program lands in the `usr/bin`
+AppRun puts first on PATH and a library in the directory it puts first on
+`LD_LIBRARY_PATH`; an app with an AppRun of its own (`apps/doom`) points at it
+itself. glibc is never carried: a program cannot bring its own loader.
+
+What to carry is a size question. The radio's `mpv` stays in `apt`: it is in the
+Desktop image, and bundling it would drag ffmpeg's whole dependency fan-out in
+(measured: 118 packages, 177 MB extracted) for a 5 MB app.
 
 ## The framework
 

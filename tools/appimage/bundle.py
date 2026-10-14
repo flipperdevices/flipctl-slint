@@ -290,6 +290,11 @@ def stage(app_dir: Path, appdir: Path, binary: Path | None, version: str, repo: 
         apprun = appdir / "AppRun"
         apprun.write_text(render_apprun(f'"$APPDIR/usr/bin/{program}" "$@"'))
         os.chmod(apprun, 0o755)
+        # What fetch-release.sh unpacked from release.lock, laid out as the AppDir is:
+        # its programs land in the usr/bin AppRun already puts first on PATH.
+        runtime = app_dir / "runtime"
+        if runtime.is_dir():
+            shutil.copytree(runtime, appdir, dirs_exist_ok=True)
     else:
         stage_staged(app_dir, appdir, repo / "target/appimage/tools", manifest)
         # The drawing stack is what a runtime lends the scripts it runs. An app that

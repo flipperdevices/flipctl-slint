@@ -166,6 +166,25 @@ class AppDir(unittest.TestCase):
             if path.is_symlink():
                 self.assertFalse(os.readlink(path).startswith("/"), path)
 
+    def test_a_crate_carries_what_its_locks_unpacked(self):
+        runtime = self.app / "runtime"
+        (runtime / "usr" / "bin").mkdir(parents=True)
+        (runtime / "usr" / "bin" / "helper").write_bytes(b"\x7fELF helper")
+        (runtime / "usr" / "lib" / "aarch64-linux-gnu").mkdir(parents=True)
+        (runtime / "usr" / "lib" / "aarch64-linux-gnu" / "libhelper.so.1").write_bytes(b"\x7fELF")
+        (runtime / "usr" / "share" / "doc" / "helper").mkdir(parents=True)
+        (runtime / "usr" / "share" / "doc" / "helper" / "LICENSE").write_text("helper terms\n")
+        appdir = self.tmp / "AppDir"
+        bundle.stage(self.app, appdir, self.binary, "v1", self.repo)
+        # Beside the program, in the usr/bin and the library directory AppRun puts
+        # ahead of the device's own.
+        self.assertEqual((appdir / "usr" / "bin" / "helper").read_bytes(), b"\x7fELF helper")
+        self.assertEqual((appdir / "usr" / "bin" / "thing-app").read_bytes(), b"\x7fELF fake")
+        self.assertTrue((appdir / "usr" / "lib" / "aarch64-linux-gnu" / "libhelper.so.1").is_file())
+        self.assertTrue((appdir / "usr" / "share" / "doc" / "helper" / "LICENSE").is_file())
+        self.assertTrue((appdir / "usr" / "share" / "doc" / "thing-app" / "LICENSE").is_file())
+        self.assertFalse((appdir / "runtime").exists(), "laid out as the AppDir, not under it")
+
     def test_a_kind_that_is_not_bundled_yet_is_refused(self):
         (self.app / "Cargo.toml").unlink()
         with self.assertRaises(SystemExit):
