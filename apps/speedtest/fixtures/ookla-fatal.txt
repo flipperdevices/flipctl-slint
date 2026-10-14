@@ -1,0 +1,4 @@
+
+    speedtest-go v1.8.3 (git-df849ca) @showwin
+
+Fatal: retrieving user information, err: XML syntax error on line 6: element <hr> closed by </body>

@@ -1,0 +1,7 @@
+Retrieving server list from https://librespeed.org/backend-servers/servers.php
+Selected server: Belgrade, Serbia (SOX) [speedtest1.sox.rs]
+Sponsored by: Serbian Open eXchange @ https://sox.rs
+You're testing from: 192.0.2.1
+Ping: 3.14 ms	Jitter: 0.12 ms
+Download rate:	52.11 Mbps
+Upload rate:	361.83 Mbps

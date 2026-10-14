@@ -1,0 +1,25 @@
+
+    speedtest-go v1.8.3 (git-df849ca) @showwin
+
+ISP: 192.0.2.1 (Example ISP) [0.0000, 0.0000] 
+Found 20 Public Servers
+[69116]     95.77km 11ms 	Beograd (Serbia) by YUNET International D.O.O. 
+[75213]     95.77km 2ms 	Belgrade (Serbia) by NETOPS 
+[74522]     95.77km 54ms 	Belgrade (Serbia) by BRZNET 
+[75328]     96.56km 3ms 	Belgrade (Serbia) by Xnet Ninet Company 
+[14476]     96.57km 12ms 	Belgrade (Serbia) by Yettel d.o.o. 
+[41390]     96.57km 9ms 	Belgrade (Serbia) by A1 Srbija d.o.o 
+[48906]     96.57km 4ms 	Belgrade (Serbia) by UNLIMITED.RS 
+[59764]     96.57km 5ms 	Belgrade (Serbia) by Serbian Open eXchange 
+[20742]     96.57km 11ms 	Beograd (Serbia) by Orion Telekom 
+[43446]     96.57km 1ms 	Belgrade (Serbia) by Telekom mts 
+[15123]    124.92km 5ms 	Ljubovija (Serbia) by Most Net ISP 
+[ 3600]    163.46km 10ms 	Novi Sad (Serbia) by E-CAPS.net 
+[25034]    163.46km 2ms 	Novi Sad (Serbia) by Telekom mts 
+[32431]    163.64km 5ms 	Novi Sad (Serbia) by Serbia BroadBand 
+[13584]    169.78km 52ms 	Kalesija (Bosnia and Herzegovina) by NEON Solucije 
+[70081]    188.45km 56ms 	Tuzla (Bosnia and Herzegovina) by TXTv 
+[ 3896]    191.34km 7ms 	Becej (Serbia) by SAT-TRAKT 
+[11500]    195.43km 304ms 	Timisoara (Romania) by Digi (RCS & RDS) 
+[74478]    195.43km 54ms 	Timisoara (Romania) by Infinilink 
+[54595]    219.27km 56ms 	Vinkovci (Croatia) by TONET TELEKOM d.o.o. 

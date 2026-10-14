@@ -1,0 +1,12 @@
+# Speed test: the link measured four ways, against a server the user picks.
+#
+# The measuring is done by programs this bundle carries rather than by this app:
+# speedtest-go (Ookla's servers), librespeed-cli (LibreSpeed's), cfspeedtest
+# (Cloudflare's) and iperf3 (a host of the user's own). The first three come from
+# their projects' releases through release.lock, iperf3 and its libraries from
+# Debian through deb.lock, so nothing is installed to run it.
+name = "Speed test"
+wayland = "./target/release/speedtest-app"
+# The two Go programs read the system's CA roots to reach their server lists over
+# HTTPS. cfspeedtest carries its own.
+apt = ["ca-certificates"]

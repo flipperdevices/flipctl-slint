@@ -1,0 +1,13 @@
+Connecting to host 127.0.0.1, port 5299
+Reverse mode, remote host 127.0.0.1 is sending
+[  5] local 127.0.0.1 port 50904 connected to 127.0.0.1 port 5299
+[ ID] Interval           Transfer     Bitrate
+[  5]   0.00-1.00   sec  2.24 GBytes  19.2 Gbits/sec                  
+[  5]   1.00-2.00   sec  2.30 GBytes  19.8 Gbits/sec                  
+[  5]   2.00-3.00   sec  2.29 GBytes  19.7 Gbits/sec                  
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-3.00   sec  6.83 GBytes  19.6 Gbits/sec    0            sender
+[  5]   0.00-3.00   sec  6.83 GBytes  19.6 Gbits/sec                  receiver
+
+iperf Done.

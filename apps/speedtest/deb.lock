@@ -1,0 +1,13 @@
+# The Debian packages this bundle carries, pinned by checksum: iperf3 and the
+# libraries it loads. Columns: url, sha256, size. Generated on a Flipper running the
+# image this targets:
+#
+#     apt-get download --print-uris iperf3 libiperf0 libsctp1 libssl3t64
+#
+# iperf3's own debconf and adduser dependencies are for setting up its daemon, which
+# a bundle that only ever runs the client has no use for. Regenerate the same way
+# when the image's Debian release moves.
+http://deb.debian.org/debian/pool/main/i/iperf3/iperf3_3.18-2%2bdeb13u2_arm64.deb 6e0327c87c767f0936ae9aa5bceb4fed27c041f2218428bb2a5cbebf60009d2a 37308
+http://deb.debian.org/debian/pool/main/i/iperf3/libiperf0_3.18-2%2bdeb13u2_arm64.deb 3df6de48e99337fdda473056c461a3f6699d604c1a97df4450f223668fdb56f3 93880
+http://deb.debian.org/debian/pool/main/l/lksctp-tools/libsctp1_1.0.21%2bdfsg-1_arm64.deb 27aad7a493fe911a81b041aba3a3453ecf7d27fa8c0d080ee44b7349dd2e3944 25816
+http://security.debian.org/debian-security/pool/updates/main/o/openssl/libssl3t64_3.5.7-1%7edeb13u3_arm64.deb d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97 2770200

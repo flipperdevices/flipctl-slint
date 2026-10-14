@@ -1,0 +1,12 @@
+
+    speedtest-go v1.8.3 (git-df849ca) @showwin
+
+ISP: 192.0.2.1 (Example ISP) [0.0000, 0.0000] 
+Found 1 Specified Public Server(s)
+
+Test Server: [75213] 0.90km Belgrade by NETOPS
+Latency: 2.91429ms Jitter: 76.573µs Min: 2.811098ms Max: 3.04239ms
+Packet Loss Analyzer: Running in background (<= 30 Secs)
+Download: 148.74 Mbps (Used: 184.40MB) (Latency: 2ms Jitter: 0ms Min: 1ms Max: 2ms)
+Upload: 366.93 Mbps (Used: 466.76MB Confirmed: 98.3%) (Latency: 24ms Jitter: 8ms Min: 17ms Max: 43ms)
+Packet Loss: N/A

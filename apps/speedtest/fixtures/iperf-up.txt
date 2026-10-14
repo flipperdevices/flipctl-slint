@@ -1,0 +1,12 @@
+Connecting to host 127.0.0.1, port 5299
+[  5] local 127.0.0.1 port 50884 connected to 127.0.0.1 port 5299
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  2.12 GBytes  18.2 Gbits/sec    0   1.06 MBytes       
+[  5]   1.00-2.00   sec  2.19 GBytes  18.8 Gbits/sec    0   1.25 MBytes       
+[  5]   2.00-3.00   sec  2.21 GBytes  19.0 Gbits/sec    0   1.37 MBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-3.00   sec  6.52 GBytes  18.7 Gbits/sec    0            sender
+[  5]   0.00-3.00   sec  6.52 GBytes  18.7 Gbits/sec                  receiver
+
+iperf Done.

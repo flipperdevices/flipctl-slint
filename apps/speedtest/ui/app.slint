@@ -1,0 +1,121 @@
+// Speed test: a settings menu, the results page a test runs on, and what opens
+// over them.
+//
+// The settings are flipctl's own menu rows, so a "< value >" here is the same
+// chevron row as on its Wi-Fi and Settings screens. The results are its detail
+// body. A list too long for a row's chevrons opens as a whole-screen menu, and an
+// iperf3 host is typed on the keyboard. Everything arrives worked out from
+// src/main.rs.
+import { Shell, PanelStatus } from "@app/shell.slint";
+import { MenuBody, ListItem } from "@flipctl/list.slint";
+import { DetailBody, DetailRow } from "@flipctl/detail.slint";
+import { TextInputBody, KbCell } from "@flipctl/keyboard.slint";
+import { Modal } from "@flipctl/modal.slint";
+
+export { ListItem, DetailRow, KbCell, PanelStatus }
+
+export component AppWindow inherits Shell {
+    in property <int> pressed_slot: -1;
+
+    // The settings menu.
+    in property <[ListItem]> settings;
+    in property <int> setting_row;
+    // Which chevron of the selected row is flashing: 0 none, 1 left, 2 right.
+    in property <int> arrow_pressed;
+
+    // The results page, while a test is on it.
+    in property <bool> results;
+    in property <[DetailRow]> figures;
+    in property <string> run_label: "Start";
+
+    // A whole-screen list: the servers, or the cities.
+    in property <bool> listing;
+    in property <[ListItem]> items;
+    in property <int> selected;
+    in property <int> scroll;
+
+    // The keyboard, while an iperf3 host is being typed.
+    in property <bool> keyboard;
+    in property <string> kb_title;
+    in property <string> kb_text;
+    in property <length> kb_field_w;
+    in property <length> kb_cursor_dx;
+    in property <bool> kb_cursor_on;
+    in property <bool> kb_field_focused;
+    in property <string> kb_warning;
+    in property <[KbCell]> kb_cells;
+    in property <length> kb_chrome_x;
+    in property <length> kb_chrome_y;
+    in property <length> kb_chrome_w;
+    in property <length> kb_chrome_h;
+    in property <string> kb_lang_label;
+    in property <string> kb_tab_label;
+    in property <int> kb_tab_focus;
+    in property <int> kb_tab_pressed;
+    in property <int> kb_discard: -1;
+    in property <[string]> kb_buttons;
+
+    // A test that failed, in the program's own words.
+    in property <[string]> dialog;
+    in property <string> dialog_right;
+
+    callback keyed(string, bool);
+    key(text, down) => {
+        root.keyed(text, down);
+    }
+
+    if !root.results && !root.listing && !root.keyboard: MenuBody {
+        items: root.settings;
+        total: root.settings.length;
+        selected: root.setting_row;
+        arrow_pressed: root.arrow_pressed;
+        buttons: ["Close", "", "", "", "Start"];
+        pressed_slot: root.pressed_slot;
+        real_frame: true;
+    }
+
+    if root.results && !root.listing && !root.keyboard: DetailBody {
+        rows: root.figures;
+        buttons: ["Back", "", "", "", root.run_label];
+        pressed_slot: root.pressed_slot;
+        fit_gauges: true;
+    }
+
+    if root.listing && !root.keyboard: MenuBody {
+        items: root.items;
+        total: root.items.length;
+        selected: root.selected;
+        scroll: root.scroll;
+        buttons: ["Back", "", "", "", "Select"];
+        pressed_slot: root.pressed_slot;
+        real_frame: true;
+    }
+
+    if root.keyboard: TextInputBody {
+        title: root.kb_title;
+        visible_text: root.kb_text;
+        field_w: root.kb_field_w;
+        cursor_dx: root.kb_cursor_dx;
+        cursor_on: root.kb_cursor_on;
+        field_focused: root.kb_field_focused;
+        warning: root.kb_warning;
+        cells: root.kb_cells;
+        chrome_x: root.kb_chrome_x;
+        chrome_y: root.kb_chrome_y;
+        chrome_w: root.kb_chrome_w;
+        chrome_h: root.kb_chrome_h;
+        lang_label: root.kb_lang_label;
+        tab_label: root.kb_tab_label;
+        tab_focus: root.kb_tab_focus;
+        tab_pressed: root.kb_tab_pressed;
+        buttons: root.kb_buttons;
+        pressed_slot: root.pressed_slot;
+        discard: root.kb_discard;
+    }
+
+    if root.dialog.length > 0: Modal {
+        lines: root.dialog;
+        right_label: root.dialog_right;
+        pressed_slot: root.pressed_slot;
+    }
+}

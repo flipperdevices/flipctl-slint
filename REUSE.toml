@@ -123,3 +123,19 @@ path = ["apps/tone-lab/frames/*.rgb"]
 precedence = "override"
 SPDX-FileCopyrightText = "2001-2024 Contributors to the Freedoom project"
 SPDX-License-Identifier = "BSD-3-Clause AND GPL-2.0-or-later"
+
+# The speed test's city table: names and coordinates out of GeoNames, picked and
+# cut down by apps/speedtest/tools/tables.py. GeoNames publishes them under CC BY.
+[[annotations]]
+path = ["apps/speedtest/cities.tsv"]
+precedence = "override"
+SPDX-FileCopyrightText = "GeoNames (https://www.geonames.org)"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+# The speed test's public iperf3 servers: the export of a community list, cut down
+# by apps/speedtest/tools/tables.py. The list's repository is MIT.
+[[annotations]]
+path = ["apps/speedtest/iperf3-servers.tsv"]
+precedence = "override"
+SPDX-FileCopyrightText = "R0GGER and the contributors to https://github.com/R0GGER/public-iperf3-servers"
+SPDX-License-Identifier = "MIT"

@@ -134,7 +134,8 @@ itself. glibc is never carried: a program cannot bring its own loader.
 
 What to carry is a size question. The radio's `mpv` stays in `apt`: it is in the
 Desktop image, and bundling it would drag ffmpeg's whole dependency fan-out in
-(measured: 118 packages, 177 MB extracted) for a 5 MB app.
+(measured: 118 packages, 177 MB extracted) for a 5 MB app. The speed test carries
+its four, about 28 MB, because none of them is in any image.
 
 ## The framework
 
@@ -204,6 +205,10 @@ look at.
 headless Chromium over the DevTools protocol, drawing the page, the cursor and the
 minimap itself. `cargo test -- --ignored real` puts a live site through the whole path
 when a chromium is installed.
+
+`apps/speedtest` is the one that carries what it runs: speedtest-go, librespeed-cli and
+cfspeedtest from their projects' releases and iperf3 from Debian, run as they ship and
+read line by line, with the samples its parsers are tested against under `fixtures/`.
 
 ## What it costs
 

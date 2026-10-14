@@ -1,0 +1,21 @@
+# The measuring programs this bundle carries, from their projects' own releases,
+# pinned by checksum: where each file goes in the bundle, its url, and its sha256.
+# Unpacked by tools/appimage/fetch-release.sh; a tarball gives up the member named
+# like the destination.
+#
+# Each is a single binary that needs nothing from the device but its libc: the two
+# Go programs are static, and cfspeedtest links glibc and libgcc_s and carries its
+# own CA roots. speedtest-go and librespeed-cli publish checksums.txt beside their
+# tarballs and the sums below match them; cfspeedtest publishes none, so its sum is
+# the one taken when it was first fetched.
+#
+# speedtest-go replaces Debian's speedtest-cli, which upstream archived in 2024.
+# librespeed-cli is newer here than Debian's 1.0.11. librespeed-cli is LGPL-3.0,
+# which is a set of permissions on top of the GPL-3.0, so the GPL's text travels too.
+usr/bin/speedtest-go https://github.com/showwin/speedtest-go/releases/download/v1.8.3/speedtest-go_1.8.3_Linux_arm64.tar.gz 48f51504548d76d5dc2ce7f72e713bd3b4e35554028b7131467060688754c657
+usr/share/doc/speedtest-go/LICENSE https://github.com/showwin/speedtest-go/releases/download/v1.8.3/speedtest-go_1.8.3_Linux_arm64.tar.gz 48f51504548d76d5dc2ce7f72e713bd3b4e35554028b7131467060688754c657
+usr/bin/librespeed-cli https://github.com/librespeed/speedtest-cli/releases/download/v1.0.14/librespeed-cli_1.0.14_linux_arm64.tar.gz 75e51a2494d03cb35a92ddbf862b40571a25a1526f3cf3dfa8b1d5d7bc622bd9
+usr/share/doc/librespeed-cli/LICENSE https://github.com/librespeed/speedtest-cli/releases/download/v1.0.14/librespeed-cli_1.0.14_linux_arm64.tar.gz 75e51a2494d03cb35a92ddbf862b40571a25a1526f3cf3dfa8b1d5d7bc622bd9
+usr/share/doc/librespeed-cli/GPL-3.0.txt https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/text/GPL-3.0-only.txt fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0
+usr/bin/cfspeedtest https://github.com/code-inflation/cfspeedtest/releases/download/v2.2.2/cfspeedtest-aarch64-unknown-linux-gnu.tar.gz 0d4778e1ca6856dc1f3303337039a15abee21f09a3ef804ea22bfd09d1b41133
+usr/share/doc/cfspeedtest/LICENSE.txt https://raw.githubusercontent.com/code-inflation/cfspeedtest/v2.2.2/LICENSE.txt 508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1

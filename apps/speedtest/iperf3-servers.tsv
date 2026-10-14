@@ -1,0 +1,183 @@
+Algeria	Algiers	41.110.39.130	5201	DATAPACKET
+Angola	Luanda	102.130.68.171	9210-9240	Paratus 1
+Angola	Luanda	160.242.19.254	9210-9240	Paratus 2
+Australia	Sydney	143.244.63.144	5201	DATAPACKET
+Australia	Sydney	96.45.44.87	30001-30009	FortiSASE
+Australia	Sydney	speedtest.syd12.au.leaseweb.net	5201-5210	LeaseWeb
+Australia	Sydney	syd.proof.ovh.net	5201-5210	OVH
+Austria	Vienna	iperf3-vie-at.alwyzon.net	5201-5210	Alwyzon
+Austria	Vienna	185.180.12.40	5201	DATAPACKET
+Belgium	Brussels	207.211.214.65	5201	DATAPACKET
+Belgium	Liege	185.3.160.57	5201-5240	VOO
+Brazil	Sao Paulo	138.199.4.1	5201	DATAPACKET
+Brazil	Sao Paulo	148.230.60.200	30001-30009	FortiSASE
+Bulgaria	Sofia	37.19.203.1	5201	DATAPACKET
+Canada	Montreal	speedtest.mtl2.ca.leaseweb.net	5201-5210	LeaseWeb
+Canada	Montreal	speedtest.goco.ca	9205-9240	TELUS
+Canada	Ottawa	173.243.131.29	30001-30009	FortiSASE
+Canada	Toronto	138.199.57.129	5201	DATAPACKET
+Canada	Toronto	204.155.243.172	30002-30009	FortiSASE 1
+Canada	Toronto	96.45.43.6	30001-30009	FortiSASE 2
+Canada	Victoria	speed.couch.ca	15201-15210	couch.ca
+Canada	Woodstock	yyc-speedtest.xplore.ca	8070-8099	Xplore
+Chile	Santiago	79.127.209.1	5201	DATAPACKET
+China	Chengdu	116.169.118.91	5201-5220	China Telecom
+China	Fuzhou	59.56.22.40	5201-5220	China Telecom
+China	Nanjing	114.230.93.99	5201-5220	China Telecom
+China	Ningbo	122.228.230.122	5201-5220	China Telecom
+China	Zhengzhou	123.53.44.221	5201-5220	China Telecom
+Costa Rica	San Jose	156.146.53.53	5201	DATAPACKET
+Croatia	Zagreb	169.150.242.129	5201	DATAPACKET
+Czechia	Prague	185.152.65.113	5201	DATAPACKET
+Denmark	Copenhagen	speed1.fiberby.dk	9201-9240	Fiberby 1
+Denmark	Copenhagen	speed2.fiberby.dk	9201-9240	Fiberby 2
+Denmark	Copenhagen	speedtest.hiper.dk	5201-5205	Hiper
+Ecuador	Santa Ana	speedtest.masnet.ec	5201-5209	MasNet
+Egypt	Cairo	213.158.175.240	5201	DATAPACKET
+Equatorial Guinea	Bata	gw1.malabo.guineanet.net	5201-5209	Guine@net
+Equatorial Guinea	Bata	105.235.237.2	5201-5209	Guineanet
+Estonia	Tallinn	bwtest.linxtelecom.com	5201-5209	CITIC
+Finland	Helsinki	spd-fisrv.hostkey.com	5201-5209	HOSTKEY
+France	Marseille	138.199.14.66	5201	DATAPACKET
+France	Paris	185.93.2.193	5201	DATAPACKET
+France	Paris	96.45.42.156	30001-30009	FortiSASE
+France	Paris	iperf.online.net	5200-5209	Scaleway 1
+France	Paris	ping-90ms.online.net	5200-5209	Scaleway 2
+France	Paris	iperf3.moji.fr	5200-5240	moji
+France	Valbonne	96.45.41.167	30001-30009	FortiSASE
+France	Vitry-sur-Seine	ping.online.net	5200-5209	Scaleway
+Gambia	Banjul	212.60.92.134	60001-60003	Pura
+Germany	Berlin	a110.speedtest.wobcom.de	5201	WOBCOM 1
+Germany	Berlin	a209.speedtest.wobcom.de	5201	WOBCOM 2
+Germany	Dusseldorf	a208.speedtest.wobcom.de	5201	WOBCOM
+Germany	Frankfurt	fra.speedtest.clouvider.net	5200-5209	Clouvider
+Germany	Frankfurt	185.102.219.93	5201	DATAPACKET
+Germany	Frankfurt	96.45.39.38	30001-30009	FortiSASE
+Germany	Frankfurt	spd-desrv.hostkey.com	5201-5209	HOSTKEY
+Germany	Frankfurt	speedtest.ip-projects.de	5201	IP Projects
+Germany	Frankfurt	speedtest.fra1.de.leaseweb.net	5201-5210	LeaseWeb
+Germany	Frankfurt	a205.speedtest.wobcom.de	5201	WOBCOM 1
+Germany	Frankfurt	a210.speedtest.wobcom.de	5201	WOBCOM 2
+Germany	Frankfurt	speedtest.level66.services	5201-5205	level66.network
+Germany	Norderstedt	speedtest.wtnet.de	5200-5209	wilhelm.tel
+Germany	Wolfsburg	a400.speedtest.wobcom.de	5201	WOBCOM 1
+Germany	Wolfsburg	speedtest.wobcom.de	5201	WOBCOM 2
+Ghana	Accra	102.214.66.19	5201	DATAPACKET 1
+Ghana	Accra	102.214.66.39	5201	DATAPACKET 2
+Greece	Athens	169.150.252.2	5201	DATAPACKET
+Hong Kong	Hong Kong	84.17.57.129	5201	DATAPACKET
+Hong Kong	Hong Kong	speedtest.hkg12.hk.leaseweb.net	5201-5210	LeaseWeb
+Iceland	Reykjavik	spd-icsrv.hostkey.com	5201-5209	HOSTKEY
+India	Bengaluru	49.205.75.2	5008-5020	ACT Fibernet
+India	Pune	69.48.236.198	30001-30009	FortiSASE
+Indonesia	Kediri	speedtest.tangerang2.myrepublic.net.id	9205-9240	MyRepublic
+Ireland	Dublin	87.249.137.8	5201	DATAPACKET
+Israel	Jerusalem	speed.netfiber.net.il	5201	Netfiber
+Israel	Jerusalem	speed.rimon.net.il	5201	Rimon
+Israel	Tel Aviv	169.150.202.193	5201	DATAPACKET
+Italy	Arezzo	it1.speedtest.aruba.it	5201	Aruba.it
+Italy	Milan	84.17.59.129	5201	DATAPACKET
+Italy	Ponte San Pietro	217.61.40.96	5201	Aruba.it
+Italy	Rome	speed-cb.dimensione.com	5201-5209	Dimensione
+Jamaica	Portmore	speedtest1.flowjamaica.com	5506-5520	Flow
+Japan	Tokyo	89.187.160.1	5201	DATAPACKET
+Japan	Tokyo	66.35.31.81	30001-30009	FortiSASE
+Japan	Tokyo	speedtest.tyo11.jp.leaseweb.net	5201-5210	LeaseWeb
+Kenya	Nairobi	speed.mymanga.pro	9202-9240	Mymanga
+Mauritius	Floreal	197.227.12.18	5201-5209	Mauritius Telecom 1
+Mauritius	Floreal	speedtestfl.telecom.mu	5200-5209	Mauritius Telecom 2
+Mauritius	London	speedtestlondon.telecom.mu	5201-5209	Mauritius Telecom
+Mexico	Queretaro	121.127.43.65	5201	DATAPACKET
+Mongolia	Ulaanbaatar	coverage1.mobicom.mn	5201-5202	Mobicom
+New Caledonia	Noumea	speedtest.lagoon.nc	5202-5210	Lagoon
+New Zealand	Auckland	akl.linetest.nz	5301-5309	2Degrees
+New Zealand	Auckland	72.1.86.46	30001-30009	FortiSASE
+New Zealand	Christchurch	chch.linetest.nz	5301-5309	2Degrees
+Panama	Colon	speedtest1.cwpanama.net	5505-5509	CW Panama
+Panama	Panama	speedtest6.cwpanama.net	5505-5509	CW Panama
+Papua New Guinea	Port Moresby	103.146.200.98	5201	DATAPACKET 1
+Papua New Guinea	Port Moresby	154.81.51.4	5201	DATAPACKET 2
+Poland	Debica	speedsrv.multinet24.pl	5301-5310	Multinet24
+Poland	Warsaw	185.246.208.67	5201	DATAPACKET
+Portugal	Lisbon	109.61.94.65	5201	DATAPACKET
+Romania	Bucharest	185.102.217.170	5201	DATAPACKET
+Serbia	Belgrade	speedtest1.sox.rs	9206-9240	SOX
+Singapore	Singapore	89.187.162.1	5201	DATAPACKET
+Singapore	Singapore	176.23.128.102	30002-30009	FortiSASE 1
+Singapore	Singapore	96.45.38.22	30001-30009	FortiSASE 2
+Singapore	Singapore	speedtest.sin1.sg.leaseweb.net	5201-5210	LeaseWeb
+Singapore	Singapore	sgp.proof.ovh.net	5201-5210	OVH
+Slovakia	Bratislava	156.146.40.65	5201	DATAPACKET
+Spain	Madrid	185.93.3.50	5201	DATAPACKET
+Spain	Madrid	148.230.45.213	30001-30009	FortiSASE
+Sweden	Alvsjo	iperf.fegis.nu	5201-5207	Hostup
+Sweden	Kista	speedtest.kamel.network	5201-5205	Kamel Networks
+Sweden	Stockholm	185.76.9.135	5201	DATAPACKET
+Switzerland	Schaffhausen	speedtest.shinternet.ch	5201-5209	Sasag
+Switzerland	Winterthur	speedtest.init7.net	5201-5204	Init7
+Switzerland	Zurich	t5.cscs.ch	5201-5203	CSCS
+Switzerland	Zurich	89.187.165.1	5201	DATAPACKET
+Switzerland	Zurich	speedtest.iway.ch	5201	iWay
+Taiwan	Taipei	189.25.98.63	30001-30009	FortiSASE
+The Netherlands	Amsterdam	ams.speedtest.clouvider.net	5200-5209	Clouvider
+The Netherlands	Amsterdam	185.102.218.1	5201	DATAPACKET
+The Netherlands	Amsterdam	iperf-ams-nl.eranium.net	5201-5210	Eranium
+The Netherlands	Amsterdam	speedtest.ams1.nl.leaseweb.net	5201-5210	LeaseWeb 1
+The Netherlands	Amsterdam	speedtest.ams2.nl.leaseweb.net	5201-5210	LeaseWeb 2
+The Netherlands	Amsterdam	speedtest.netone.nl	5201	NetOne
+The Netherlands	Amsterdam	ping-ams1.online.net	5201-5209	Scaleway
+The Netherlands	Amsterdam	a204.speedtest.wobcom.de	5201	WOBCOM
+The Netherlands	Dronten	nl.speed.vps1.net	5201-5210	vps1
+The Netherlands	Lelystad	iperf1.surfwireless.nl	5201-5220	SURFnet
+The Netherlands	Naaldwijk	iperf.worldstream.nl	5201-5205	Worldstream
+Turkey	Bursa	iperf.pendc.com	5201-5209	PENDC
+Turkey	Istanbul	156.146.52.1	5201	DATAPACKET
+Turkey	Istanbul	69.48.237.66	30001-30009	FortiSASE
+Uganda	Kampala	41.210.185.162	5201	DATAPACKET
+Ukraine	Kyiv	speed.cosmonova.net	5201-5209	Cosmonova
+Ukraine	Kyiv	37.19.218.65	5201	DATAPACKET
+United Arab Emirates	Dubai	189.25.101.151	30001-30009	FortiSASE 1
+United Arab Emirates	Dubai	189.25.97.217	30001-30009	FortiSASE 2
+United Arab Emirates	Dubai	69.48.238.200	30001-30009	FortiSASE 3
+United Kingdom	London	lon.speedtest.clouvider.net	5200-5209	Cloudvider
+United Kingdom	London	185.59.221.51	5201	DATAPACKET
+United Kingdom	London	96.45.40.45	30001-30009	FortiSASE
+United Kingdom	London	speedtest.lon1.uk.leaseweb.net	5202-5210	LeaseWeb 1
+United Kingdom	London	speedtest.lon12.uk.leaseweb.net	5201-5210	LeaseWeb 2
+United Kingdom	London	speedtest2.lightningfibre.net.uk	4000-4007	Lightning Fibre
+United Kingdom	London	iperf.as42831.net	5300-5400	UK Servers
+United Kingdom	Maidenhead	speedtest.rapidswitch.com	5201-5209	RapidSwitch
+United Kingdom	Manchester	man.speedtest.clouvider.net	5200-5209	Clouvider
+United States	Ashburn	ash.speedtest.clouvider.net	5200-5209	Clouvider
+United States	Ashburn	37.19.206.20	5201	DATAPACKET
+United States	Ashburn	66.35.22.79	30001-30009	FortiSASE
+United States	Atlanta	atl.speedtest.clouvider.net	5200-5209	Clouvider
+United States	Boston	109.61.86.65	5201	DATAPACKET
+United States	Chicago	chi.speedtest.clouvider.net	5201-5209	Clouvider
+United States	Chicago	185.93.1.65	5201	DATAPACKET
+United States	Chicago	speedtest.chi11.us.leaseweb.net	5201-5210	LeaseWeb
+United States	Dallas	dal.speedtest.clouvider.net	5200-5209	Clouvider
+United States	Dallas	89.187.164.1	5201	DATAPACKET
+United States	Dallas	66.35.27.207	30001-30009	FortiSASE
+United States	Dallas	dfw.speedtest.is.cc	5203-5210	InterServer.net
+United States	Dallas	speedtest.dal13.us.leaseweb.net	5201-5210	LeaseWeb
+United States	Houston	37.19.216.1	5201	DATAPACKET
+United States	Kansas City	speedtest.nocix.net	5201-5205	NOCIX
+United States	Los Angeles	la.speedtest.clouvider.net	5200-5209	Clouvider
+United States	Los Angeles	185.152.67.2	5201	DATAPACKET
+United States	Los Angeles	speedtest.lax12.us.leaseweb.net	5201-5210	LeaseWeb
+United States	Miami	195.181.162.195	5201	DATAPACKET
+United States	Miami	23.249.54.234	30002-30009	FortiSASE
+United States	Miami	speedtest.mia11.us.leaseweb.net	5201-5210	LeaseWeb
+United States	New York	spd-uswb.hostkey.com	5201-5209	HOSTKEY
+United States	New York City	speedtest.nyc1.us.leaseweb.net	5201-5210	LeaseWeb
+United States	Phoenix	phx.speedtest.clouvider.net	5200-5209	Clouvider
+United States	Phoenix	speedtest.phx1.us.leaseweb.net	5201-5210	LeaseWeb
+United States	Plano	209.40.123.215	30001-30009	FortiSASE
+United States	Salt Lake	speedtest.xmission.com	5202-5209	XMISSION
+United States	San Francisco	speedtest.sfo12.us.leaseweb.net	5201-5210	LeaseWeb
+United States	San Jose	148.230.59.38	30002-30009	FortiSASE
+United States	Seattle	84.17.41.11	5201	DATAPACKET
+United States	Seattle	speedtest.sea11.us.leaseweb.net	5201-5210	LeaseWeb
+United States	Washington	speedtest.wdc2.us.leaseweb.net	5201-5210	LeaseWeb
+Uzbekistan	Tashkent	speedtest.uztelecom.uz	5200-5209	UZ Telecom
