@@ -43,10 +43,10 @@ pub struct Listing {
     pub offers: Vec<Offer>,
 }
 
-/// Whether the tool will update a profile check-profile called `word`. A modified one
-/// it refuses without --force.
+/// Whether the tool will update a profile check-profile called `word`. One whose packages
+/// or system files changed it updates only with --force, which drops those changes.
 pub fn updatable(word: &str) -> bool {
-    matches!(word, "pristine" | "config-modified")
+    matches!(word, "pristine" | "booted" | "customized")
 }
 
 /// How a run started from the screen is getting on.
@@ -114,8 +114,8 @@ pub fn list(all: bool) -> Result<Listing, String> {
     parse_list(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// What check-profile says about the booted profile: pristine, config-modified or
-/// modified. Seconds at most: call it from a thread.
+/// What check-profile says about the booted profile: pristine, booted, customized,
+/// packages or system. Seconds at most: call it from a thread.
 pub fn check() -> Result<String, String> {
     let out = crate::boot::tool(&["check-profile"])
         .output()
@@ -135,8 +135,9 @@ pub fn check() -> Result<String, String> {
 }
 
 /// Update the booted profile to `build`, reporting on `tx` until it ends with `Done`
-/// or `Failed`. `force` updates a modified profile too, losing its changes outside
-/// /etc. Blocks for the whole update: call it from a thread.
+/// or `Failed`. `force` updates a profile whose packages or system files changed too,
+/// dropping those changes, and takes a build that is not newer; the rest carries as ever.
+/// Blocks for the whole update: call it from a thread.
 pub fn update(build: u32, force: bool, tx: &Sender<Step>) {
     let number = build.to_string();
     let mut args = vec!["update-profile", "--progress"];
@@ -199,8 +200,10 @@ mod tests {
     #[test]
     fn only_a_clean_or_config_changed_profile_is_updatable() {
         assert!(updatable("pristine"));
-        assert!(updatable("config-modified"));
-        assert!(!updatable("modified"));
+        assert!(updatable("booted"));
+        assert!(updatable("customized"));
+        assert!(!updatable("packages"));
+        assert!(!updatable("system"));
         assert!(!updatable("error"));
     }
 

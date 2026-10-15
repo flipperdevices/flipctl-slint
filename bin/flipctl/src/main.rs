@@ -1050,7 +1050,7 @@ mod detail {
 
         /// Checked, and changed beyond what an update carries.
         pub fn modified(&self) -> bool {
-            self.status().as_deref() == Some("modified")
+            matches!(self.status().as_deref(), Some("packages" | "system"))
         }
 
         fn listing(&self) -> Option<Listing> {
@@ -2056,9 +2056,11 @@ mod detail {
     /// check-profile's word, as the screen says it.
     fn status_text(word: &str) -> &'static str {
         match word {
-            "pristine" => "As installed",
-            "config-modified" => "Settings changed",
-            "modified" => "Modified",
+            "pristine" => "Pristine",
+            "booted" => "Booted",
+            "customized" => "Customized",
+            "packages" => "Packages changed",
+            "system" => "System files changed",
             _ => "Unknown",
         }
     }
@@ -2077,8 +2079,7 @@ mod detail {
             None => return Vec::new(),
         };
         let mut out = vec![
-            row("Profile", &boot::display_name(&listing.profile)),
-            row("Build", &listing.build.to_string()),
+            row("Profile", &format!("{} {}", boot::display_name(&listing.profile), listing.build)),
             row("Status", p.status().as_deref().map_or("Checking", status_text)),
         ];
         if let Some(kept) = listing.kept {
@@ -2112,7 +2113,7 @@ mod detail {
                     out.push(row("Channel", channel));
                     out.push(row("Download", &update::megabytes(offer.bytes)));
                     if p.forced() && p.modified() {
-                        out.push(text("Changes outside /etc are lost"));
+                        out.push(text("Package and system changes are dropped"));
                     }
                     out.push(text("Keeps the current build to go back to"));
                 }
@@ -7027,7 +7028,7 @@ fn panel(
                                             lines: vec![
                                                 format!("Force update to build {n}?"),
                                                 if p.modified() {
-                                                    "Changes outside /etc are lost".into()
+                                                    "Package and system changes are dropped".into()
                                                 } else {
                                                     "The current build is kept".into()
                                                 },
