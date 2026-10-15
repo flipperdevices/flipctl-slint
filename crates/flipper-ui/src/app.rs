@@ -589,7 +589,7 @@ fn pump<R: std::io::Read + Send + 'static>(
 }
 
 /// Run a command, passing each output line to `log`, and fail on a non-zero exit.
-fn run_logged(cmd: &mut Command, log: &mut impl FnMut(String)) -> Result<(), String> {
+pub(crate) fn run_logged(cmd: &mut Command, log: &mut impl FnMut(String)) -> Result<(), String> {
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

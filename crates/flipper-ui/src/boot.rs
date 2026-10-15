@@ -275,7 +275,7 @@ fn env_supath(defs: &str) -> Option<String> {
 /// all, so going through it there fails every call with ENOENT. The failure is
 /// silent by design here -- a tool that cannot answer means "unknown" -- so the
 /// symptom was an empty profile list on a machine full of profiles.
-fn tool(args: &[&str]) -> Command {
+pub(crate) fn tool(args: &[&str]) -> Command {
     // By absolute path where we can find one, so it does not matter what PATH the
     // program was started with.
     let program = which(args[0]).unwrap_or_else(|| args[0].into());
@@ -1395,15 +1395,27 @@ pub fn origin_base(origin: &str) -> String {
     }
 }
 
+/// A build `update-profile` kept, named `<profile>-obsolete-<build>`: the profile it
+/// was, and the build. The name sorts right after the profile's own.
+pub fn obsolete_of(name: &str) -> Option<(&str, &str)> {
+    let (profile, build) = name.rsplit_once("-obsolete-")?;
+    let digits = !build.is_empty() && build.bytes().all(|b| b.is_ascii_digit());
+    (digits && !profile.trim_start_matches('@').is_empty()).then_some((profile, build))
+}
+
 /// What the row shows.
 ///
 /// One a user derived is named `@Base__label__` and shows its label in brackets,
-/// so a clone is visibly a clone. Anything else shows its plain name.
+/// so a clone is visibly a clone. A build an update kept shows as the profile it
+/// was, then "obsolete" and its build. Anything else shows its plain name.
 ///
 /// A dash reads as a space either way. boot_menu.js only does that inside the
 /// brackets, which leaves an image called `@No-Graphics` reading as a subvolume
 /// name rather than as a name; every profile is spelled the same way here.
 pub fn display_name(name: &str) -> String {
+    if let Some((profile, build)) = obsolete_of(name) {
+        return format!("{} obsolete {build}", display_name(profile));
+    }
     let raw = name.trim_start_matches('@');
     match raw.split_once("__") {
         Some((_, rest)) => match rest.strip_suffix("__") {
@@ -2127,13 +2139,13 @@ pub fn clone_dest(p: &Profile, existing: &[Profile]) -> String {
 }
 
 /// Whether a profile is one a user made, which is the `@Base__label__` shape the
-/// list shows in brackets.
+/// list shows in brackets, or a build an update kept for the user to go back to.
 ///
 /// Everything else is an image: a factory profile, whose name is what ties it to
 /// its stock, or a subvolume made outside this menu. Neither may be renamed or
 /// deleted.
 pub fn is_user_profile(name: &str) -> bool {
-    label_of(name).is_some()
+    label_of(name).is_some() || obsolete_of(name).is_some()
 }
 
 /// The label inside a `@Base__label__` name, if it has one.
@@ -2163,6 +2175,9 @@ pub fn rename_warning(text: &str, profile: &Profile, existing: &[Profile]) -> St
 /// The label to seed the Rename field with: dashes read as spaces, and a name
 /// with no label offered whole.
 pub fn profile_label(name: &str) -> String {
+    if obsolete_of(name).is_some() {
+        return display_name(name).replace(['[', ']'], "");
+    }
     match label_of(name) {
         Some(label) => label.replace('-', " "),
         None => name.trim_start_matches('@').to_string(),

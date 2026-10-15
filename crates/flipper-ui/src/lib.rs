@@ -31,6 +31,7 @@ pub mod old_flipctl_loader;
 pub mod paint;
 pub mod pixel;
 pub mod platform;
+pub mod profile_update;
 #[cfg(feature = "remote")]
 pub mod remote;
 pub mod route_watch;

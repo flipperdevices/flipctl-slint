@@ -335,6 +335,7 @@ mod demo {
         Battery,
         Modem,
         Update,
+        Profile,
         /// Under System info, from its own soft key rather than a menu row.
         Revisions,
     }
@@ -349,7 +350,8 @@ mod demo {
                 Detail::Disk => "Disk info",
                 Detail::Battery => "Battery info",
                 Detail::Modem => "5G Modem",
-                Detail::Update => "Update",
+                Detail::Update => "Install FlipperOS",
+                Detail::Profile => "Update profile",
                 Detail::Revisions => "Software Revisions",
             }
         }
@@ -429,7 +431,8 @@ mod demo {
             Row { label: "System info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::System) },
             Row { label: "Battery info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Battery) },
             Row { label: "Disk info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
-            Row { label: "Update", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
+            Row { label: "Install FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
+            Row { label: "Update profile", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Profile) },
             Row { label: "Reboot", icon: 0, frames: 1, stat: Stat::None, act: Act::Reboot },
             Row { label: "Shutdown", icon: 0, frames: 1, stat: Stat::None, act: Act::Shutdown },
         ],
@@ -507,6 +510,7 @@ mod detail {
     use std::time::Duration;
 
     use flipper_ui::boot;
+    use flipper_ui::profile_update::{self, Listing, Offer, Step};
     use flipper_ui::sysinfo::{self, Battery, Disk, Modem, Route, System};
     use flipper_ui::ui::DetailRow;
     use flipper_ui::update::{self, Channel, Image};
@@ -587,6 +591,20 @@ mod detail {
             out.push(text(&line));
         }
         out
+    }
+
+    /// Where moving `forward` along a list of `total` versions from `at` lands. No
+    /// wrapping: the ends of a list of versions are ends, and the chevrons go out at
+    /// them to say so.
+    fn step_index(at: usize, total: usize, forward: bool) -> usize {
+        if total == 0 {
+            return 0;
+        }
+        if forward {
+            (at + 1).min(total - 1)
+        } else {
+            at.saturating_sub(1)
+        }
     }
 
     /// A value the left and right keys change, between the chevrons the settings
@@ -719,6 +737,9 @@ mod detail {
         /// Not a poller either: the channel is a choice, not a measurement, and
         /// asking what it offers is a read rather than a watch.
         Update(UpdateScreen),
+        /// Like Update: what update-profile offers is read once, and a run reports
+        /// on a channel of its own.
+        Profile(ProfileScreen),
         /// Not a poller: the installer's record is written once, at install.
         Revisions(sysinfo::Install),
     }
@@ -814,15 +835,13 @@ mod detail {
             self.on_channel().ok()?.get(self.at).cloned()
         }
 
-        /// Move along this channel's builds. No wrapping: the ends of a list of
-        /// versions are ends, and the chevrons go out at them to say so.
+        /// Move along this channel's builds.
         pub fn step_version(&mut self, forward: bool) -> bool {
             let total = self.on_channel().map(|v| v.len()).unwrap_or(0);
             if total == 0 {
                 return false;
             }
-            let next =
-                if forward { (self.at + 1).min(total - 1) } else { self.at.saturating_sub(1) };
+            let next = step_index(self.at, total, forward);
             let moved = next != self.at;
             self.at = next;
             self.dirty.set(true);
@@ -873,6 +892,295 @@ mod detail {
                 })
                 .ok()?;
             Some(rx)
+        }
+    }
+
+    /// The Update profile screen: what `update-profile --list` said about the booted
+    /// profile, which channel and build are showing, and the run started from here.
+    pub struct ProfileScreen {
+        pub channel: Channel,
+        /// Which of `offers()` is chosen, an index into that filtered list.
+        pub at: usize,
+        listing: std::cell::RefCell<Option<Result<Listing, String>>>,
+        loading: std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<Listing, String>>>>,
+        /// check-profile's word, once it has said it.
+        status: std::cell::RefCell<Option<String>>,
+        checking: std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<String, String>>>>,
+        /// The newest report of the run started here, if one was.
+        step: std::cell::RefCell<Option<Step>>,
+        /// What the run started here does, said the way the screen says it once it
+        /// has: the tool's own line names subvolumes and says to reboot.
+        goal: std::cell::RefCell<String>,
+        running: std::cell::RefCell<Option<std::sync::mpsc::Receiver<Step>>>,
+        /// A modified profile, unlocked for a forced update by five PTT taps.
+        force: std::cell::Cell<bool>,
+        /// PTT taps so far, and when the first of them was.
+        taps: std::cell::Cell<(u8, Option<std::time::Instant>)>,
+        dirty: std::cell::Cell<bool>,
+    }
+
+    /// PTT taps that unlock a forced update, and the time they must fall within.
+    const FORCE_TAPS: u8 = 5;
+    const FORCE_WINDOW: Duration = Duration::from_secs(3);
+
+    impl ProfileScreen {
+        /// Read the listing on a thread: the newer builds, or with `all` every one.
+        fn spawn_list(all: bool) -> Option<std::sync::mpsc::Receiver<Result<Listing, String>>> {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::Builder::new()
+                .name("profile-list".into())
+                .spawn(move || {
+                    let _ = tx.send(profile_update::list(all));
+                })
+                .ok()
+                .map(|_| rx)
+        }
+
+        fn open() -> Self {
+            let listing = Self::spawn_list(false);
+            let started = listing.is_some();
+            // At the same time: the list waits on the build server, this on the disk.
+            let (ctx, crx) = std::sync::mpsc::channel();
+            let checking = std::thread::Builder::new()
+                .name("profile-check".into())
+                .spawn(move || {
+                    let _ = ctx.send(profile_update::check());
+                })
+                .is_ok();
+            Self {
+                channel: Channel::default(),
+                at: 0,
+                listing: std::cell::RefCell::new(
+                    (!started).then(|| Err("cannot ask update-profile".to_string())),
+                ),
+                loading: std::cell::RefCell::new(listing),
+                status: std::cell::RefCell::new((!checking).then(|| "error".to_string())),
+                checking: std::cell::RefCell::new(checking.then_some(crx)),
+                step: std::cell::RefCell::new(None),
+                goal: std::cell::RefCell::new(String::new()),
+                running: std::cell::RefCell::new(None),
+                force: std::cell::Cell::new(false),
+                taps: std::cell::Cell::new((0, None)),
+                dirty: std::cell::Cell::new(true),
+            }
+        }
+
+        /// Take the listing and the status once each is read, and every report the run
+        /// has made since the last frame, keeping the newest.
+        fn collect(&self) {
+            let mut checking = self.checking.borrow_mut();
+            if let Some(rx) = checking.as_ref() {
+                match rx.try_recv() {
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    said => {
+                        let word = said.ok().and_then(Result::ok).unwrap_or_else(|| "error".into());
+                        *self.status.borrow_mut() = Some(word);
+                        *checking = None;
+                        self.dirty.set(true);
+                    }
+                }
+            }
+            let mut loading = self.loading.borrow_mut();
+            if let Some(rx) = loading.as_ref() {
+                match rx.try_recv() {
+                    Ok(found) => {
+                        *self.listing.borrow_mut() = Some(found);
+                        *loading = None;
+                        self.dirty.set(true);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(_) => {
+                        *self.listing.borrow_mut() =
+                            Some(Err("update-profile did not answer".into()));
+                        *loading = None;
+                        self.dirty.set(true);
+                    }
+                }
+            }
+            let mut running = self.running.borrow_mut();
+            let Some(rx) = running.as_ref() else { return };
+            loop {
+                match rx.try_recv() {
+                    Ok(step) => {
+                        let end = !matches!(step, Step::Working(..));
+                        *self.step.borrow_mut() = Some(step);
+                        self.dirty.set(true);
+                        if end {
+                            *running = None;
+                            return;
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                    Err(_) => {
+                        *self.step.borrow_mut() =
+                            Some(Step::Failed("update-profile stopped without a word".into()));
+                        *running = None;
+                        self.dirty.set(true);
+                        return;
+                    }
+                }
+            }
+        }
+
+        pub fn loading(&self) -> bool {
+            self.loading.borrow().is_some()
+        }
+
+        /// A run is under way, which the screen may not be left during.
+        pub fn busy(&self) -> bool {
+            self.running.borrow().is_some()
+        }
+
+        /// The run started here has finished, whichever way.
+        pub fn finished(&self) -> Option<Step> {
+            self.step.borrow().clone().filter(|s| !matches!(s, Step::Working(..)))
+        }
+
+        /// check-profile's word: None while it is still checking.
+        fn status(&self) -> Option<String> {
+            self.status.borrow().clone()
+        }
+
+        /// The tool will update this profile as it is.
+        fn updatable(&self) -> bool {
+            self.status().is_some_and(|w| profile_update::updatable(&w))
+        }
+
+        /// Checked, and changed beyond what an update carries.
+        pub fn modified(&self) -> bool {
+            self.status().as_deref() == Some("modified")
+        }
+
+        fn listing(&self) -> Option<Listing> {
+            self.listing.borrow().as_ref().and_then(|l| l.as_ref().ok()).cloned()
+        }
+
+        /// The builds on the channel showing, newest first; when forced, every one.
+        fn offers(&self) -> Vec<Offer> {
+            let branch = self.channel.branch();
+            let forced = self.forced();
+            self.listing().map_or_else(Vec::new, |l| {
+                l.offers.into_iter().filter(|o| forced || o.branch == branch).collect()
+            })
+        }
+
+        /// The build the screen is offering, when the profile may be updated at all.
+        fn chosen(&self) -> Option<Offer> {
+            if !self.updatable() && !self.forced() {
+                return None;
+            }
+            self.offers().get(self.at).cloned()
+        }
+
+        /// The number of the build Update would start.
+        pub fn chosen_number(&self) -> Option<u32> {
+            self.chosen().map(|o| o.number)
+        }
+
+        /// Unlocked by PTT: any build may be chosen, and Update forces it, whatever
+        /// the profile's state.
+        pub fn forced(&self) -> bool {
+            self.force.get()
+        }
+
+        /// One PTT tap. The fifth within FORCE_WINDOW unlocks a forced update, and
+        /// reads the listing again with every build in it; returns whether this tap
+        /// did.
+        pub fn ptt(&self, now: std::time::Instant) -> bool {
+            if self.loading() || self.force.get() || self.busy() || self.finished().is_some() {
+                return false;
+            }
+            let (n, first) = match self.taps.get() {
+                (n, Some(first)) if now.duration_since(first) <= FORCE_WINDOW => (n + 1, first),
+                _ => (1, now),
+            };
+            if n < FORCE_TAPS {
+                self.taps.set((n, Some(first)));
+                return false;
+            }
+            self.taps.set((0, None));
+            let Some(rx) = Self::spawn_list(true) else { return false };
+            *self.loading.borrow_mut() = Some(rx);
+            self.force.set(true);
+            self.dirty.set(true);
+            true
+        }
+
+        /// Any other key starts the count again.
+        pub fn reset_taps(&self) {
+            self.taps.set((0, None));
+        }
+
+        /// The build there is to go back to.
+        pub fn kept(&self) -> Option<u32> {
+            self.listing()?.kept
+        }
+
+        /// Right is a higher build. The list is newest first, so that is towards
+        /// its start.
+        pub fn step_version(&mut self, forward: bool) -> bool {
+            let next = step_index(self.at, self.offers().len(), !forward);
+            let moved = next != self.at;
+            self.at = next;
+            self.dirty.set(true);
+            moved
+        }
+
+        pub fn step_channel(&mut self) {
+            self.channel = self.channel.step(true);
+            self.at = 0;
+            self.dirty.set(true);
+        }
+
+        /// At the oldest build, where the left chevron goes out.
+        pub fn at_start(&self) -> bool {
+            self.at + 1 >= self.offers().len()
+        }
+
+        /// At the newest build, where the right chevron goes out.
+        pub fn at_end(&self) -> bool {
+            self.at == 0
+        }
+
+        /// Run `job` on a thread, its reports going to this screen.
+        fn spawn(&self, job: impl FnOnce(&std::sync::mpsc::Sender<Step>) + Send + 'static) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            if std::thread::Builder::new()
+                .name("profile-update".into())
+                .spawn(move || job(&tx))
+                .is_ok()
+            {
+                *self.step.borrow_mut() = Some(Step::Working(0, "Starting".into()));
+                *self.running.borrow_mut() = Some(rx);
+                self.dirty.set(true);
+            }
+        }
+
+        /// Update to the chosen build. Nothing happens while a run is under way.
+        pub fn start_update(&self) -> bool {
+            let Some(offer) = self.chosen().filter(|_| !self.busy()) else { return false };
+            let Some(listing) = self.listing() else { return false };
+            *self.goal.borrow_mut() = format!(
+                "{} updated from build {} to {}",
+                boot::display_name(&listing.profile),
+                listing.build,
+                offer.number
+            );
+            let force = self.forced();
+            self.spawn(move |tx| profile_update::update(offer.number, force, tx));
+            true
+        }
+
+        /// Put the kept build back. Asked for through a dialog first.
+        pub fn start_rollback(&self) -> bool {
+            let (Some(listing), Some(kept)) = (self.listing(), self.kept()) else { return false };
+            if self.busy() {
+                return false;
+            }
+            *self.goal.borrow_mut() =
+                format!("{} is back at build {kept}", boot::display_name(&listing.profile));
+            self.spawn(profile_update::rollback);
+            true
         }
     }
 
@@ -938,6 +1246,7 @@ mod detail {
                     || sysinfo::modem(QMI_DEV),
                 )),
                 Detail::Update => Live::Update(UpdateScreen::open()),
+                Detail::Profile => Live::Profile(ProfileScreen::open()),
                 Detail::Revisions => Live::Revisions(sysinfo::install()),
             }
         }
@@ -954,6 +1263,10 @@ mod detail {
                     u.collect();
                     u.dirty.replace(false)
                 }
+                Live::Profile(p) => {
+                    p.collect();
+                    p.dirty.replace(false)
+                }
                 Live::Revisions(_) => false,
             }
         }
@@ -969,6 +1282,7 @@ mod detail {
                 Live::Battery(w) => battery_rows(&w.get()),
                 Live::Modem(w) => modem_rows(&w.get()),
                 Live::Update(u) => update_rows(u, applying),
+                Live::Profile(p) => profile_rows(p),
                 Live::Revisions(i) => joined(revisions_sections(i)),
             }
         }
@@ -989,8 +1303,22 @@ mod detail {
                     // The channel is a soft key rather than a second chevron row: a
                     // detail screen has no cursor, so two adjustable rows would have
                     // no way to say which one left and right are for.
-                    let update = if u.chosen().is_some() { "Update" } else { "" };
+                    let update = if u.chosen().is_some() { "Install" } else { "" };
                     ["Back", "Channel", "", "", update]
+                }
+                // Nothing while it runs: leaving would hide a run that cannot be
+                // stopped, and powering off in the middle is what it warns about.
+                Live::Profile(p) if p.busy() => ["", "", "", "", ""],
+                Live::Profile(p) if p.finished().is_some() => {
+                    let reboot =
+                        if matches!(p.finished(), Some(Step::Done(_))) { "Reboot" } else { "" };
+                    ["Back", "", "", "", reboot]
+                }
+                Live::Profile(p) if !p.loading() => {
+                    let channel = if p.updatable() && !p.forced() { "Channel" } else { "" };
+                    let rollback = if p.kept().is_some() { "Rollback" } else { "" };
+                    let update = if p.chosen().is_some() { "Update" } else { "" };
+                    ["Back", channel, "", rollback, update]
                 }
                 // A long page, read a section at a time, or taken away whole as a
                 // QR code.
@@ -1036,20 +1364,27 @@ mod detail {
         pub fn chevron_ends(&self) -> (bool, bool) {
             match self {
                 Live::Update(u) => (u.at_start(), u.at_end()),
+                Live::Profile(p) => (p.at_start(), p.at_end()),
                 _ => (false, false),
             }
         }
 
         /// Move along the versions, if this is the screen that has any.
         pub fn step_version(&mut self, forward: bool) -> bool {
-            let Live::Update(u) = self else { return false };
-            u.step_version(forward)
+            match self {
+                Live::Update(u) => u.step_version(forward),
+                Live::Profile(p) if !p.busy() && p.finished().is_none() => p.step_version(forward),
+                _ => false,
+            }
         }
 
         /// Next channel, if this is the screen that has one.
         pub fn step_channel(&mut self) -> bool {
-            let Live::Update(u) = self else { return false };
-            u.step_channel();
+            match self {
+                Live::Update(u) => u.step_channel(),
+                Live::Profile(p) if !p.busy() && p.finished().is_none() => p.step_channel(),
+                _ => return false,
+            }
             true
         }
     }
@@ -1698,8 +2033,8 @@ mod detail {
                 out.push(dim("Do not power off", ""));
             }
             Applying::Failed(e) => {
-                out.push(row("Update failed", ""));
-                out.push(dim(e, ""));
+                out.push(row("Install failed", ""));
+                out.extend(wrapped(e));
             }
             Applying::No => {
                 if !image.revision.is_empty() {
@@ -1710,6 +2045,80 @@ mod detail {
                 }
                 out.push(dim("Reboots into the installer", ""));
             }
+        }
+        out
+    }
+
+    /// check-profile's word, as the screen says it.
+    fn status_text(word: &str) -> &'static str {
+        match word {
+            "pristine" => "As installed",
+            "config-modified" => "Settings changed",
+            "modified" => "Modified",
+            _ => "Unknown",
+        }
+    }
+
+    fn profile_rows(p: &ProfileScreen) -> Vec<DetailRow> {
+        if p.loading() {
+            return vec![text("Checking the build server...")];
+        }
+        let listing = match p.listing.borrow().clone() {
+            Some(Ok(l)) => l,
+            Some(Err(why)) => {
+                let mut out = vec![row("Cannot check for updates", "")];
+                out.extend(wrapped(&why));
+                return out;
+            }
+            None => return Vec::new(),
+        };
+        let mut out = vec![
+            row("Profile", &boot::display_name(&listing.profile)),
+            row("Build", &listing.build.to_string()),
+            row("Status", p.status().as_deref().map_or("Checking", status_text)),
+        ];
+        if let Some(kept) = listing.kept {
+            out.push(row("Previous", &kept.to_string()));
+        }
+        out.push(divider());
+        match p.step.borrow().clone() {
+            Some(Step::Working(pct, step)) => {
+                out.push(row(&step, ""));
+                out.push(gauge(&format!("{pct}%"), i32::from(pct)));
+                out.push(text("Do not power off"));
+            }
+            Some(Step::Done(_)) => {
+                out.push(row("Done", ""));
+                out.extend(wrapped(&p.goal.borrow()));
+                out.push(text("Reboot to use it"));
+            }
+            Some(Step::Failed(e)) => {
+                out.push(row("Update failed", ""));
+                out.extend(wrapped(&e));
+            }
+            None if p.modified() && !p.forced() => {
+                out.extend(wrapped(
+                    "Packages or system files were changed, so this profile cannot be updated",
+                ));
+            }
+            None => match p.offers().get(p.at) {
+                Some(offer) => {
+                    out.push(chevron("Version", &offer.number.to_string()));
+                    let channel = if p.forced() { offer.branch.as_str() } else { p.channel.name() };
+                    out.push(row("Channel", channel));
+                    out.push(row("Download", &update::megabytes(offer.bytes)));
+                    if p.forced() && p.modified() {
+                        out.push(text("Changes outside /etc are lost"));
+                    }
+                    out.push(text("Keeps the current build to go back to"));
+                }
+                None if p.forced() => out.push(text("no build for this profile")),
+                None => {
+                    out.push(row("Channel", p.channel.name()));
+                    let none = format!("no newer {} build", p.channel.name());
+                    out.push(text(&none));
+                }
+            },
         }
         out
     }
@@ -3248,6 +3657,7 @@ fn png(
             "battery" => Some(demo::Detail::Battery),
             "modem" => Some(demo::Detail::Modem),
             "update" => Some(demo::Detail::Update),
+            "profile" => Some(demo::Detail::Profile),
             _ => None,
         };
         if let Some(want) = want {
@@ -3688,6 +4098,10 @@ fn panel(
         Uninstall(usize),
         /// Fetch the catalogue entry at this index, and whatever it needs with it.
         Install(usize),
+        /// Put back the build the last profile update kept.
+        Rollback,
+        /// Update a modified profile, losing its changes outside /etc.
+        ForceUpdate,
     }
     let mut dialog: Option<Dialog> = None;
     // A dialog that only reports, and when it closes by itself: the lines it was
@@ -5814,6 +6228,14 @@ fn panel(
                 }
                 let total = open.rows(&applying).len() as i32;
                 let max = (total - flipper_ui::theme::count::DETAIL_VISIBLE_ROWS).max(0);
+                if let detail::Live::Profile(p) = open {
+                    if event.key != FlipperKey::Ptt {
+                        p.reset_taps();
+                    } else if event.down && p.ptt(Instant::now()) {
+                        eprintln!("action         profile update unlocked for --force");
+                        detail_dirty = true;
+                    }
+                }
                 match event.key {
                     FlipperKey::Down => {
                         detail_offset = (detail_offset + 1).min(max);
@@ -6226,6 +6648,24 @@ fn panel(
                                 screen.set_screen(Screen::Apps);
                             }
                         }
+                    } else if d.act == DialogAct::ForceUpdate {
+                        if let Some(detail::Live::Profile(p)) =
+                            live.as_ref().filter(|_| slot == Some(4))
+                        {
+                            if p.start_update() {
+                                eprintln!("action         forced profile update starting");
+                                detail_dirty = true;
+                            }
+                        }
+                    } else if d.act == DialogAct::Rollback {
+                        if let Some(detail::Live::Profile(p)) =
+                            live.as_ref().filter(|_| slot == Some(4))
+                        {
+                            if p.start_rollback() {
+                                eprintln!("action         profile rollback starting");
+                                detail_dirty = true;
+                            }
+                        }
                     } else if slot == Some(4) && d.act == DialogAct::ClearAirplane {
                         net.set_airplane(false);
                         // menu.js proceeds to the action the dialog interrupted.
@@ -6491,6 +6931,10 @@ fn panel(
                     }
                 } else if matches!(screen.get_screen(), Screen::Detail | Screen::Ethernet) {
                     match key {
+                        // Not while a profile update runs: it cannot be stopped, and
+                        // the screen is the only place its progress is shown.
+                        FlipperKey::Escape if matches!(&live, Some(detail::Live::Profile(p)) if p.busy()) =>
+                            {}
                         // Back to the menu that opened this screen. Dropping the
                         // watch stops its poller.
                         FlipperKey::Escape if detail_qr => {
@@ -6562,6 +7006,58 @@ fn panel(
                             {
                                 detail_offset = at;
                                 detail_dirty = true;
+                            }
+                        }
+                        // Update, or once one has finished, Reboot into it.
+                        FlipperKey::Run if matches!(live, Some(detail::Live::Profile(_))) => {
+                            if let Some(detail::Live::Profile(p)) = live.as_ref() {
+                                if matches!(
+                                    p.finished(),
+                                    Some(flipper_ui::profile_update::Step::Done(_))
+                                ) {
+                                    eprintln!("action         reboot after profile update");
+                                    flipper_ui::system::reboot();
+                                } else if p.forced() {
+                                    if let Some(n) = p.chosen_number() {
+                                        dialog = Some(Dialog {
+                                            lines: vec![
+                                                format!("Force update to build {n}?"),
+                                                if p.modified() {
+                                                    "Changes outside /etc are lost".into()
+                                                } else {
+                                                    "The current build is kept".into()
+                                                },
+                                            ],
+                                            left: "Back",
+                                            right: "Update",
+                                            act: DialogAct::ForceUpdate,
+                                        });
+                                    }
+                                } else if p.start_update() {
+                                    eprintln!("action         profile update starting");
+                                    detail_dirty = true;
+                                }
+                            }
+                        }
+                        // Rollback deletes the newer build, so it asks first.
+                        FlipperKey::Edit
+                            if live.as_ref().is_some_and(|l| {
+                                l.buttons(&applying, detail_offset)[3] == "Rollback"
+                            }) =>
+                        {
+                            if let Some(kept) = match &live {
+                                Some(detail::Live::Profile(p)) => p.kept(),
+                                _ => None,
+                            } {
+                                dialog = Some(Dialog {
+                                    lines: vec![
+                                        format!("Go back to build {kept}?"),
+                                        "The current profile version will be deleted".into(),
+                                    ],
+                                    left: "Back",
+                                    right: "Rollback",
+                                    act: DialogAct::Rollback,
+                                });
                             }
                         }
                         FlipperKey::Run => {

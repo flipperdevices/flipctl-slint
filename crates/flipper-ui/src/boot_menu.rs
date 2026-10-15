@@ -1774,7 +1774,7 @@ impl BootMenu {
             booting: self.booting.as_ref().map(|(l, _)| l.clone()).unwrap_or_default(),
             going_down: self.rebooting.is_some(),
             popup_open: self.popup.is_some(),
-            popup_title: boot::display_name(&profile.name).trim_matches(['[', ']']).to_string(),
+            popup_title: boot::display_name(&profile.name).replace(['[', ']'], ""),
             popup_icon,
             popup_lines: lines,
             popup_message: message,

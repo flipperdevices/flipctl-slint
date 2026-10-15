@@ -53,6 +53,31 @@ fn a_derived_profile_is_named_by_its_label() {
     assert_eq!(boot::display_name("@No-Graphics"), "No Graphics");
 }
 
+/// A build an update kept shows as the profile it was, then "obsolete" and its build,
+/// and is the user's to rename or delete. Its name sorts right after the profile's.
+#[test]
+fn a_kept_build_is_named_obsolete() {
+    assert_eq!(boot::display_name("@Desktop-obsolete-1230"), "Desktop obsolete 1230");
+    assert_eq!(
+        boot::display_name("@Desktop__Desktop-clone__-obsolete-1230"),
+        "[Desktop clone] obsolete 1230"
+    );
+    assert_eq!(boot::display_name("@No-Graphics-obsolete-1219"), "No Graphics obsolete 1219");
+    assert!(boot::is_user_profile("@Desktop-obsolete-1230"));
+    assert!(boot::is_user_profile("@Desktop__Desktop-clone__-obsolete-1230"));
+    assert_eq!(
+        boot::profile_label("@Desktop__Desktop-clone__-obsolete-1230"),
+        "Desktop clone obsolete 1230"
+    );
+    // Only a build number after "-obsolete-" makes one.
+    assert!(!boot::is_user_profile("@Desktop-obsolete-new"));
+    assert!(!boot::is_user_profile("@-obsolete-1230"));
+    assert_eq!(boot::display_name("@Desktop-obsolete-new"), "Desktop obsolete new");
+    let mut names = ["@Desktop__Desktop-clone__-obsolete-1230", "@Desktop__Desktop-clone__"];
+    names.sort();
+    assert_eq!(names[0], "@Desktop__Desktop-clone__");
+}
+
 /// The icon follows the origin's base name, not the profile's own.
 ///
 /// A clone called "[My Games]" carries no hint of what it came from, so keying
