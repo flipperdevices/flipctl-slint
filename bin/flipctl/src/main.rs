@@ -593,17 +593,17 @@ mod detail {
         out
     }
 
-    /// Where moving `forward` along a list of `total` versions from `at` lands. No
-    /// wrapping: the ends of a list of versions are ends, and the chevrons go out at
-    /// them to say so.
+    /// Where moving `forward` (the right key, to a newer build) along a newest-first
+    /// list of `total` versions from `at` lands: towards its start. No wrapping: the
+    /// ends of a list of versions are ends, and the chevrons go out at them to say so.
     fn step_index(at: usize, total: usize, forward: bool) -> usize {
         if total == 0 {
             return 0;
         }
         if forward {
-            (at + 1).min(total - 1)
-        } else {
             at.saturating_sub(1)
+        } else {
+            (at + 1).min(total - 1)
         }
     }
 
@@ -855,13 +855,15 @@ mod detail {
             self.dirty.set(true);
         }
 
+        /// At the oldest build, where the left chevron goes out.
         pub fn at_start(&self) -> bool {
-            self.at == 0
-        }
-
-        pub fn at_end(&self) -> bool {
             let total = self.on_channel().map(|v| v.len()).unwrap_or(0);
             total == 0 || self.at + 1 >= total
+        }
+
+        /// At the newest build, where the right chevron goes out.
+        pub fn at_end(&self) -> bool {
+            self.at == 0
         }
 
         /// Fetch the chosen build and boot it, on a thread: a download is seconds and
@@ -1116,10 +1118,8 @@ mod detail {
             self.listing()?.kept
         }
 
-        /// Right is a higher build. The list is newest first, so that is towards
-        /// its start.
         pub fn step_version(&mut self, forward: bool) -> bool {
-            let next = step_index(self.at, self.offers().len(), !forward);
+            let next = step_index(self.at, self.offers().len(), forward);
             let moved = next != self.at;
             self.at = next;
             self.dirty.set(true);
@@ -2001,15 +2001,19 @@ mod detail {
     /// would be a lie.
     fn update_rows(u: &UpdateScreen, applying: &Applying) -> Vec<DetailRow> {
         if u.loading() {
-            return vec![dim("Checking the build server...", "")];
+            return vec![text("Checking the build server...")];
         }
         let builds = match u.on_channel() {
             Ok(builds) => builds,
-            Err(why) => return vec![row("Channel", u.channel.name()), divider(), dim(&why, "")],
+            Err(why) => {
+                let mut out = vec![row("Channel", u.channel.name()), divider()];
+                out.extend(wrapped(&why));
+                return out;
+            }
         };
         let Some(image) = builds.get(u.at) else {
             let none = format!("no {} build to install", u.channel.name());
-            return vec![row("Channel", u.channel.name()), divider(), dim(&none, "")];
+            return vec![row("Channel", u.channel.name()), divider(), text(&none)];
         };
         let version = if *applying == Applying::No {
             chevron("Version", &image.version)
@@ -2026,11 +2030,11 @@ mod detail {
                     got
                 };
                 out.push(row("Downloading", &said));
-                out.push(dim("Do not power off", ""));
+                out.push(text("Do not power off"));
             }
             Applying::Booting => {
                 out.push(row("Starting the installer", ""));
-                out.push(dim("Do not power off", ""));
+                out.push(text("Do not power off"));
             }
             Applying::Failed(e) => {
                 out.push(row("Install failed", ""));
@@ -2038,12 +2042,12 @@ mod detail {
             }
             Applying::No => {
                 if !image.revision.is_empty() {
-                    out.push(dim("Commit", image.short()));
+                    out.push(row("Commit", image.short()));
                 }
                 if image.bytes > 0 {
-                    out.push(dim("Size", &update::megabytes(image.bytes)));
+                    out.push(row("Size", &update::megabytes(image.bytes)));
                 }
-                out.push(dim("Reboots into the installer", ""));
+                out.push(text("Reboots into the installer"));
             }
         }
         out
