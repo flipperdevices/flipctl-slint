@@ -180,6 +180,9 @@ export component Root inherits Window {
     in property <string> boot_popup_hint;
     in property <length> boot_popup_w;
     in property <length> boot_popup_body_h;
+    in property <int> boot_popup_scroll_total;
+    in property <int> boot_popup_scroll_visible;
+    in property <int> boot_popup_scroll_offset;
 
     // The text-input screen: a field and the on-screen keyboard.
     in property <string> kb_title;
@@ -455,6 +458,9 @@ export component Root inherits Window {
         popup_hint: root.boot_popup_hint;
         popup_w: root.boot_popup_w;
         popup_body_h: root.boot_popup_body_h;
+        popup_scroll_total: root.boot_popup_scroll_total;
+        popup_scroll_visible: root.boot_popup_scroll_visible;
+        popup_scroll_offset: root.boot_popup_scroll_offset;
     }
 
     if root.screen == Screen.menu: MenuBody {

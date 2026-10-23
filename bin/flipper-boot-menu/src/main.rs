@@ -408,6 +408,9 @@ fn apply(ui: &Menu, view: &BootView, kb: Option<&keyboard::TextInput>, warning: 
     // The frame's own measured width, so it fits what is in it.
     ui.set_popup_w(view.popup_w);
     ui.set_popup_body_h(view.popup_body_h);
+    ui.set_popup_scroll_total(view.popup_scroll_total);
+    ui.set_popup_scroll_visible(view.popup_scroll_visible);
+    ui.set_popup_scroll_offset(view.popup_scroll_offset);
     let lines: Vec<BootPopupRow> = view
         .popup_lines
         .iter()

@@ -917,34 +917,43 @@ pub fn video_out_of(entry: &Entry) -> usize {
 }
 
 /// The entry file's text with `choice` applied.
+pub fn with_video_out(text: &str, choice: usize) -> String {
+    let chosen = VIDEO_OUT.get(choice).map(|(name, _)| *name).filter(|name| !name.is_empty());
+    with_overlays(
+        text,
+        |base| VIDEO_OUT.iter().any(|(name, _)| !name.is_empty() && base == format!("{name}.dtbo")),
+        chosen.as_slice(),
+    )
+}
+
+/// The entry file's text with the overlays `ours` knows by file name swapped for `chosen`.
 ///
 /// Pure, so what the file should say can be tested without a device or a loader. The
-/// rule: every overlay this table knows about comes off, the chosen one goes on, and
-/// every other overlay the entry carried stays exactly where it was, user drop-ins
-/// included. A line that ends up with nothing on it is removed rather than left empty,
-/// and an entry that had no such line gets one after its `devicetreedir`, which is
-/// where kernel-install writes it and where a reader looks for it.
-pub fn with_video_out(text: &str, choice: usize) -> String {
+/// rule: every overlay `ours` knows comes off, the chosen ones go on from under the
+/// entry's own `devicetreedir`, and every other overlay the entry carried stays exactly
+/// where it was, user drop-ins included. A line that ends up with nothing on it is
+/// removed rather than left empty, and an entry that had no such line gets one after its
+/// `devicetreedir`, which is where kernel-install writes it and where a reader looks for
+/// it.
+fn with_overlays(text: &str, ours: impl Fn(&str) -> bool, chosen: &[&str]) -> String {
     let dtdir = text
         .lines()
         .filter_map(|l| l.strip_prefix("devicetreedir"))
         .map(str::trim)
         .find(|rest| !rest.is_empty())
         .unwrap_or_default();
-    let ours = |path: &str| {
-        let base = path.rsplit('/').next().unwrap_or(path);
-        VIDEO_OUT.iter().any(|(name, _)| !name.is_empty() && base == format!("{name}.dtbo"))
-    };
 
     let mut keep: Vec<String> = Vec::new();
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("devicetree-overlay") {
-            keep.extend(rest.split_whitespace().filter(|p| !ours(p)).map(str::to_string));
+            keep.extend(
+                rest.split_whitespace()
+                    .filter(|p| !ours(p.rsplit('/').next().unwrap_or(p)))
+                    .map(str::to_string),
+            );
         }
     }
-    if let Some((name, _)) = VIDEO_OUT.get(choice).filter(|(name, _)| !name.is_empty()) {
-        keep.push(format!("{dtdir}/rockchip/{name}.dtbo"));
-    }
+    keep.extend(chosen.iter().map(|name| format!("{dtdir}/rockchip/{name}.dtbo")));
 
     let mut out = String::with_capacity(text.len() + 96);
     let mut written = false;
@@ -981,6 +990,91 @@ pub fn with_video_out(text: &str, choice: usize) -> String {
 /// kernels it actually boots.
 pub fn set_video_out(p: &Profile, choice: usize) -> Result<(), String> {
     rewrite_entries(p, |text| with_video_out(text, choice))
+}
+
+// ── GPIO header ────────────────────────────────────────────────────────────
+
+/// What a GPIO header bus takes: each signal's role, empty for a lone output, and the
+/// pin it is on.
+pub type HeaderPins = &'static [(&'static str, &'static str)];
+
+/// The buses the GPIO header can carry: the overlay that enables each, its name, and
+/// its signals.
+///
+/// Two that share a pin cannot both be on, since the second to probe finds its pins
+/// taken. Pins are named as the header's pinout diagram prints them, GPIO4's port and
+/// bit, which is also how the ext_gpio lines are named.
+#[rustfmt::skip]
+pub const GPIO_HEADER: &[(&str, &str, HeaderPins)] = &[
+    ("rk3576-flipper-one-uart2",   "UART2",    &[("TX", "B5"), ("RX", "B4")]),
+    ("rk3576-flipper-one-uart5",   "UART5",    &[("TX", "B0"), ("RX", "B1")]),
+    ("rk3576-flipper-one-uart6",   "UART6",    &[("TX", "A4"), ("RX", "A6")]),
+    ("rk3576-flipper-one-i2c3",    "I2C3",     &[("SCL", "B5"), ("SDA", "B4")]),
+    ("rk3576-flipper-one-i2c4",    "I2C4",     &[("SCL", "A4"), ("SDA", "A6")]),
+    ("rk3576-flipper-one-pwm2ch4", "PWM2 ch4", &[("", "A3")]),
+    ("rk3576-flipper-one-pwm2ch5", "PWM2 ch5", &[("", "A2")]),
+    ("rk3576-flipper-one-pwm2ch6", "PWM2 ch6", &[("", "A7")]),
+    ("rk3576-flipper-one-pwm2ch7", "PWM2 ch7", &[("", "B3")]),
+];
+
+/// Which of them a profile has on, read from the same entry Video Out reads.
+pub fn gpio_header_for(p: &Profile) -> Vec<bool> {
+    p.entries
+        .iter()
+        .find(|e| version_at_least(&e.version, MIN_KERNEL))
+        .map_or_else(|| vec![false; GPIO_HEADER.len()], gpio_header_of)
+}
+
+/// Which of them an entry carries, one flag per row of `GPIO_HEADER`.
+pub fn gpio_header_of(entry: &Entry) -> Vec<bool> {
+    GPIO_HEADER
+        .iter()
+        .map(|(name, _, _)| entry.system.iter().any(|o| o == &format!("{name}.dtbo")))
+        .collect()
+}
+
+/// Whether turning `at` on would take a header pin one of the others in `on` holds.
+pub fn gpio_header_clash(on: &[bool], at: usize) -> bool {
+    let Some((_, _, pins)) = GPIO_HEADER.get(at) else { return false };
+    GPIO_HEADER.iter().enumerate().any(|(i, (_, _, theirs))| {
+        i != at
+            && on.get(i).copied().unwrap_or(false)
+            && theirs.iter().any(|(_, theirs)| pins.iter().any(|(_, mine)| mine == theirs))
+    })
+}
+
+/// The overlays of the buses flagged in `on`.
+fn gpio_header_chosen(on: &[bool]) -> Vec<&'static str> {
+    GPIO_HEADER.iter().zip(on).filter_map(|((name, _, _), &set)| set.then_some(*name)).collect()
+}
+
+/// The entry file's text with exactly the buses flagged in `on` enabled.
+pub fn with_gpio_header(text: &str, on: &[bool]) -> String {
+    with_overlays(
+        text,
+        |base| GPIO_HEADER.iter().any(|(name, _, _)| base == format!("{name}.dtbo")),
+        &gpio_header_chosen(on),
+    )
+}
+
+/// Put `on` on every entry of a profile, as Video Out does.
+///
+/// Refused when an entry's kernel does not ship an overlay that is to go on: these
+/// came with a later kernel than Video Out's, and an entry naming a file its kernel
+/// does not have is one the loader fails on.
+pub fn set_gpio_header(p: &Profile, on: &[bool]) -> Result<(), String> {
+    let chosen = gpio_header_chosen(on);
+    if !chosen.is_empty() {
+        let dev = if p.dev.is_empty() { booted_dev().unwrap_or_default() } else { p.dev.clone() };
+        let top = TopLevel::ro(&dev).ok_or_else(|| format!("could not mount {dev} to check"))?;
+        for entry in p.entries.iter().filter(|e| version_at_least(&e.version, MIN_KERNEL)) {
+            let dir = top.path.join(entry.dtdir.trim_start_matches('/')).join("rockchip");
+            if let Some(name) = chosen.iter().find(|n| !dir.join(format!("{n}.dtbo")).exists()) {
+                return Err(format!("kernel {} has no {name}", entry.version));
+            }
+        }
+    }
+    rewrite_entries(p, |text| with_gpio_header(text, on))
 }
 
 /// Rewrite every entry of a profile at or above `MIN_KERNEL` with `edit`.
@@ -2574,6 +2668,57 @@ initrd     /@Desktop/usr/lib/modules/7.2.0-ge8750f615ebf/initrd
         let plain = with_video_out(&headless, 0);
         assert_eq!(overlays(&plain).len(), 2);
         assert!(!plain.contains("no-graphics"));
+    }
+
+    fn header(names: &[&str]) -> Vec<bool> {
+        GPIO_HEADER.iter().map(|(_, label, _)| names.contains(label)).collect()
+    }
+
+    /// The GPIO header writes one overlay per bus that is on, under the entry's own
+    /// tree directory, and nothing when every bus is off.
+    #[test]
+    fn the_gpio_header_writes_one_overlay_per_bus() {
+        assert_eq!(with_gpio_header(ENTRY, &header(&[])), ENTRY);
+        let got = overlays(&with_gpio_header(ENTRY, &header(&["UART5", "PWM2 ch4"])));
+        assert_eq!(
+            got,
+            vec![
+                "/@Desktop/usr/lib/linux-image-7.2.0-ge8750f615ebf/rockchip/rk3576-flipper-one-uart5.dtbo",
+                "/@Desktop/usr/lib/linux-image-7.2.0-ge8750f615ebf/rockchip/rk3576-flipper-one-pwm2ch4.dtbo",
+            ]
+        );
+    }
+
+    /// The GPIO header and Video Out each change only their own overlays, so setting
+    /// one keeps the other and any user drop-in, and reading one back gives what was set.
+    #[test]
+    fn the_gpio_header_and_video_out_leave_each_other_alone() {
+        let mine = ENTRY.replace("initrd", "devicetree-overlay /etc/kernel/dtbo/mine.dtbo\ninitrd");
+        let both = with_video_out(&with_gpio_header(&mine, &header(&["I2C4"])), 2);
+        let got = overlays(&both);
+        assert_eq!(got.len(), 3, "{got:?}");
+        assert!(got.iter().any(|o| o.ends_with("rk3576-flipper-one-i2c4.dtbo")));
+        assert!(got.iter().any(|o| o.ends_with("rk3576-no-graphics.dtbo")));
+        let off = overlays(&with_gpio_header(&both, &header(&[])));
+        assert_eq!(off.len(), 2, "{off:?}");
+        assert!(!off.iter().any(|o| o.contains("i2c4")));
+
+        let entry =
+            Entry { system: vec!["rk3576-flipper-one-i2c4.dtbo".into()], ..Default::default() };
+        assert_eq!(gpio_header_of(&entry), header(&["I2C4"]));
+    }
+
+    /// Buses that share a header pin clash; ones that do not, do not.
+    #[test]
+    fn buses_sharing_a_pin_clash() {
+        let at = |label: &str| GPIO_HEADER.iter().position(|(_, l, _)| *l == label).unwrap();
+        assert!(gpio_header_clash(&header(&["UART6"]), at("I2C4")));
+        assert!(gpio_header_clash(&header(&["I2C3"]), at("UART2")));
+        assert!(!gpio_header_clash(&header(&["UART6", "I2C3"]), at("UART5")));
+        assert!(
+            !gpio_header_clash(&header(&["I2C4"]), at("I2C4")),
+            "a bus does not clash with itself"
+        );
     }
 
     /// A real entry, off the device, kept verbatim: the leading comment,

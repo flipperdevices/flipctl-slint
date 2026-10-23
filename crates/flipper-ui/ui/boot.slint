@@ -12,7 +12,7 @@
 //     Born2bSportyV2 when selected, because the shift in baseline reads as the row
 //     jumping, and here the rows are close enough together to notice.
 import { FlipperTheme } from "@theme";
-import { SelectorFrame, SoftBar } from "frame.slint";
+import { SelectorFrame, SoftBar, Scrollbar } from "frame.slint";
 
 export struct BootRow {
     label: string,
@@ -170,10 +170,17 @@ component BootPopup inherits Rectangle {
     // How tall the rows come to, for the same reason: rows of two pitches cannot be
     // counted, only added up.
     in property <length> body_h_in;
+    // Rows in all, how many are shown, and the first shown, when they do not all fit.
+    // The caller gives only the rows that are shown.
+    in property <int> scroll_total;
+    in property <int> scroll_visible;
+    in property <int> scroll_offset;
 
     width: 100%;
     height: 100%;
     background: FlipperTheme.white.with-alpha(FlipperTheme.overlay_alpha);
+
+    property <bool> needs_scroll: root.scroll_total > root.scroll_visible;
 
     property <length> hdr_h: root.show_size ? FlipperTheme.popup_hdr_h : FlipperTheme.popup_hdr_bare_h;
     property <bool> has_message: root.message.length > 0;
@@ -186,7 +193,7 @@ component BootPopup inherits Rectangle {
     property <length> body_h: root.has_message
         ? root.body_lines * root.line_h
         : root.body_h_in;
-    property <length> frame_h: root.hdr_h + root.body_h + 8px;
+    property <length> frame_h: root.hdr_h + root.body_h + 2 * FlipperTheme.popup_body_pad;
     property <length> frame_w: Math.min(
         FlipperTheme.popup_max_w / 1px,
         Math.max(root.frame_w_in / 1px, 80)
@@ -321,14 +328,14 @@ component BootPopup inherits Rectangle {
     // A message takes the body: its lines centred, then the button under them.
     for line[i] in root.message: Text {
         x: root.frame_x + Math.floor((root.frame_w - (self.width - 1px)) / 2 / 1px) * 1px;
-        y: root.frame_y + root.hdr_h + 4px + i * FlipperTheme.popup_line_h;
+        y: root.frame_y + root.hdr_h + FlipperTheme.popup_body_pad + i * FlipperTheme.popup_line_h;
         text: line;
         font-size: 16px;
         color: FlipperTheme.black;
     }
     if root.button != "": Text {
         x: root.frame_x + Math.floor((root.frame_w - (self.width - 1px)) / 2 / 1px) * 1px;
-        y: root.frame_y + root.hdr_h + 4px
+        y: root.frame_y + root.hdr_h + FlipperTheme.popup_body_pad
             + root.message.length * FlipperTheme.popup_line_h;
         text: root.button;
         font-size: 16px;
@@ -337,8 +344,8 @@ component BootPopup inherits Rectangle {
 
     for row[i] in root.rows: line_box := Rectangle {
         x: root.frame_x;
-        y: root.frame_y + root.hdr_h + 4px + row.y;
-        width: root.frame_w;
+        y: root.frame_y + root.hdr_h + FlipperTheme.popup_body_pad + row.y;
+        width: root.frame_w - (root.needs_scroll ? FlipperTheme.popup_gutter : 0px);
         height: row.kind == 0 ? FlipperTheme.popup_line_h : FlipperTheme.popup_row_h;
         background: transparent;
         visible: !root.has_message;
@@ -427,6 +434,15 @@ component BootPopup inherits Rectangle {
             font-size: 16px;
             color: FlipperTheme.black;
         }
+    }
+
+    if root.needs_scroll && !root.has_message: Scrollbar {
+        x: root.frame_x + root.frame_w - FlipperTheme.popup_scrollbar_pad - 1px;
+        y: root.frame_y + root.hdr_h + FlipperTheme.popup_body_pad;
+        height: root.body_h;
+        total: root.scroll_total;
+        visible_extent: root.scroll_visible;
+        offset: root.scroll_offset;
     }
 }
 
@@ -671,6 +687,9 @@ export component BootBody inherits Rectangle {
     in property <string> popup_hint;
     in property <length> popup_w;
     in property <length> popup_body_h;
+    in property <int> popup_scroll_total;
+    in property <int> popup_scroll_visible;
+    in property <int> popup_scroll_offset;
     in property <bool> popup_open;
 
     if root.popup_open: BootPopup {
@@ -687,5 +706,8 @@ export component BootBody inherits Rectangle {
         button: root.popup_hint;
         frame_w_in: root.popup_w;
         body_h_in: root.popup_body_h;
+        scroll_total: root.popup_scroll_total;
+        scroll_visible: root.popup_scroll_visible;
+        scroll_offset: root.popup_scroll_offset;
     }
 }

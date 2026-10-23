@@ -47,6 +47,9 @@ export component Menu inherits Window {
     in property <string> popup_hint;
     in property <length> popup_w;
     in property <length> popup_body_h;
+    in property <int> popup_scroll_total;
+    in property <int> popup_scroll_visible;
+    in property <int> popup_scroll_offset;
 
     in property <string> kb_title;
     in property <string> kb_text;
@@ -92,6 +95,9 @@ export component Menu inherits Window {
         popup_hint: root.popup_hint;
         popup_w: root.popup_w;
         popup_body_h: root.popup_body_h;
+        popup_scroll_total: root.popup_scroll_total;
+        popup_scroll_visible: root.popup_scroll_visible;
+        popup_scroll_offset: root.popup_scroll_offset;
     }
 
     if root.keyboard: TextInputBody {

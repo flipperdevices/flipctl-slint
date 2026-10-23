@@ -398,6 +398,10 @@ popup_pad_h         = 8     # boot_menu.js padH
 popup_size_y        = 24    # the size line, relative to the frame top
 popup_icon_y        = 6     # icon and name, relative to the frame top
 popup_max_w         = 252   # the frame never grows past this
+popup_body_pad      = 4     # band to the first row, and the last row to the frame
+# A popup whose rows do not all fit scrolls them, with the Wi-Fi modal's bar.
+popup_gutter        = 6     # room kept for the bar, only while it shows
+popup_scrollbar_pad = 5     # the dotted track, in from the frame's right edge
 size_gap            = 4     # boot_menu.js SIZE_GAP, between the size line's parts
 boot_selector_h     = 16    # boot_menu.js SELECTOR_H, the frame fits the row
 boot_icon_box_w     = 12    # boot_menu.js ICON_BOX_W, a fixed column so labels align

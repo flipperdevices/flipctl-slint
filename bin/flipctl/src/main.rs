@@ -2921,6 +2921,9 @@ fn apply_boot(screen: &flipper_ui::ui::Root, menu: &flipper_ui::boot_menu::BootM
     screen.set_boot_popup_size_slot_w(view.size_slot_w);
     screen.set_boot_popup_w(view.popup_w);
     screen.set_boot_popup_body_h(view.popup_body_h);
+    screen.set_boot_popup_scroll_total(view.popup_scroll_total);
+    screen.set_boot_popup_scroll_visible(view.popup_scroll_visible);
+    screen.set_boot_popup_scroll_offset(view.popup_scroll_offset);
     let lines: Vec<flipper_ui::ui::BootPopupRow> = view
         .popup_lines
         .iter()
