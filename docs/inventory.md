@@ -449,7 +449,8 @@ keeps the prototype's 26px pitch.
 Each detail screen was given its prototype scene's own interval. Two of those did
 not survive contact with what they cost:
 
-**5G Modem: 500ms to 2s.** `modem5g.js` polls at 2Hz and each poll is four
+**5G Modem: 500ms to 2s**, since replaced: see "The 5G Modem page, rebuilt
+2026-10-22". `modem5g.js` polls at 2Hz and each poll is four
 subprocesses, three `mmcli` and one `qmicli`. Nothing on the page moves that
 fast: the operator and the access technology change on network events, and the
 signal is whatever ModemManager last cached, refreshed on its own schedule, so
@@ -471,6 +472,42 @@ seconds behind the fan is worth less than the reads cost) and its addresses (30s
 are left polling. Those are sysfs reads and `getifaddrs` -- microseconds, no
 processes -- and keeping them warm is what makes the root screen correct the moment
 you land on it rather than up to thirty seconds later.
+
+## The 5G Modem app, rebuilt 2026-10-22 to 10-24
+
+The requirements, the plan and screenshots of every screen are on the docs site,
+`cpu-software/flipctl/5g-modem-app` (`docs/cpu-software/flipctl/5G-Modem-app.md` in
+the docs repository). This is where it parts from `modem5g.js`.
+
+- **ModemManager over D-Bus, no processes.** The prototype's page ran `mmcli`
+  three times and `qmicli` once per refresh. `qmicli` never worked on a device:
+  `qmi-proxy` accepts only root, so cell ID, TAC, PCI, EARFCN, band, RSRP, RSRQ and
+  SINR were always empty. `mm.rs` holds one system-bus connection (zbus), reads every
+  modem with `GetManagedObjects` and reads again when ModemManager signals a change.
+  The status bar's own `mmcli` thread, every 5 s, went with it.
+- **One `5G Modem` entry per modem**, with the port name (`M.2`, `USB-A`, `USB-C2`,
+  `USB-C1`) only when there is more than one. Named from the USB port in sysfs, not
+  from ModemManager's index, which changes on every reset and SIM switch. The entry's
+  right side says the modem's state instead of the prototype's airplane-mode text.
+- **The app is new, not a port.** A main screen of four selectable items on a screen
+  of its own (`ui/modem.slint`, laid out by `modem::main_view`): the radio switch,
+  the SIM, the operator and signal block (six bars and a percentage from RSRP, about
+  8 dB a bar), and the data connection. Pages on the detail screen: device info,
+  SIM, verbose signal info with per-antenna measurements, data connection, and a
+  Config placeholder.
+- **Writes**: the radio switch is the M.2 slot's rfkill line, written through
+  `/dev/rfkill` (the `rfkill` group); the SIM switch is the board's `sim_sel` GPIO
+  (`simsel.rs`, the kernel's GPIO character device) followed by ModemManager's
+  `Reset()`.
+- **Two new detail row kinds**: 10, a message centred on an empty screen, and 11, an
+  action row the cursor sits on (the SIM page's switch), with `selected` and
+  `row_pressed` on `DetailBody`.
+- **`Signal.Setup` stays at 10 s** while nothing is open and 2 s while the app is,
+  so the status bar's bars and the app's agree. `GetCellInfo` is asked every 5 s
+  while the app is open, and needs `systemd/flipctl-modemmanager.conf`. The
+  per-antenna readings are Quectel AT commands through ModemManager's `Command()`,
+  every 2 s while the Signal page is open, and need ModemManager in debug mode
+  (`systemd/modemmanager-debug.conf`).
 
 ## Soft-button strip, approved 2026-08-19
 
@@ -635,7 +672,9 @@ Turning WEXT on is a one-line addition to `minconfig-mainline` and would make th
 sysfs path work again for everything, including a hosted app's own bar. `status`
 tries the file first and falls back, so that change needs nothing unpicked here.
 
-**The status bar's 5G block is drawn from numbers nobody fills in.** Latent, not
+**The status bar's 5G block is drawn from numbers nobody fills in.** Resolved
+2026-10-22: the badge reads the same ModemManager watcher as the 5G Modem page (see
+"The 5G Modem page, rebuilt 2026-10-22"). Kept for the record: latent, not
 live: `read_status` hardcodes `access_tech: "--"` and `modem_quality: 0` while
 `modem_available` comes from a real check for a `wwan`/`wwp`/`ppp` interface. No
 board here has one, so the block is hidden and it has never shown. On a unit that

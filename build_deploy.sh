@@ -54,7 +54,7 @@ SHARE="/usr/share/flipctl"
 DROPIN="/etc/systemd/system/flipctl.service.d/50-deploy.conf"
 # What running a bundle needs from the machine beyond the unit, each installed from
 # systemd/ here until the image ships it. Listed once so --status can ask after them.
-DEVICE_FILES="/etc/udev/rules.d/70-flipctl-devices.rules /etc/sysusers.d/flipctl.conf /etc/modules-load.d/flipctl-devices.conf"
+DEVICE_FILES="/etc/udev/rules.d/70-flipctl-devices.rules /etc/sysusers.d/flipctl.conf /etc/modules-load.d/flipctl-devices.conf /etc/dbus-1/system.d/flipctl-modemmanager.conf /etc/systemd/system/ModemManager.service.d/50-flipctl-debug.conf"
 # flipctl's own output is not in `journalctl -u flipctl`. PAMName=login puts the
 # process in a logind session scope rather than the service's cgroup, and journald
 # files a line under the cgroup that wrote it, so the unit view holds systemd's
@@ -356,11 +356,27 @@ run "sudo tee /etc/sysusers.d/flipctl.conf >/dev/null && sudo systemd-sysusers /
     < "$SYSD/flipctl.sysusers.conf"
 run "sudo tee /etc/udev/rules.d/70-flipctl-devices.rules >/dev/null && \
      sudo udevadm control --reload && \
-     sudo udevadm trigger -s gpio -s usb -s spidev -c change" \
+     sudo udevadm trigger -s gpio -s usb -s spidev -s misc -c change" \
     < "$SYSD/70-flipctl-devices.rules"
 run "sudo tee /etc/modules-load.d/flipctl-devices.conf >/dev/null && \
      sudo systemctl restart systemd-modules-load.service" \
     < "$SYSD/flipctl-devices.conf"
+# The 5G Modem page's one ModemManager method beyond MM's own policy (the file says
+# which and why). The bus reads its policy at start and on ReloadConfig, so it is
+# told rather than restarted: a restart of dbus would take half the system with it.
+run "sudo mkdir -p /etc/dbus-1/system.d && \
+     sudo tee /etc/dbus-1/system.d/flipctl-modemmanager.conf >/dev/null && \
+     sudo busctl call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig" \
+    < "$SYSD/flipctl-modemmanager.conf"
+# ModemManager in debug mode, for the per-antenna readings (the file says why). Only
+# restarted when the drop-in changes: a restart drops cellular for about 20 s.
+if ! run "cmp -s /etc/systemd/system/ModemManager.service.d/50-flipctl-debug.conf -" \
+    < "$SYSD/modemmanager-debug.conf"; then
+    run "sudo mkdir -p /etc/systemd/system/ModemManager.service.d && \
+         sudo tee /etc/systemd/system/ModemManager.service.d/50-flipctl-debug.conf >/dev/null && \
+         sudo systemctl daemon-reload && sudo systemctl restart ModemManager" \
+        < "$SYSD/modemmanager-debug.conf"
+fi
 
 # The unit itself, where the machine has none. Stock profiles do not ship it -- it has
 # always been installed by hand -- so a deploy onto a freshly installed profile otherwise

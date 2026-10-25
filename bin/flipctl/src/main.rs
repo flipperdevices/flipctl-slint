@@ -230,7 +230,11 @@ mod demo {
     /// opens an empty screen, or a list whose every row fails to start, is worse than
     /// no entry. Filtered in one place so the keys and the drawing agree: they index
     /// the same list.
+    ///
+    /// The `5G Modem` row is one entry per modem when there are several, and one
+    /// entry when there is one or none.
     pub fn rows(menu: &'static Menu) -> Vec<&'static Row> {
+        let modems = || modem_entries().len();
         menu.rows
             .iter()
             .filter(|r| match r.act {
@@ -239,19 +243,51 @@ mod demo {
                 Act::Flipctl2 => flipper_ui::old_flipctl_loader::available(),
                 _ => true,
             })
+            .flat_map(|r| {
+                std::iter::repeat_n(r, if matches!(r.stat, Stat::Modem) { modems() } else { 1 })
+            })
             .collect()
     }
 
+    /// The Network menu's `5G Modem` entries, from what ModemManager last said.
+    pub fn modem_entries() -> Vec<flipper_ui::modem::Entry> {
+        flipper_ui::modem::entries(&flipper_ui::mm::modems(), flipper_ui::mm::m2_blocked())
+    }
+
+    /// Which modem the `5G Modem` row at `selected` opens: the entry's port name,
+    /// or empty when there is no modem. Counted among the `5G Modem` rows above it,
+    /// the same order `apply_menu` names them in.
+    pub fn modem_key(visible: &[&'static Row], selected: i32) -> String {
+        let nth = visible
+            .iter()
+            .take(selected.max(0) as usize)
+            .filter(|r| matches!(r.stat, Stat::Modem))
+            .count();
+        modem_entries().get(nth).map(|e| e.key.clone()).unwrap_or_default()
+    }
+
     pub fn apply_menu(screen: &Root, menu: &'static Menu, net: &flipper_ui::net::Net) {
+        let modems = modem_entries();
+        let mut nth_modem = 0;
         let items: Vec<ListItem> = rows(menu)
             .iter()
             .map(|r| {
-                let status = row_status(&r.stat, net);
+                // A menu row is a place, not an app: nothing runs it, so the tag is
+                // empty, except on a `5G Modem` entry among several, where it says
+                // which port the modem is in.
+                let (tag, status) = if matches!(r.stat, Stat::Modem) {
+                    nth_modem += 1;
+                    modems
+                        .get(nth_modem - 1)
+                        .map(|e| (e.tag.clone(), e.status.clone()))
+                        .unwrap_or_default()
+                } else {
+                    (String::new(), row_status(&r.stat, net))
+                };
                 let (chevrons, value) = chevrons_of(&status);
                 ListItem {
                     label: r.label.into(),
-                    // A menu row is a place, not an app: nothing runs it.
-                    tag: Default::default(),
+                    tag: tag.as_str().into(),
                     status: status.as_str().into(),
                     icon: r.icon,
                     picture: Default::default(),
@@ -368,8 +404,10 @@ mod demo {
         Airplane,
         /// OFF when the radio is off, else the SSID, else "not connected".
         Wifi,
-        /// "Airplane mode" while that is what blocks the row.
-        ModemBlocked,
+        /// What a `5G Modem` entry's modem is doing. One row in the table stands for
+        /// one entry per modem: `rows` repeats it and `apply_menu` names each, from
+        /// `flipper_ui::modem::entries`.
+        Modem,
     }
 
     pub struct Row {
@@ -399,7 +437,7 @@ mod demo {
         rows: &[
             Row { label: "Airplane mode", icon: 9, frames: 10, stat: Stat::Airplane, act: Act::Airplane },
             Row { label: "Routing info", icon: 10, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Routing) },
-            Row { label: "5G Modem", icon: 11, frames: 1, stat: Stat::ModemBlocked, act: Act::Detail(Detail::Modem) },
+            Row { label: "5G Modem", icon: 11, frames: 1, stat: Stat::Modem, act: Act::Detail(Detail::Modem) },
             Row { label: "Wi-Fi", icon: 12, frames: 1, stat: Stat::Wifi, act: Act::Wifi },
             Row { label: "Ethernet", icon: 13, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Ethernet) },
         ],
@@ -486,7 +524,8 @@ mod demo {
                     net.ssid.clone()
                 }
             }
-            Stat::ModemBlocked => if net.airplane { "Airplane mode" } else { "" }.into(),
+            // Each entry's own, set by apply_menu.
+            Stat::Modem => String::new(),
         }
     }
 
@@ -511,15 +550,13 @@ mod detail {
 
     use flipper_ui::boot;
     use flipper_ui::profile_update::{self, Listing, Offer, Step};
-    use flipper_ui::sysinfo::{self, Battery, Disk, Modem, Route, System};
+    use flipper_ui::sysinfo::{self, Battery, Disk, Route, System};
     use flipper_ui::ui::DetailRow;
     use flipper_ui::update::{self, Channel, Image};
     use flipper_ui::watch::Watch;
 
     use super::demo::Detail;
 
-    /// QMI control device for the cell-identity calls.
-    const QMI_DEV: &str = "/dev/cdc-wdm0";
     fn row(label: &str, value: &str) -> DetailRow {
         DetailRow { kind: 0, label: label.into(), value: value.into(), percent: 0, dim: false }
     }
@@ -733,7 +770,8 @@ mod detail {
         Routing(flipper_ui::route_watch::RouteWatch),
         Disk(Watch<Disks>),
         Battery(Watch<Battery>),
-        Modem(Watch<Modem>),
+        /// Not a poller: ModemManager says when something changes. See `mm`.
+        Modem(ModemScreen),
         /// Not a poller either: the channel is a choice, not a measurement, and
         /// asking what it offers is a read rather than a watch.
         Update(UpdateScreen),
@@ -1184,7 +1222,275 @@ mod detail {
         }
     }
 
+    /// The 5G Modem app: which modem, by the port it is in, which of its pages is
+    /// showing, where the cursor is on the main one, and the focus that has
+    /// ModemManager read it closely while any of them is open.
+    ///
+    /// By port rather than by ModemManager's object: a modem that resets or switches
+    /// SIM comes back as a new object in the same port, and the screen stays on it.
+    ///
+    /// The main page draws on its own screen, `ModemBody`; the pages it opens are
+    /// lines on the detail screen, so they scroll and wrap like every other one.
+    pub struct ModemScreen {
+        /// The port name, or empty when there was no modem to open: then the screen
+        /// shows the first modem that turns up.
+        key: String,
+        pub page: flipper_ui::modem::Page,
+        /// The item the cursor is on, on the main page.
+        pub selected: usize,
+        /// Whether the modem has been on this screen, which makes its absence a
+        /// restart rather than no modem at all.
+        seen: std::cell::Cell<bool>,
+        generation: std::cell::Cell<u64>,
+        speed: std::cell::RefCell<Speed>,
+        _focus: flipper_ui::mm::Focus,
+        /// Held while the Signal page is open: the per-antenna readings.
+        antennas: std::cell::RefCell<Option<flipper_ui::mm::AntennaFocus>>,
+    }
+
+    /// The data connection's speed, from its interface's byte counters a second
+    /// apart. sysfs rather than MM's bearer stats, which MM refreshes on a slower
+    /// schedule of its own.
+    #[derive(Default)]
+    struct Speed {
+        last: Option<(std::time::Instant, u64, u64)>,
+        rates: flipper_ui::modem::Rates,
+    }
+
+    impl ModemScreen {
+        /// This screen's modem, newest reading.
+        fn modem(&self) -> Option<flipper_ui::modem::Modem> {
+            let modems = flipper_ui::mm::modems();
+            let found = flipper_ui::modem::ordered(&modems)
+                .into_iter()
+                .find(|(name, _)| self.key.is_empty() || *name == self.key)
+                .map(|(_, m)| m.clone())
+                .map(
+                    |m| if std::env::var_os("FLIPCTL_MASK_IDS").is_some() { masked(m) } else { m },
+                );
+            self.seen.set(self.seen.get() || found.is_some());
+            found
+        }
+
+        fn is_m2(m: Option<&flipper_ui::modem::Modem>, key: &str) -> bool {
+            m.map_or(key == "M.2", |m| flipper_ui::modem::port(&m.physdev).name == "M.2")
+        }
+
+        /// The main page, laid out.
+        pub fn view(&self) -> flipper_ui::modem::MainView {
+            let m = self.modem();
+            let m2 = Self::is_m2(m.as_ref(), &self.key);
+            let blocked = m2 && flipper_ui::mm::m2_blocked();
+            flipper_ui::modem::main_view(
+                m.as_ref(),
+                m2,
+                blocked,
+                self.seen.get(),
+                self.card(),
+                self.speed.borrow().rates,
+            )
+        }
+
+        /// Whether this modem has a radio switch to throw: the M.2 slot's.
+        pub fn has_switch(&self) -> bool {
+            Self::is_m2(self.modem().as_ref(), &self.key)
+        }
+
+        /// Which card the board's SIM selector has the modem on. Only the M.2 slot
+        /// is behind it; `None` for any other modem, and on a board without one.
+        pub fn card(&self) -> Option<flipper_ui::simsel::Card> {
+            self.has_switch().then(flipper_ui::simsel::read).flatten()
+        }
+
+        /// The row the cursor is on, on a page that has one: the SIM page's switch,
+        /// its first line. -1 elsewhere.
+        pub fn selected_row(&self) -> i32 {
+            if self.page == flipper_ui::modem::Page::Sim && self.card().is_some() {
+                0
+            } else {
+                -1
+            }
+        }
+
+        /// This modem's sysfs device, for asking ModemManager about it by port.
+        pub fn physdev(&self) -> Option<String> {
+            self.modem().map(|m| m.physdev)
+        }
+
+        /// What each item on the main page is, in order.
+        pub fn items(&self) -> Vec<flipper_ui::modem::What> {
+            self.view().items.iter().map(|i| i.what).collect()
+        }
+
+        pub fn buttons(&self) -> [&'static str; 5] {
+            use flipper_ui::modem::Page;
+            if self.page != Page::Main {
+                return ["Back", "", "", "", ""];
+            }
+            let info = self.items().get(self.selected).is_some_and(|w| w.has_info());
+            ["Back", if info { "Info" } else { "" }, "", "Config", ""]
+        }
+
+        /// The open page's rows, for the detail screen.
+        fn rows(&self) -> Vec<DetailRow> {
+            use flipper_ui::modem::Line;
+            let m = self.modem();
+            let mut out = Vec::new();
+            let lines = flipper_ui::modem::page(
+                self.page,
+                m.as_ref(),
+                self.card(),
+                self.speed.borrow().rates,
+            );
+            for line in lines {
+                match line {
+                    Line::Head(t) => out.push(DetailRow { kind: 5, ..row(&t, "") }),
+                    Line::Pair { label, value } => out.extend(long(&label, &value)),
+                    Line::Text(t) => out.extend(wrapped(&t)),
+                    Line::Action(t) => out.push(DetailRow { kind: 11, ..row(&t, "") }),
+                    // On the middle row of an otherwise empty screen.
+                    Line::Centered(t) => {
+                        let middle = (flipper_ui::theme::count::DETAIL_VISIBLE_ROWS - 1) / 2;
+                        out.extend((0..middle).map(|_| text("")));
+                        out.push(DetailRow { kind: 10, ..row("", &t) });
+                    }
+                }
+            }
+            out
+        }
+
+        /// Whether anything on the open page has moved: ModemManager's readings, or
+        /// a second gone by for the speed while there is a connection to time.
+        pub fn take_dirty(&self) -> bool {
+            // The antennas are asked for only while the Signal page is the one open.
+            {
+                let mut held = self.antennas.borrow_mut();
+                let wanted = self.page == flipper_ui::modem::Page::Signal;
+                if wanted && held.is_none() {
+                    *held = Some(flipper_ui::mm::antenna_focus());
+                } else if !wanted {
+                    *held = None;
+                }
+            }
+            let now = flipper_ui::mm::generation();
+            let mut dirty = self.generation.replace(now) != now;
+            let iface =
+                self.modem().and_then(|m| m.bearer).filter(|b| b.connected).map(|b| b.iface);
+            let mut speed = self.speed.borrow_mut();
+            let due = speed.last.is_none_or(|(at, _, _)| at.elapsed() >= Duration::from_secs(1));
+            if let (Some(iface), true) = (iface, due) {
+                let read = |what: &str| {
+                    std::fs::read_to_string(format!("/sys/class/net/{iface}/statistics/{what}"))
+                        .ok()
+                        .and_then(|s| s.trim().parse::<u64>().ok())
+                };
+                if let (Some(rx), Some(tx)) = (read("rx_bytes"), read("tx_bytes")) {
+                    let at = std::time::Instant::now();
+                    if let Some((then, rx0, tx0)) = speed.last {
+                        let secs = at.duration_since(then).as_secs_f64().max(0.001);
+                        let fresh = flipper_ui::modem::Rates {
+                            down: Some(rx.saturating_sub(rx0) as f64 / secs),
+                            up: Some(tx.saturating_sub(tx0) as f64 / secs),
+                        };
+                        dirty |= fresh != speed.rates;
+                        speed.rates = fresh;
+                    }
+                    speed.last = Some((at, rx, tx));
+                }
+            }
+            dirty
+        }
+    }
+
+    /// The modem with what identifies it, the SIM and the connection replaced by
+    /// placeholders: for screenshots that go into public documentation. Set by
+    /// `FLIPCTL_MASK_IDS`, and only ever by hand.
+    fn masked(mut m: flipper_ui::modem::Modem) -> flipper_ui::modem::Modem {
+        m.imei = "860000000000000".into();
+        m.own_numbers = vec!["+447000000000".into()];
+        if let Some(sim) = m.sim.as_mut() {
+            sim.iccid = "89440000000000000000".into();
+            sim.imsi = "234150000000000".into();
+        }
+        if let Some(b) = m.bearer.as_mut() {
+            b.ipv4 = "10.0.0.2/30".into();
+            b.ipv4_gateway = "10.0.0.1".into();
+            b.ipv6 = "2001:db8:1a3:9f02::2/64".into();
+            b.dns = vec!["10.0.0.53".into(), "2001:db8::53".into()];
+        }
+        m
+    }
+
+    /// Put the 5G Modem app's main page on its screen.
+    pub fn apply_modem(screen: &flipper_ui::ui::Root, m: &ModemScreen) {
+        use flipper_ui::modem::Tone;
+        use flipper_ui::ui::{ModemItem, ModemRun};
+        let v = m.view();
+        let selected = m.selected.min(v.items.len().saturating_sub(1));
+        let px = |v: i32| v as f32;
+        let runs: Vec<ModemRun> = v
+            .runs
+            .iter()
+            .map(|r| ModemRun {
+                x: px(r.x),
+                y: px(r.y),
+                text: r.text.as_str().into(),
+                item: r.item as i32,
+                dim: r.tone == Tone::Dim,
+                right: r.right,
+            })
+            .collect();
+        let items: Vec<ModemItem> =
+            v.items.iter().map(|i| ModemItem { y: px(i.y), h: px(i.h) }).collect();
+        let dividers: Vec<f32> = v.dividers.iter().map(|&d| px(d)).collect();
+        screen.set_modem_runs(slint::ModelRc::new(slint::VecModel::from(runs)));
+        screen.set_modem_items(slint::ModelRc::new(slint::VecModel::from(items)));
+        screen.set_modem_dividers(slint::ModelRc::new(slint::VecModel::from(dividers)));
+        screen.set_modem_selected(selected as i32);
+        screen.set_modem_bars_show(v.bars.is_some());
+        if let Some(b) = v.bars {
+            screen.set_modem_bars_x(px(b.x));
+            screen.set_modem_bars_y(px(b.y));
+            screen.set_modem_bars_lit(i32::from(b.lit));
+            let signal = v.items.iter().position(|i| i.what == flipper_ui::modem::What::Signal);
+            screen.set_modem_bars_item(signal.map_or(-1, |i| i as i32));
+        }
+        screen.set_modem_message(v.message.as_str().into());
+        screen.set_modem_buttons(super::demo::labels(&m.buttons()));
+    }
+
     impl Live {
+        /// The 5G Modem app for the modem in port `key`, on its main page.
+        pub fn modem(key: String) -> Self {
+            Live::Modem(ModemScreen {
+                key,
+                page: flipper_ui::modem::Page::Main,
+                selected: 0,
+                seen: Default::default(),
+                generation: std::cell::Cell::new(flipper_ui::mm::generation()),
+                speed: Default::default(),
+                _focus: flipper_ui::mm::focus(),
+                antennas: Default::default(),
+            })
+        }
+
+        /// The row the cursor is on, for a page that has one, or -1.
+        pub fn selected_row(&self) -> i32 {
+            match self {
+                Live::Modem(m) => m.selected_row(),
+                _ => -1,
+            }
+        }
+
+        /// The 5G Modem app when it is on its main page, which draws on a screen of
+        /// its own rather than as rows.
+        pub fn modem_main(&self) -> Option<&ModemScreen> {
+            match self {
+                Live::Modem(m) if m.page == flipper_ui::modem::Page::Main => Some(m),
+                _ => None,
+            }
+        }
+
         /// Start the poller for `which` at its prototype's cadence.
         pub fn open(which: Detail) -> Self {
             match which {
@@ -1231,20 +1537,9 @@ mod detail {
                     Battery::default(),
                     sysinfo::battery,
                 )),
-                // modem5g.js polls every 500ms, which is four subprocesses at 2Hz:
-                // mmcli three times and qmicli once. Nothing on the page moves at
-                // that rate. Operator and access technology change on network
-                // events, and the signal is whatever ModemManager last cached --
-                // it refreshes on its own schedule, so asking twice a second
-                // cannot produce a newer number, only the same one again. Two
-                // seconds, which is the Ethernet page's cadence, is a quarter of
-                // the processes for the same screen.
-                Detail::Modem => Live::Modem(Watch::spawn(
-                    "watch-modem",
-                    Duration::from_secs(2),
-                    Modem::default(),
-                    || sysinfo::modem(QMI_DEV),
-                )),
+                // Opened from a menu row this is `Live::modem` with that row's
+                // modem. Opened by name, the first modem.
+                Detail::Modem => Live::modem(super::demo::modem_key(&[], 0)),
                 Detail::Update => Live::Update(UpdateScreen::open()),
                 Detail::Profile => Live::Profile(ProfileScreen::open()),
                 Detail::Revisions => Live::Revisions(sysinfo::install()),
@@ -1258,7 +1553,7 @@ mod detail {
                 Live::Routing(w) => w.take_dirty(),
                 Live::Disk(w) => w.take_dirty(),
                 Live::Battery(w) => w.take_dirty(),
-                Live::Modem(w) => w.take_dirty(),
+                Live::Modem(m) => m.take_dirty(),
                 Live::Update(u) => {
                     u.collect();
                     u.dirty.replace(false)
@@ -1280,7 +1575,7 @@ mod detail {
                 Live::Routing(w) => routing_rows(&w.get()),
                 Live::Disk(w) => disk_rows(&w.get()),
                 Live::Battery(w) => battery_rows(&w.get()),
-                Live::Modem(w) => modem_rows(&w.get()),
+                Live::Modem(m) => m.rows(),
                 Live::Update(u) => update_rows(u, applying),
                 Live::Profile(p) => profile_rows(p),
                 Live::Revisions(i) => joined(revisions_sections(i)),
@@ -1329,6 +1624,7 @@ mod detail {
                 Live::Revisions(_) => {
                     ["Back", "", "", "QR", self.next_stop(offset).map_or("", |s| s.1)]
                 }
+                Live::Modem(m) => m.buttons(),
                 _ => ["Back", "", "", "", ""],
             }
         }
@@ -1826,62 +2122,6 @@ mod detail {
             // sysfs reports tenths of a degree.
             out.push(row("Temp", &format!("{:.1} C", t as f32 / 10.0)));
         }
-        out
-    }
-
-    /// modem5g.js, in its own row order: identity, signal, cell, then the link.
-    fn modem_rows(m: &Modem) -> Vec<DetailRow> {
-        if !m.available {
-            return vec![row("Modem", "Not available")];
-        }
-        let dash = |s: &str| if s.is_empty() { "--".to_string() } else { s.to_string() };
-        // techLabel in the prototype uppercases whatever ModemManager reports.
-        let tech = if m.access_tech.is_empty() {
-            "--".to_string()
-        } else {
-            m.access_tech.join("/").to_uppercase()
-        };
-        let mut out = vec![
-            row(&dash(&m.operator), &tech),
-            row(
-                "Signal",
-                &format!(
-                    "{} ({}/5)",
-                    m.signal_quality.map_or("--%".into(), |q| format!("{q}%")),
-                    sysinfo::signal_bars(m.signal_quality)
-                ),
-            ),
-        ];
-        if !m.rsrp.is_empty() {
-            out.push(dim("RSRP", &m.rsrp));
-        }
-        out.push(divider());
-        out.push(row("TAC", &dash(&m.tac)));
-        out.push(row("Cell ID", &dash(&m.cell_id)));
-        out.push(row(
-            "PLMN",
-            &if m.mcc.is_empty() || m.mnc.is_empty() {
-                "--".into()
-            } else {
-                format!("{}/{}", m.mcc, m.mnc)
-            },
-        ));
-        out.push(row("PCI", &dash(&m.pci)));
-        if !m.band.is_empty() {
-            out.push(dim("Band", &m.band));
-        } else if !m.earfcn.is_empty() {
-            out.push(dim("EARFCN", &m.earfcn));
-        }
-        out.push(divider());
-        out.push(row("Model", &dash(&m.model)));
-        out.push(row("IP", &dash(&m.ip4)));
-        out.push(row(
-            "Link",
-            &match m.dl_mbps {
-                Some(v) => format!("{v:.0} Mbit/s"),
-                None => "--".into(),
-            },
-        ));
         out
     }
 
@@ -3604,6 +3844,15 @@ fn png(
     // submenu's geometry without a device in front of you.
     if let Some(name) = which.as_deref() {
         let net = flipper_ui::net::NetSource::spawn().get();
+        // The Network menu's 5G Modem entries come from ModemManager, which the
+        // watcher reads on a thread of its own: give it its first reading.
+        if name == "network" {
+            let until = std::time::Instant::now() + Duration::from_secs(3);
+            let _ = flipper_ui::mm::modems();
+            while flipper_ui::mm::generation() == 0 && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
         let menu = match name {
             "network" => &demo::NETWORK,
             "settings" => &demo::SETTINGS,
@@ -3660,15 +3909,38 @@ fn png(
             "routing" => Some(demo::Detail::Routing),
             "disk" => Some(demo::Detail::Disk),
             "battery" => Some(demo::Detail::Battery),
-            "modem" => Some(demo::Detail::Modem),
+            "modem" | "modem-device" | "modem-sim" | "modem-signal" | "modem-network"
+            | "modem-config" => Some(demo::Detail::Modem),
             "update" => Some(demo::Detail::Update),
             "profile" => Some(demo::Detail::Profile),
             _ => None,
         };
         if let Some(want) = want {
-            let open = detail::Live::open(want);
-            // The pollers are threads; give the first fetch a moment to land.
+            let mut open = detail::Live::open(want);
+            // The 5G Modem app's pages by name, and its main page's cursor by --select.
+            if let detail::Live::Modem(m) = &mut open {
+                use flipper_ui::modem::Page;
+                m.page = match name {
+                    "modem-device" => Page::Device,
+                    "modem-sim" => Page::Sim,
+                    "modem-signal" => Page::Signal,
+                    "modem-network" => Page::Network,
+                    "modem-config" => Page::Config,
+                    _ => Page::Main,
+                };
+                if m.page == Page::Main {
+                    m.selected = select.unwrap_or(0).max(0) as usize;
+                }
+            }
+            // The pollers are threads; give the first fetch a moment to land. The
+            // modem's: its focus asks ModemManager for the SIM, the bearer and the
+            // cells, and the speed needs two readings a second apart.
             std::thread::sleep(Duration::from_millis(1200));
+            if let detail::Live::Modem(m) = &open {
+                m.take_dirty();
+                std::thread::sleep(Duration::from_millis(1100));
+                m.take_dirty();
+            }
             let applying = detail::Applying::No;
             // Ethernet draws cards on its own screen rather than rows.
             if let detail::Live::Ethernet(w) = &open {
@@ -3701,6 +3973,7 @@ fn png(
                 ));
             }
             screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+            screen.set_detail_selected(open.selected_row());
             screen.set_detail_asides(open.asides());
             screen.set_detail_offset(select.unwrap_or(0));
             let (at_start, at_end) = open.chevron_ends();
@@ -3718,7 +3991,17 @@ fn png(
                 }
                 _ => want.title().to_string(),
             };
-            if !matches!(open, detail::Live::Ethernet(_)) {
+            let leaf = match &open {
+                detail::Live::Modem(m) if m.page != flipper_ui::modem::Page::Main => {
+                    format!("{leaf} > {}", m.page.title())
+                }
+                _ => leaf,
+            };
+            if let Some(m) = open.modem_main() {
+                detail::apply_modem(&screen, m);
+                screen.set_breadcrumb(format!("> {parent} > {leaf}").as_str().into());
+                screen.set_screen(Screen::Modem);
+            } else if !matches!(open, detail::Live::Ethernet(_)) {
                 screen.set_breadcrumb(format!("> {parent} > {leaf}").as_str().into());
                 screen.set_screen(Screen::Detail);
             }
@@ -4082,6 +4365,10 @@ fn panel(
     // milliseconds at best and the render loop cannot wait on it.
     let net = flipper_ui::net::NetSource::spawn();
     let mut net_now = net.get();
+    // The Network menu's `5G Modem` entries as last drawn, so a change in what
+    // ModemManager says redraws the menu only when an entry reads differently: the
+    // signal moving every few seconds is not one.
+    let mut modem_entries = demo::modem_entries();
 
     // The blocking dialog, when one is open. `right` is what the run key does; the
     // left key always just closes.
@@ -4107,6 +4394,8 @@ fn panel(
         Rollback,
         /// Update a modified profile, losing its changes outside /etc.
         ForceUpdate,
+        /// Move the M.2 modem to the other SIM card and restart it.
+        SimSwitch,
     }
     let mut dialog: Option<Dialog> = None;
     // A dialog that only reports, and when it closes by itself: the lines it was
@@ -6222,6 +6511,39 @@ fn panel(
                 continue;
             }
 
+            // The 5G Modem app's main page: a cursor over its four items, Ok to open
+            // or throw the one it is on, and its own soft keys. Its pages are rows on
+            // the detail screen and take the keys below like any other.
+            if let Some(detail::Live::Modem(m)) = live.as_mut().filter(|l| l.modem_main().is_some())
+            {
+                let count = m.items().len();
+                let buttons = m.buttons();
+                match event.key {
+                    FlipperKey::Down if count > 0 => {
+                        m.selected = (m.selected + 1) % count;
+                        detail_dirty = true;
+                    }
+                    FlipperKey::Up if count > 0 => {
+                        m.selected = (m.selected + count - 1) % count;
+                        detail_dirty = true;
+                    }
+                    FlipperKey::Ok if count > 0 => {
+                        press.row(FlipperKey::Ok, Instant::now() + flash)
+                    }
+                    FlipperKey::Escape | FlipperKey::Back => {
+                        press.soft(FlipperKey::Escape, 0, Instant::now() + flash)
+                    }
+                    FlipperKey::View if !buttons[1].is_empty() => {
+                        press.soft(FlipperKey::View, 1, Instant::now() + flash)
+                    }
+                    FlipperKey::Edit if !buttons[3].is_empty() => {
+                        press.soft(FlipperKey::Edit, 3, Instant::now() + flash)
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             if let Some(open) = live.as_ref() {
                 // The code covers the page, so only the key that closes it does
                 // anything while it is up.
@@ -6249,6 +6571,12 @@ fn panel(
                     FlipperKey::Up => {
                         detail_offset = (detail_offset - 1).max(0);
                         detail_dirty = true;
+                    }
+                    // A page's action row, while it is on screen: the SIM switch.
+                    FlipperKey::Ok
+                        if open.selected_row() >= 0 && detail_offset <= open.selected_row() =>
+                    {
+                        press.row(FlipperKey::Ok, Instant::now() + flash);
                     }
                     FlipperKey::Run | FlipperKey::Ok
                         if !open.buttons(&applying, detail_offset)[4].is_empty() =>
@@ -6662,6 +6990,31 @@ fn panel(
                                 detail_dirty = true;
                             }
                         }
+                    } else if d.act == DialogAct::SimSwitch {
+                        // The selector first, then the restart that makes the modem
+                        // read the card: it does not notice the swap by itself. The
+                        // main page then says "Restarting modem" until it is back.
+                        if let Some(detail::Live::Modem(m)) =
+                            live.as_mut().filter(|_| slot == Some(4))
+                        {
+                            if let Some(card) = m.card() {
+                                match flipper_ui::simsel::set(card.other()) {
+                                    Ok(()) => {
+                                        eprintln!("modem          sim {}", card.other().name());
+                                        if let Some(dev) = m.physdev() {
+                                            flipper_ui::mm::reset(&dev);
+                                        }
+                                        m.page = flipper_ui::modem::Page::Main;
+                                        let trail =
+                                            demo::crumb(&stack, demo::Detail::Modem.title());
+                                        screen.set_breadcrumb(trail.as_str().into());
+                                        screen.set_screen(Screen::Modem);
+                                    }
+                                    Err(e) => eprintln!("modem          sim switch: {e}"),
+                                }
+                                detail_dirty = true;
+                            }
+                        }
                     } else if d.act == DialogAct::Rollback {
                         if let Some(detail::Live::Profile(p)) =
                             live.as_ref().filter(|_| slot == Some(4))
@@ -6934,6 +7287,59 @@ fn panel(
                     if let Some(modal) = next {
                         wifi_modal = modal;
                     }
+                } else if screen.get_screen() == Screen::Modem {
+                    use flipper_ui::modem::{Page, What};
+                    let (what, open) = match live.as_ref() {
+                        Some(detail::Live::Modem(m)) => (m.items().get(m.selected).copied(), true),
+                        _ => (None, false),
+                    };
+                    let next = match (key, what) {
+                        (FlipperKey::Escape, _) => None,
+                        (FlipperKey::Ok | FlipperKey::View, Some(What::Sim)) => Some(Page::Sim),
+                        (FlipperKey::View, Some(What::Radio)) => Some(Page::Device),
+                        (FlipperKey::Ok, Some(What::Signal)) => Some(Page::Signal),
+                        (FlipperKey::Ok, Some(What::Network)) => Some(Page::Network),
+                        (FlipperKey::Edit, _) => Some(Page::Config),
+                        // The radio switch: the M.2 slot's rfkill line, where there is
+                        // one. The screen follows from sysfs on the redraw.
+                        (FlipperKey::Ok, Some(What::Radio)) => {
+                            if let Some(detail::Live::Modem(m)) = live.as_ref() {
+                                if m.has_switch() {
+                                    let block = !flipper_ui::mm::m2_blocked();
+                                    match flipper_ui::mm::set_m2_blocked(block) {
+                                        Ok(()) => eprintln!(
+                                            "modem          radio {}",
+                                            if block { "off" } else { "on" }
+                                        ),
+                                        Err(e) => eprintln!("modem          radio switch: {e}"),
+                                    }
+                                    detail_dirty = true;
+                                }
+                            }
+                            Some(Page::Main)
+                        }
+                        _ => Some(Page::Main),
+                    };
+                    match next {
+                        None => {
+                            live = None;
+                            menu_again!();
+                        }
+                        Some(Page::Main) => {}
+                        Some(page) if open => {
+                            if let Some(detail::Live::Modem(m)) = live.as_mut() {
+                                m.page = page;
+                            }
+                            detail_offset = 0;
+                            let trail =
+                                demo::crumb(&stack, &format!("5G Modem > {}", page.title()));
+                            screen.set_breadcrumb(trail.as_str().into());
+                            screen.set_screen(Screen::Detail);
+                            detail_dirty = true;
+                            eprintln!("modem          page {}", page.title());
+                        }
+                        Some(_) => {}
+                    }
                 } else if matches!(screen.get_screen(), Screen::Detail | Screen::Ethernet) {
                     match key {
                         // Not while a profile update runs: it cannot be stopped, and
@@ -6944,6 +7350,40 @@ fn panel(
                         // watch stops its poller.
                         FlipperKey::Escape if detail_qr => {
                             detail_qr = false;
+                            detail_dirty = true;
+                        }
+                        // The switch, the 5G Modem app's SIM page's first line: asks
+                        // first, since the modem restarts and is gone for about a minute.
+                        FlipperKey::Ok
+                            if matches!(&live, Some(detail::Live::Modem(m))
+                                if m.page == flipper_ui::modem::Page::Sim) =>
+                        {
+                            if let Some(card) = match &live {
+                                Some(detail::Live::Modem(m)) => m.card(),
+                                _ => None,
+                            } {
+                                dialog = Some(Dialog {
+                                    lines: vec![
+                                        format!("Switch to {}?", card.other().name()),
+                                        "The modem restarts".into(),
+                                    ],
+                                    left: "Cancel",
+                                    right: "Switch",
+                                    act: DialogAct::SimSwitch,
+                                });
+                            }
+                        }
+                        // A page of the 5G Modem app goes back to its main page.
+                        FlipperKey::Escape
+                            if matches!(&live, Some(detail::Live::Modem(m))
+                                if m.page != flipper_ui::modem::Page::Main) =>
+                        {
+                            if let Some(detail::Live::Modem(m)) = live.as_mut() {
+                                m.page = flipper_ui::modem::Page::Main;
+                            }
+                            let trail = demo::crumb(&stack, demo::Detail::Modem.title());
+                            screen.set_breadcrumb(trail.as_str().into());
+                            screen.set_screen(Screen::Modem);
                             detail_dirty = true;
                         }
                         FlipperKey::Escape if parked.is_some() => {
@@ -7308,7 +7748,12 @@ fn panel(
                             eprintln!("screen         apps");
                         }
                         demo::Act::Detail(which) => {
-                            live = Some(detail::Live::open(*which));
+                            // A `5G Modem` entry opens its own modem.
+                            live = Some(if *which == demo::Detail::Modem {
+                                detail::Live::modem(demo::modem_key(&visible, selected))
+                            } else {
+                                detail::Live::open(*which)
+                            });
                             parked = None;
                             detail_offset = 0;
                             detail_qr = false;
@@ -7326,10 +7771,10 @@ fn panel(
                             stack.last_mut().unwrap().2 = scroll;
                             let trail = demo::crumb(&stack, which.title());
                             screen.set_breadcrumb(trail.as_str().into());
-                            screen.set_screen(if *which == demo::Detail::Ethernet {
-                                Screen::Ethernet
-                            } else {
-                                Screen::Detail
+                            screen.set_screen(match *which {
+                                demo::Detail::Ethernet => Screen::Ethernet,
+                                demo::Detail::Modem => Screen::Modem,
+                                _ => Screen::Detail,
                             });
                             eprintln!("detail         {}", which.title());
                         }
@@ -7732,6 +8177,11 @@ fn panel(
                 screen.set_eth_detail_offset(eth_scroll);
                 screen.set_eth_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
             }
+        } else if let Some(m) = live.as_ref().and_then(detail::Live::modem_main) {
+            if m.take_dirty() || detail_dirty {
+                detail_dirty = false;
+                detail::apply_modem(&screen, m);
+            }
         } else if let Some(open) = live.as_ref() {
             if open.take_dirty() || detail_dirty {
                 detail_dirty = false;
@@ -7745,6 +8195,7 @@ fn panel(
                     slint::Image::default()
                 });
                 screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+                screen.set_detail_selected(open.selected_row());
                 screen.set_detail_asides(open.asides());
                 screen.set_detail_offset(detail_offset);
                 screen.set_detail_buttons(demo::labels(&if detail_qr {
@@ -7805,7 +8256,10 @@ fn panel(
         // alone, by design -- an app draws its own screen and there is none of ours
         // for it to be. A page whose app was launched over it keeps polling.
         if live.is_some()
-            && !matches!(screen.get_screen(), Screen::Detail | Screen::Ethernet | Screen::Switcher)
+            && !matches!(
+                screen.get_screen(),
+                Screen::Detail | Screen::Ethernet | Screen::Modem | Screen::Switcher
+            )
         {
             live = None;
             eth_open = false;
@@ -7833,6 +8287,17 @@ fn panel(
             wifi_op = None;
             wifi_toast = None;
             wifi_modal = wifi::Modal::None;
+        }
+
+        // A modem came, went, or its entry says something new.
+        if std::ptr::eq(stack.last().unwrap().0, &demo::NETWORK)
+            && screen.get_screen() == Screen::Menu
+        {
+            let fresh = demo::modem_entries();
+            if fresh != modem_entries {
+                modem_entries = fresh;
+                demo::apply_menu(&screen, &demo::NETWORK, &net_now);
+            }
         }
 
         // Radio state moved, so any row whose status reads it has to be rebuilt.
@@ -8092,6 +8557,10 @@ fn panel(
         } else {
             -1
         });
+        screen.set_detail_row_pressed(screen.get_screen() == Screen::Detail && press.row_pressed());
+        let on_modem = screen.get_screen() == Screen::Modem;
+        screen.set_modem_pressed_slot(if on_modem { press.soft_slot() } else { -1 });
+        screen.set_modem_pressed(on_modem && press.row_pressed());
         screen.set_idle_pressed_slot(press.soft_slot());
         screen.set_menu_pressed_slot(press.soft_slot());
         screen.set_app_pressed_slot(press.soft_slot());
