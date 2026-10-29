@@ -6,6 +6,209 @@ and puts them on the panel. Nothing describes the app's screen to flipctl: the a
 owns every pixel of its surface, and what keeps it looking like the device is that
 it draws with flipctl's own widgets.
 
+## Hello world
+
+The smallest whole app: a greeting, a counter Ok or Add raises, a gauge that fills as
+it goes, the real status bar, and Back or Close to leave. In Rust it has a second
+page, under Draw, that it paints itself. Every rule behind it is in the sections that
+follow; this is the shape to start from.
+
+![Hello on the panel](inventory/hello-3x.png)
+
+### In Rust, as a bundle
+
+[`apps/hello`](../apps/hello) is the app, and the one to copy to start your own. A
+Rust app is a crate of its own under `apps/`, beside the others, since it takes the
+framework by path:
+
+| File | What it does |
+|---|---|
+| [`app.toml`](../apps/hello/app.toml) | The manifest: the name in the Apps list, and the program, which the bundler turns into the bundle's entry point. |
+| [`Cargo.toml`](../apps/hello/Cargo.toml) | A `[workspace]` of its own, so cargo does not take the crate for a member of the one around it; `flipctl-app` as a dependency and as a build dependency; Slint with the Wayland backend and the software renderer. |
+| [`build.rs`](../apps/hello/build.rs) | One line: compiles the page with the widgets under `@flipctl`, the window under `@app` and the tokens under `@theme`. |
+| [`ui/app.slint`](../apps/hello/ui/app.slint) | The page. It inherits `Shell`, which is the window, forwards the keys to a `keyed` callback Rust can bind, and shows one of two bodies: `DetailBody` for the rows, `CanvasBody` for the picture. Both draw the status bar and the soft keys; the page only passes properties through. |
+| [`src/main.rs`](../apps/hello/src/main.rs) | Fills the properties in and answers the keys. `rows()` builds the `DetailRow`s, `picture()` paints the canvas, `draw()` puts the current page up, and `main()` starts the status bar's 1s poll and binds the keys. |
+
+A row's `kind` says what it is: 0 a label and a value, 1 a rule, 2 a gauge, 3 a line
+of text (the comment on `DetailRow` in `detail.slint` lists the rest). A soft key's label is its slot in `buttons`, left to right,
+and `pressed_slot` draws the one being held, which `Key::soft_slot` gives.
+
+![The canvas page](inventory/hello-canvas-3x.png)
+
+Drawing the picture yourself is where an app can go wrong without noticing, so
+`picture()` in `main.rs` keeps to these rules:
+
+- **The picture is the whole panel.** `Surface::panel()` is 256x144, and
+  `CanvasBody` stretches whatever it gets to the panel, so a smaller surface comes out
+  scaled. The status bar covers the top `metric::STATUS_BAR_H` (13px) and the soft keys
+  the bottom `metric::BUTTON_H` (14px), so content goes between them.
+- **Only token colours.** The panel is 8-bit grey and the design uses a fixed set of
+  greys. Paint with `theme::color::*` (`BLACK`, `WHITE`, `STATUS_DIM`, ...), never
+  with a `Gray8` of your own. There is no alpha and no antialiasing: every pixel is one
+  token.
+- **Corners come from the surface.** `round_frame` and `round_rect` cut the panel's
+  45-degree chamfer. Do not plot rounded corners of your own.
+- **Coordinates are whole pixels and they clip.** Drawing partly off the surface
+  is safe, so a scrolling or moving shape needs no bounds checks.
+- **Text goes over the picture, not into it.** A `CanvasText` is drawn by Slint in
+  the panel's fonts at 16px: `x`, `y` is where it goes, `align` -1 starts it at `x`,
+  0 centres it on `x` and 1 ends it at `x`, and `font` picks the title face (0) or a
+  row's (1, 2). Use `Surface::text` with `font::TITLE` only when text has to be part of
+  the bitmap, and measure it with `font::tw`.
+- **A change is a new picture.** Paint a fresh surface and set `picture` again. The
+  panel has no partial update, a picture is 110KB, and a few a second cost nothing; for
+  animation, repaint from a `slint::Timer`.
+
+Build it once on the host to make `Cargo.lock`, which the bundler builds against with
+`--locked`, then bundle it and push it:
+
+    (cd apps/hello && cargo build --release)
+    scripts/gen-third-party-licenses.sh
+    tools/appimage/build.sh apps/hello
+    FLIPPER_HOST=<device> ./build_deploy.sh --apps
+
+`--apps` on its own copies `target/appimage/*.AppImage` to `~/Apps` and builds nothing
+else. That is every bundle there, however old, over what the device has; to send one,
+copy it over yourself:
+
+    scp target/appimage/hello-aarch64.fap.AppImage user@<device>:Apps/
+
+Hello is then in the Apps list, with the bundler's own icon until the app has
+one. Commit `Cargo.lock` and `THIRD-PARTY-LICENSES.md` with the app.
+
+To check pixels without a device, render the page headlessly in a test, as
+`apps/radio` does: `FlipperSlintPlatform::install()` and `render_frame` give the
+256x144 grey bytes the panel would get, to save as a PNG and to test against the
+tokens.
+
+### As a script
+
+The same app as one file, with nothing to build, and with the rows page only. The page
+is the Rust app's rows half, compiled when the script starts by the `flipctl` module its runtime carries. In Python,
+as `hello.fap.py`:
+
+    #!/usr/bin/env python3
+    # /// flipctl
+    # name = "Hello"
+    # status = true
+    # ///
+
+    import slint
+
+    import flipctl
+
+    PAGE = """
+    import { Shell } from "@app/shell.slint";
+    import { DetailBody, DetailRow } from "@flipctl/detail.slint";
+
+    export component App inherits Shell {
+        in property <[DetailRow]> rows;
+        in property <[string]> buttons;
+
+        callback keyed(string, bool);
+        key(text, down) => { root.keyed(text, down); }
+
+        DetailBody { rows: root.rows; buttons: root.buttons; fit_gauges: true; }
+    }
+    """
+
+
+    def row(kind, label="", value="", percent=0):
+        return {"kind": kind, "label": label, "value": value, "percent": percent, "dim": False}
+
+
+    ui = flipctl.load(PAGE)
+    presses = 0
+
+
+    def draw():
+        ui.rows = [
+            row(3, "Hello, Flipper One!"),
+            row(1),
+            row(0, "Presses", str(presses)),
+            row(2, "Progress", percent=min(100, presses * 10)),
+        ]
+
+
+    @flipctl.on_key(ui)
+    def _(key, down):
+        global presses
+        if not down:
+            return
+        if key in (flipctl.Key.BACK, flipctl.Key.ESCAPE):
+            slint.quit_event_loop()
+        elif key in (flipctl.Key.OK, flipctl.Key.RUN):
+            presses += 1
+            draw()
+
+
+    ui.buttons = ["Close", "", "", "", "Add"]
+    draw()
+    flipctl.run(ui)
+
+In JavaScript, as `hello.fap.js`, where an array property takes `flipctl.rows(...)`
+rather than a plain array:
+
+    #!/usr/bin/env node
+    // /// flipctl
+    // name = "Hello"
+    // status = true
+    // ///
+
+    "use strict";
+
+    const flipctl = require("flipctl");
+
+    const PAGE = `
+    import { Shell } from "@app/shell.slint";
+    import { DetailBody, DetailRow } from "@flipctl/detail.slint";
+
+    export component App inherits Shell {
+        in property <[DetailRow]> rows;
+        in property <[string]> buttons;
+
+        callback keyed(string, bool);
+        key(text, down) => { root.keyed(text, down); }
+
+        DetailBody { rows: root.rows; buttons: root.buttons; fit_gauges: true; }
+    }
+    `;
+
+    function row(kind, label = "", value = "", percent = 0) {
+        return { kind, label, value, percent, dim: false };
+    }
+
+    const ui = flipctl.load(PAGE);
+    let presses = 0;
+
+    function draw() {
+        ui.rows = flipctl.rows([
+            row(3, "Hello, Flipper One!"),
+            row(1),
+            row(0, "Presses", String(presses)),
+            row(2, "Progress", "", Math.min(100, presses * 10)),
+        ]);
+    }
+
+    flipctl.onKey(ui, (key, down) => {
+        if (!down) return;
+        if (key === flipctl.Key.Back || key === flipctl.Key.Escape) {
+            flipctl.quit();
+        } else if (key === flipctl.Key.Ok || key === flipctl.Key.Run) {
+            presses += 1;
+            draw();
+        }
+    });
+
+    ui.buttons = flipctl.rows(["Close", "", "", "", "Add"]);
+    draw();
+    flipctl.run(ui);
+
+`status = true` has flipctl paint the real status bar into the frame, so a script
+reads no sysfs for it. Copy the file into `~/Apps` on the device and it is listed; it
+runs once the Python or JavaScript Runtime is installed from the App Manager, which
+offers the runtime itself when you install a script from the catalogue.
+
 ## Where an app lives
 
 An app is delivered as one file in the user's `Apps` folder, either an AppImage or a
@@ -45,13 +248,15 @@ drops anything, and the scan runs in a unit that can reach the GPIO and the USB 
 | `status` | flipctl paints its own status strip over the app's frame, for a program that cannot draw one. An app on the framework draws the real bar itself and leaves this off. |
 | `rotate` | `"left"` or `"right"` for a portrait app. |
 | `env` | Extra environment, one `"KEY=value"` per entry. Applied last, so it overrides what the launch sets. |
-| `runtime` | The runtime this app is run through, e.g. `"python"`. A bundle declaring the same word in `provides` is the launcher that runs it. A script defaults to the runtime its extension implies. An app whose runtime nothing provides is listed and refused with a sentence naming it. |
+| `runtime` | The runtime this app is run through, e.g. `"py"`. A bundle declaring the same word in `provides` is the launcher that runs it. A script defaults to the runtime its extension implies. An app whose runtime nothing provides is listed and refused with a sentence naming it. |
 | `provides` | The runtime word a launcher bundle answers to, e.g. `"py"`. `apps/python-runtime` is the worked example. |
+| `folder` | The folder under `~/Apps` a bundle is filed in, e.g. `"Runtimes"`. flipctl never reads it: `--apps` and the catalogue put the file there, and a script is filed by where it sits under `apps/`. |
 
 ## A script is an app
 
-A `.py` in the folder carries its manifest in its own head, in the block shape PEP 723
-defines, beside PEP 723's own block naming what it needs installed:
+A script in the folder carries its manifest in its own head, in the block shape PEP 723
+defines, written in the language's own comments. A `.py` puts it beside PEP 723's own
+block naming what it needs installed:
 
     #!/usr/bin/env python3
     # /// script
@@ -64,14 +269,31 @@ defines, beside PEP 723's own block naming what it needs installed:
     # ///
     import flipctl
 
+A `.js` is the same block behind `//`:
+
+    #!/usr/bin/env node
+    // /// flipctl
+    // name = "Uptime"
+    // status = true
+    // ///
+
 Every manifest field means what it means for a bundle. Two are filled in when the
 block leaves them out: `runtime`, from the extension, and `wayland`, from the file's
 own name, because a script names no command of its own. An icon is a PNG beside it.
 
-`apps/ping.fap.py` is the worked example, and it is the whole app: a file in the tree
-beside the bundle directories, pushed to `~/Apps` as it stands by `--apps`, with
-nothing to build. It draws with the panel's own widgets through the `flipctl` package
-its runtime carries.
+`apps/ping.fap.py` and `apps/uptime.fap.js` are the worked examples, and each is the
+whole app: a file in the tree beside the bundle directories, pushed to `~/Apps` as it
+stands by `--apps`, with nothing to build. Each draws with the panel's own widgets
+through the `flipctl` module its runtime carries, which hands the page's Slint source
+to the compiler at run time with `@flipctl`, `@app` and `@theme` meaning what they mean
+in a crate. Both runtimes run the device's own interpreter, `python3` or `nodejs` from
+their `apt`, and carry only the drawing stack.
+
+A Python script must fill every field of a Slint struct it hands over. A `DetailRow`
+built without `dim` reaches a conditional as nothing rather than false, and the
+interpreter panics at launch (`conditional expression did not evaluate to boolean`).
+`MenuBody`'s items have an image field Python cannot build, so a Python app shows its
+rows in `DetailBody` instead, which takes any number and scrolls past eight.
 
 What actually starts it is the launcher bundle whose `provides` matches its `runtime`,
 with the script as its argument, in a working directory of the script's own under
@@ -137,6 +359,38 @@ Desktop image, and bundling it would drag ffmpeg's whole dependency fan-out in
 (measured: 118 packages, 177 MB extracted) for a 5 MB app. The speed test carries
 its four, about 28 MB, because none of them is in any image.
 
+## Publishing
+
+Nothing ships in the image: a fresh device has an empty `~/Apps`, and the App Manager
+fills it from a catalogue. That is `apps.toml` on the `dev` branch of
+`flipperdevices/flipctl-apps`, and the files it names are release assets on that
+repository's `apps` tag. `FLIPCTL_APPS_URL` points a device at another index, for a
+catalogue being worked on.
+
+    tools/appimage/build.sh --all
+    tools/appimage/stage.sh /tmp/stage      lay the apps out and write apps.toml
+
+`stage.sh` finds apps the way flipctl does, so adding one registers it nowhere: every
+bundle in `target/appimage`, filed under its `folder`, every file under `apps/` with a
+`/// flipctl` block that is not part of a bundle's sources, and a folder's `icon.png`.
+Each entry carries the name, the path under `~/Apps`, the url, the runtime or what it
+provides, the size and the sha256, sorted by name. Never edit `apps.toml` by hand;
+stage, copy it over, and the diff is the new entry in its place.
+
+Upload the file before the index that names it, so the index never points at a 404:
+
+    gh release upload apps <file> --repo flipperdevices/flipctl-apps
+
+then commit and push `apps.toml`. Release assets are a flat namespace, so a url is the
+tag's base and the file's own name, never its folder, and two apps in different
+folders cannot share a file name.
+
+The App Manager checks the sha256 of what it downloads (the size is what its progress
+bar counts towards), refuses a `path`
+that would leave `~/Apps`, and makes a bundle executable but never a script. A script
+whose runtime is not installed brings the runtime along: the manager offers the entry
+that `provides` it before the download, rather than the script failing at launch.
+
 ## The framework
 
 `crates/flipctl-app` is what an app draws with. A Rust app takes it as a dependency
@@ -190,6 +444,9 @@ Imported from `@flipctl`, the same components flipctl's own screens are built fr
 | `StatusBar` (`statusbar.slint`) | The top row, if you are not using a body that draws it. |
 
 ## The examples
+
+`apps/hello` is the smallest, and the one to copy: rows and a gauge in `DetailBody`,
+and a page it paints itself in `CanvasBody`. "Hello world" above walks through it.
 
 `apps/sysmon` is the fuller one: four pages, three of rows in `DetailBody` and one
 that paints two graphs into a `Surface` and shows them through `CanvasBody`, with

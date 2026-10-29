@@ -1,0 +1,2 @@
+name = "Hello"
+wayland = "./target/release/hello-app"

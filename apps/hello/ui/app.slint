@@ -1,0 +1,34 @@
+import { Shell, PanelStatus } from "@app/shell.slint";
+import { DetailBody, DetailRow } from "@flipctl/detail.slint";
+import { CanvasBody, CanvasText } from "@flipctl/canvas.slint";
+
+export { DetailRow, CanvasText, PanelStatus }
+
+export component AppWindow inherits Shell {
+    in property <bool> canvas;
+    in property <[DetailRow]> rows;
+    in property <image> picture;
+    in property <[CanvasText]> texts;
+    in property <[string]> buttons;
+    in property <int> pressed_slot: -1;
+
+    callback keyed(string, bool);
+    key(text, down) => {
+        root.keyed(text, down);
+    }
+
+    if !root.canvas: DetailBody {
+        rows: root.rows;
+        buttons: root.buttons;
+        pressed_slot: root.pressed_slot;
+        fit_gauges: true;
+    }
+
+    if root.canvas: CanvasBody {
+        bitmap: root.picture;
+        texts: root.texts;
+        status_bar: true;
+        buttons: root.buttons;
+        pressed_slot: root.pressed_slot;
+    }
+}
