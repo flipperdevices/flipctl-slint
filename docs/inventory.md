@@ -440,10 +440,17 @@ anywhere on the device.
 
 `menuItems` has Boot Menu on the main menu, and the port added App Manager beside
 Apps. Both now sit under Settings: App Manager, then the boot menu as OS
-Profiles, then Update profile and Reinstall FlipperOS (was Install FlipperOS). The
-boot menu's header reads OS Profiles when flipctl opens it; the standalone boot
-menu and its terminal keep Boot Menu. The manager's trail starts at Settings, and its
-switcher card puts Settings under it, so Close lands there.
+Profiles, then Update FlipperOS (was Update profile) and Reinstall FlipperOS (was
+Install FlipperOS). The boot menu's header reads OS Profiles when flipctl opens it;
+the standalone boot menu and its terminal keep Boot Menu. The manager's trail starts
+at Settings, and its switcher card puts Settings under it, so Close lands there.
+
+**Update FlipperOS updates every profile**, through `update-profile --every`. The
+screen lists them in two groups by check-profile's word: Updated automatically
+(pristine, booted, customized) and Blocked (packages, system), which a forced update
+takes too as Changes dropped. Only a profile forced past its own changes keeps its old
+version as `-obsolete-<build>`; any other is deleted, or set aside as `_old_` and
+reaped at the next boot when it is the one running. Rollback is the booted profile's.
 
 ## The idle screen's addresses, revisited 2026-10-01
 

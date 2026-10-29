@@ -351,7 +351,7 @@ mod demo {
                 Detail::Battery => "Battery info",
                 Detail::Modem => "5G Modem",
                 Detail::Update => "Reinstall FlipperOS",
-                Detail::Profile => "Update profile",
+                Detail::Profile => "Update FlipperOS",
                 Detail::Revisions => "Software Revisions",
             }
         }
@@ -433,7 +433,7 @@ mod demo {
             Row { label: "Disk info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
             Row { label: "App Manager", icon: 0, frames: 1, stat: Stat::None, act: Act::Manager },
             Row { label: "OS Profiles", icon: 0, frames: 1, stat: Stat::None, act: Act::Boot },
-            Row { label: "Update profile", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Profile) },
+            Row { label: "Update FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Profile) },
             Row { label: "Reinstall FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
             Row { label: "Reboot", icon: 0, frames: 1, stat: Stat::None, act: Act::Reboot },
             Row { label: "Shutdown", icon: 0, frames: 1, stat: Stat::None, act: Act::Shutdown },
@@ -897,24 +897,21 @@ mod detail {
         }
     }
 
-    /// The Update profile screen: what `update-profile --list` said about the booted
-    /// profile, which channel and build are showing, and the run started from here.
+    /// The Update FlipperOS screen: what `update-profile --list --every` said about the
+    /// profiles, which channel and build are showing, and the run started from here.
     pub struct ProfileScreen {
         pub channel: Channel,
         /// Which of `offers()` is chosen, an index into that filtered list.
         pub at: usize,
         listing: std::cell::RefCell<Option<Result<Listing, String>>>,
         loading: std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<Listing, String>>>>,
-        /// check-profile's word, once it has said it.
-        status: std::cell::RefCell<Option<String>>,
-        checking: std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<String, String>>>>,
         /// The newest report of the run started here, if one was.
         step: std::cell::RefCell<Option<Step>>,
-        /// What the run started here does, said the way the screen says it once it
+        /// What a rollback started here does, said the way the screen says it once it
         /// has: the tool's own line names subvolumes and says to reboot.
         goal: std::cell::RefCell<String>,
         running: std::cell::RefCell<Option<std::sync::mpsc::Receiver<Step>>>,
-        /// A modified profile, unlocked for a forced update by five PTT taps.
+        /// Modified profiles, unlocked for a forced update by five PTT taps.
         force: std::cell::Cell<bool>,
         /// PTT taps so far, and when the first of them was.
         taps: std::cell::Cell<(u8, Option<std::time::Instant>)>,
@@ -941,14 +938,6 @@ mod detail {
         fn open() -> Self {
             let listing = Self::spawn_list(false);
             let started = listing.is_some();
-            // At the same time: the list waits on the build server, this on the disk.
-            let (ctx, crx) = std::sync::mpsc::channel();
-            let checking = std::thread::Builder::new()
-                .name("profile-check".into())
-                .spawn(move || {
-                    let _ = ctx.send(profile_update::check());
-                })
-                .is_ok();
             Self {
                 channel: Channel::default(),
                 at: 0,
@@ -956,8 +945,6 @@ mod detail {
                     (!started).then(|| Err("cannot ask update-profile".to_string())),
                 ),
                 loading: std::cell::RefCell::new(listing),
-                status: std::cell::RefCell::new((!checking).then(|| "error".to_string())),
-                checking: std::cell::RefCell::new(checking.then_some(crx)),
                 step: std::cell::RefCell::new(None),
                 goal: std::cell::RefCell::new(String::new()),
                 running: std::cell::RefCell::new(None),
@@ -967,21 +954,9 @@ mod detail {
             }
         }
 
-        /// Take the listing and the status once each is read, and every report the run
-        /// has made since the last frame, keeping the newest.
+        /// Take the listing once it is read, and every report the run has made since
+        /// the last frame, keeping the newest.
         fn collect(&self) {
-            let mut checking = self.checking.borrow_mut();
-            if let Some(rx) = checking.as_ref() {
-                match rx.try_recv() {
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                    said => {
-                        let word = said.ok().and_then(Result::ok).unwrap_or_else(|| "error".into());
-                        *self.status.borrow_mut() = Some(word);
-                        *checking = None;
-                        self.dirty.set(true);
-                    }
-                }
-            }
             let mut loading = self.loading.borrow_mut();
             if let Some(rx) = loading.as_ref() {
                 match rx.try_recv() {
@@ -1038,19 +1013,16 @@ mod detail {
             self.step.borrow().clone().filter(|s| !matches!(s, Step::Working(..)))
         }
 
-        /// check-profile's word: None while it is still checking.
-        fn status(&self) -> Option<String> {
-            self.status.borrow().clone()
-        }
-
-        /// The tool will update this profile as it is.
+        /// The tool will update some profile as it is.
         fn updatable(&self) -> bool {
-            self.status().is_some_and(|w| profile_update::updatable(&w))
+            self.listing()
+                .is_some_and(|l| l.profiles.iter().any(|p| profile_update::updatable(&p.state)))
         }
 
-        /// Checked, and changed beyond what an update carries.
+        /// Some profile is changed beyond what an update carries.
         pub fn modified(&self) -> bool {
-            matches!(self.status().as_deref(), Some("packages" | "system"))
+            self.listing()
+                .is_some_and(|l| l.profiles.iter().any(|p| !profile_update::updatable(&p.state)))
         }
 
         fn listing(&self) -> Option<Listing> {
@@ -1066,12 +1038,11 @@ mod detail {
             })
         }
 
-        /// The build the screen is offering, when the profile may be updated at all.
+        /// The build the screen is offering, when some profile would move to it.
         fn chosen(&self) -> Option<Offer> {
-            if !self.updatable() && !self.forced() {
-                return None;
-            }
-            self.offers().get(self.at).cloned()
+            let listing = self.listing()?;
+            let offer = self.offers().get(self.at).cloned()?;
+            (!listing.going(&offer, self.forced()).is_empty()).then_some(offer)
         }
 
         /// The number of the build Update would start.
@@ -1156,29 +1127,27 @@ mod detail {
             }
         }
 
-        /// Update to the chosen build. Nothing happens while a run is under way.
+        /// Update every profile that goes to the chosen build. Nothing happens while a
+        /// run is under way.
         pub fn start_update(&self) -> bool {
             let Some(offer) = self.chosen().filter(|_| !self.busy()) else { return false };
-            let Some(listing) = self.listing() else { return false };
-            *self.goal.borrow_mut() = format!(
-                "{} updated from build {} to {}",
-                boot::display_name(&listing.profile),
-                listing.build,
-                offer.number
-            );
+            self.goal.borrow_mut().clear();
             let force = self.forced();
             self.spawn(move |tx| profile_update::update(offer.number, force, tx));
             true
         }
 
-        /// Put the kept build back. Asked for through a dialog first.
+        /// Put the booted profile's kept build back. Asked for through a dialog first.
         pub fn start_rollback(&self) -> bool {
-            let (Some(listing), Some(kept)) = (self.listing(), self.kept()) else { return false };
+            let (Some(booted), Some(kept)) = (self.listing().and_then(|l| l.booted), self.kept())
+            else {
+                return false;
+            };
             if self.busy() {
                 return false;
             }
             *self.goal.borrow_mut() =
-                format!("{} is back at build {kept}", boot::display_name(&listing.profile));
+                format!("{} is back at build {kept}", boot::display_name(&booted));
             self.spawn(profile_update::rollback);
             true
         }
@@ -2078,10 +2047,26 @@ mod detail {
             }
             None => return Vec::new(),
         };
-        let mut out = vec![
-            row("Profile", &format!("{} {}", boot::display_name(&listing.profile), listing.build)),
-            row("Status", p.status().as_deref().map_or("Checking", status_text)),
-        ];
+        // Profiles in two groups: those an update takes as they are, and the rest,
+        // which a forced update takes too, dropping their changes.
+        let (free, held): (Vec<_>, Vec<_>) =
+            listing.profiles.iter().partition(|p| profile_update::updatable(&p.state));
+        let mut out = Vec::new();
+        for (heading, group) in [
+            ("Updated automatically", &free),
+            (if p.forced() { "Changes dropped" } else { "Blocked" }, &held),
+        ] {
+            if group.is_empty() {
+                continue;
+            }
+            out.push(row(heading, ""));
+            for profile in group {
+                out.push(row(
+                    &format!("{} {}", boot::display_name(&profile.name), profile.build),
+                    status_text(&profile.state),
+                ));
+            }
+        }
         if let Some(kept) = listing.kept {
             out.push(row("Previous", &kept.to_string()));
         }
@@ -2092,32 +2077,34 @@ mod detail {
                 out.push(gauge(&format!("{pct}%"), i32::from(pct)));
                 out.push(text("Do not power off"));
             }
-            Some(Step::Done(_)) => {
+            Some(Step::Done(results)) => {
                 out.push(row("Done", ""));
                 out.extend(wrapped(&p.goal.borrow()));
+                for said in &results {
+                    out.extend(wrapped(said));
+                }
                 out.push(text("Reboot to use it"));
             }
             Some(Step::Failed(e)) => {
                 out.push(row("Update failed", ""));
                 out.extend(wrapped(&e));
             }
-            None if p.modified() && !p.forced() => {
-                out.extend(wrapped(
-                    "Packages or system files were changed, so this profile cannot be updated",
-                ));
-            }
+            None if free.is_empty() && !p.forced() => {}
             None => match p.offers().get(p.at) {
                 Some(offer) => {
                     out.push(chevron("Version", &offer.number.to_string()));
                     let channel = if p.forced() { offer.branch.as_str() } else { p.channel.name() };
                     out.push(row("Channel", channel));
                     out.push(row("Download", &update::megabytes(offer.bytes)));
+                    let going = listing.going(offer, p.forced()).len();
+                    let of = listing.profiles.len();
+                    out.push(text(&format!("Updates {going} of {of} profiles")));
                     if p.forced() && p.modified() {
                         out.push(text("Package and system changes are dropped"));
+                        out.push(text("These keep a copy to go back to"));
                     }
-                    out.push(text("Keeps the current build to go back to"));
                 }
-                None if p.forced() => out.push(text("no build for this profile")),
+                None if p.forced() => out.push(text("no build for these profiles")),
                 None => {
                     out.push(row("Channel", p.channel.name()));
                     let none = format!("no newer {} build", p.channel.name());
@@ -3698,15 +3685,18 @@ fn png(
                 screen.set_breadcrumb("> Network > Ethernet".into());
                 screen.set_screen(Screen::Ethernet);
             }
-            // The Update screen reads the build server in a thread. A frame of it
-            // saying so is not the frame worth looking at, so this waits for the
+            // The two update screens read the build server in a thread. A frame of
+            // one saying so is not the frame worth looking at, so this waits for the
             // answer, bounded: a server that is down still gets its frame.
-            if let detail::Live::Update(u) = &open {
-                let until = std::time::Instant::now() + Duration::from_secs(15);
-                while u.loading() && std::time::Instant::now() < until {
-                    std::thread::sleep(Duration::from_millis(50));
-                    open.take_dirty();
-                }
+            let loading = |open: &detail::Live| match open {
+                detail::Live::Update(u) => u.loading(),
+                detail::Live::Profile(p) => p.loading(),
+                _ => false,
+            };
+            let until = std::time::Instant::now() + Duration::from_secs(30);
+            while loading(&open) && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(50));
+                open.take_dirty();
             }
             let rows = open.rows(&applying);
             if name.ends_with("-qr") {
@@ -7044,14 +7034,13 @@ fn panel(
                                 } else if p.forced() {
                                     if let Some(n) = p.chosen_number() {
                                         dialog = Some(Dialog {
-                                            lines: vec![
-                                                format!("Force update to build {n}?"),
-                                                if p.modified() {
-                                                    "Package and system changes are dropped".into()
-                                                } else {
-                                                    "The current build is kept".into()
-                                                },
-                                            ],
+                                            lines: std::iter::once(format!(
+                                                "Force update to build {n}?"
+                                            ))
+                                            .chain(p.modified().then(|| {
+                                                "Package and system changes are dropped".into()
+                                            }))
+                                            .collect(),
                                             left: "Back",
                                             right: "Update",
                                             act: DialogAct::ForceUpdate,
