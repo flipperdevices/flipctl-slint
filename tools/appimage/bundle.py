@@ -267,7 +267,13 @@ def stage_ui(repo: Path, appdir: Path) -> None:
         ui / "third_party/flipctl-fonts",
         ignore=shutil.ignore_patterns("*.glyphs"),
     )
-    theme = next((repo / "target").rglob("build/flipper-ui-*/out/theme.slint"), None)
+    # The newest, since target/ keeps one per build configuration and an old one can
+    # be missing tokens added since.
+    theme = max(
+        (repo / "target").rglob("build/flipper-ui-*/out/theme.slint"),
+        key=lambda p: p.stat().st_mtime,
+        default=None,
+    )
     if theme is None:
         sys.exit("no generated theme.slint under target/; build flipper-ui first")
     shutil.copy2(theme, ui / "theme.slint")
