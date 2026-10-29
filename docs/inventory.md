@@ -436,6 +436,15 @@ Bluetooth's comes from `HCIGETDEVINFO`, since sysfs does not carry it.
 stripped by the build's `tr -dc '[:alnum:][:space:]'`. The clean form is not kept
 anywhere on the device.
 
+## Settings holds the system rows, reorganised 2026-10-29
+
+`menuItems` has Boot Menu on the main menu, and the port added App Manager beside
+Apps. Both now sit under Settings: App Manager, then the boot menu as OS
+Profiles, then Update profile and Reinstall FlipperOS (was Install FlipperOS). The
+boot menu's header reads OS Profiles when flipctl opens it; the standalone boot
+menu and its terminal keep Boot Menu. The manager's trail starts at Settings, and its
+switcher card puts Settings under it, so Close lands there.
+
 ## The idle screen's addresses, revisited 2026-10-01
 
 `drawEthCard` gives each interface a two-line card, one IPv4 and one IPv6, and the

@@ -447,6 +447,8 @@ component BootPopup inherits Rectangle {
 }
 
 export component BootBody inherits Rectangle {
+    // The header. flipctl opens this screen from Settings under another name.
+    in property <string> heading: "Boot Menu";
     in property <[BootRow]> rows;
     in property <int> selected;
     in property <int> scroll;
@@ -492,7 +494,7 @@ export component BootBody inherits Rectangle {
         // prototype whenever the remaining width is odd.
         x: Math.floor((root.width - (self.width - 1px)) / 2 / 1px) * 1px;
         y: FlipperTheme.boot_title_y;
-        text: "Boot Menu";
+        text: root.heading;
         font-size: 16px;
         font-family: "Born2bSportyV2";
         color: FlipperTheme.black;

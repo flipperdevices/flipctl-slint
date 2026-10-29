@@ -433,6 +433,7 @@ export component Root inherits Window {
     }
 
     if root.screen == Screen.boot: BootBody {
+        heading: "OS Profiles";
         rows: root.boot_rows;
         selected: root.boot_selected;
         scroll: root.boot_scroll;

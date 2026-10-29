@@ -350,7 +350,7 @@ mod demo {
                 Detail::Disk => "Disk info",
                 Detail::Battery => "Battery info",
                 Detail::Modem => "5G Modem",
-                Detail::Update => "Install FlipperOS",
+                Detail::Update => "Reinstall FlipperOS",
                 Detail::Profile => "Update profile",
                 Detail::Revisions => "Software Revisions",
             }
@@ -431,8 +431,10 @@ mod demo {
             Row { label: "System info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::System) },
             Row { label: "Battery info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Battery) },
             Row { label: "Disk info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
-            Row { label: "Install FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
+            Row { label: "App Manager", icon: 0, frames: 1, stat: Stat::None, act: Act::Manager },
+            Row { label: "OS Profiles", icon: 0, frames: 1, stat: Stat::None, act: Act::Boot },
             Row { label: "Update profile", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Profile) },
+            Row { label: "Reinstall FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
             Row { label: "Reboot", icon: 0, frames: 1, stat: Stat::None, act: Act::Reboot },
             Row { label: "Shutdown", icon: 0, frames: 1, stat: Stat::None, act: Act::Shutdown },
         ],
@@ -449,17 +451,15 @@ mod demo {
     /// label, an icon and the active-label nudge. Submenus use the status column;
     /// the main menu does not.
     ///
-    /// Files, Router, Boot Menu and the two target apps have scenes in the
-    /// prototype that this port has not taken yet. Testing goes to the prototype
-    /// itself rather than porting its scene.
+    /// Files, Router and the two target apps have scenes in the prototype that this
+    /// port has not taken yet. Testing goes to the prototype itself rather than
+    /// porting its scene. The boot menu and the app manager live under Settings.
     #[rustfmt::skip]
     pub static MAIN: Menu = Menu {
         title: "",
         rows: &[
             Row { label: "Desktop Computer", icon: 1, frames: 1, stat: Stat::None, act: Act::Unported },
-            Row { label: "Boot Menu", icon: 2, frames: 1, stat: Stat::None, act: Act::Boot },
             Row { label: "Apps", icon: 3, frames: 9, stat: Stat::None, act: Act::Apps },
-            Row { label: "App Manager", icon: 3, frames: 9, stat: Stat::None, act: Act::Manager },
             Row { label: "Files", icon: 4, frames: 10, stat: Stat::None, act: Act::Nothing },
             Row { label: "Network", icon: 5, frames: 10, stat: Stat::None, act: Act::Sub(&NETWORK) },
             Row { label: "Testing: flipctl2", icon: 6, frames: 9, stat: Stat::None, act: Act::Flipctl2 },
@@ -2424,8 +2424,11 @@ fn launch_card(
     }
     if name == MANAGER_TITLE {
         // The list itself is redrawn by the housekeeping pass, which is where every
-        // other route back into the manager leaves it too.
+        // other route back into the manager leaves it too. Settings goes under it,
+        // so Close lands where walking in would have.
         recents.open(name, kind);
+        stack.truncate(1);
+        stack.push((&demo::SETTINGS, 0, 0));
         screen.set_screen(Screen::Manager);
         return;
     }
@@ -3204,6 +3207,12 @@ fn app_trail(path: &[String]) -> String {
 #[cfg(feature = "slint")]
 const MANAGER_TITLE: &str = "App Manager";
 
+/// The trail over the manager's info page, under Settings where the manager lives.
+#[cfg(feature = "slint")]
+fn manager_info_trail(app: &flipper_ui::AppEntry) -> String {
+    format!("> {} > {MANAGER_TITLE} > {}", demo::SETTINGS.title, app.name)
+}
+
 /// The manager's list: every installed app, flat, whatever folder it sits in, with
 /// the runtime tag beside it as the Apps list shows it so the two read alike.
 #[cfg(feature = "slint")]
@@ -3290,7 +3299,14 @@ fn apply_manager(
     .map(|s| s.to_string())
     .collect();
     let tab = if install { "Install" } else { "View" };
-    apply_app_list(screen, &rows, selected, &buttons, scroll, &[MANAGER_TITLE.into(), tab.into()]);
+    apply_app_list(
+        screen,
+        &rows,
+        selected,
+        &buttons,
+        scroll,
+        &[demo::SETTINGS.title.into(), MANAGER_TITLE.into(), tab.into()],
+    );
 }
 
 /// Where an app is, as the info page says it: the user's folder it sits in, or the
@@ -3645,7 +3661,7 @@ fn png(
                 screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
                 let remove = if app.shipped() { "" } else { "Uninstall" };
                 screen.set_detail_buttons(demo::labels(&["Back", "", "", "Run", remove]));
-                screen.set_breadcrumb(format!("> {MANAGER_TITLE} > {}", app.name).as_str().into());
+                screen.set_breadcrumb(manager_info_trail(app).as_str().into());
                 screen.set_screen(Screen::ManagerInfo);
             }
         } else {
@@ -7186,9 +7202,7 @@ fn panel(
                         screen.set_detail_at_end(false);
                         let remove = if app.shipped() { "" } else { "Uninstall" };
                         screen.set_detail_buttons(demo::labels(&["Back", "", "", "Run", remove]));
-                        screen.set_breadcrumb(
-                            format!("> {MANAGER_TITLE} > {}", app.name).as_str().into(),
-                        );
+                        screen.set_breadcrumb(manager_info_trail(app).as_str().into());
                         screen.set_screen(Screen::ManagerInfo);
                         eprintln!("screen         app manager: {}", app.name);
                     }
