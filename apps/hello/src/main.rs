@@ -1,38 +1,45 @@
-use std::cell::Cell;
-use std::rc::Rc;
-use std::time::Duration;
-
 use flipctl_app::paint::Surface;
 use flipctl_app::theme::{color, metric, PANEL_H, PANEL_W};
-use flipctl_app::{Key, StatusSource};
-use slint::{ModelRc, SharedString, VecModel};
-
-slint::include_modules!();
+use flipctl_app::{gauge, pair, rule, text, App, Key, Page, Text, Ui};
 
 const SLOTS: u32 = 10;
 
-fn row(kind: i32, label: &str, value: &str, percent: i32) -> DetailRow {
-    DetailRow {
-        kind,
-        label: label.into(),
-        value: value.into(),
-        percent,
-        dim: false,
-    }
+struct Hello {
+    presses: u32,
+    canvas: bool,
 }
 
-fn rows(presses: u32) -> Vec<DetailRow> {
-    vec![
-        row(3, "Hello, Flipper One!", "", 0),
-        row(1, "", "", 0),
-        row(0, "Presses", &presses.to_string(), 0),
-        row(2, "Progress", "", (presses * 100 / SLOTS).min(100) as i32),
-    ]
+impl App for Hello {
+    fn page(&self) -> Page {
+        if self.canvas {
+            return picture(self.presses);
+        }
+        Page::detail(vec![
+            text("Hello, Flipper One!"),
+            rule(),
+            pair("Presses", self.presses.to_string()),
+            gauge("Progress", "", (self.presses * 100 / SLOTS) as i32),
+        ])
+        .fit_gauges()
+    }
+
+    fn buttons(&self) -> [&str; 5] {
+        ["Close", if self.canvas { "Rows" } else { "Draw" }, "", "", "Add"]
+    }
+
+    fn key(&mut self, key: Key, _: &mut Ui) -> bool {
+        match key {
+            Key::Ok | Key::Run => self.presses += 1,
+            Key::View => self.canvas = !self.canvas,
+            _ => return false,
+        }
+        true
+    }
 }
 
 /// The canvas page: a frame between the status bar and the soft keys, and a slot
 /// per press inside it, filled as the presses come in.
-fn picture(presses: u32) -> (slint::Image, Vec<CanvasText>) {
+fn picture(presses: u32) -> Page {
     let top = metric::STATUS_BAR_H + 2;
     let bottom = i32::from(PANEL_H) - metric::BUTTON_H - 2;
     let (x, w, h) = (2, i32::from(PANEL_W) - 4, bottom - top);
@@ -52,69 +59,67 @@ fn picture(presses: u32) -> (slint::Image, Vec<CanvasText>) {
         }
     }
 
-    let texts = vec![CanvasText {
+    let texts = vec![Text {
         x: f32::from(PANEL_W / 2),
         y: (top + 10) as f32,
-        text: format!("Presses: {presses}").into(),
-        font: 0,
-        align: 0,
-        white: false,
+        text: format!("Presses: {presses}"),
+        ..Text::default()
     }];
-    (flipctl_app::picture(&surface), texts)
+    Page::canvas(flipctl_app::picture(&surface), texts)
 }
 
-fn draw(ui: &AppWindow, canvas: bool, presses: u32) {
-    let buttons: Vec<SharedString> =
-        ["Close", if canvas { "Rows" } else { "Draw" }, "", "", "Add"].map(Into::into).into();
-    ui.set_buttons(ModelRc::new(VecModel::from(buttons)));
-    ui.set_canvas(canvas);
-    if canvas {
-        let (image, texts) = picture(presses);
-        ui.set_picture(image);
-        ui.set_texts(ModelRc::new(VecModel::from(texts)));
-    } else {
-        ui.set_rows(ModelRc::new(VecModel::from(rows(presses))));
+flipctl_app::main!(Hello { presses: 0, canvas: false });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flipctl_app::{theme, Ethernet, Status};
+
+    /// Both pages, with what a running device would put on the bar. The frames go to
+    /// target/render when `HELLO_RENDER=1` asks for them, to look at.
+    fn shot(name: &str, canvas: bool, status: Status) -> Vec<u8> {
+        let frame = flipctl_pages::shot(Hello { presses: 4, canvas }, status);
+        if std::env::var_os("HELLO_RENDER").is_some() {
+            let path = std::path::Path::new("target/render").join(format!("{name}.png"));
+            flipctl_app::render::save(&path, &frame);
+        }
+        frame
     }
-}
 
-fn main() -> Result<(), slint::PlatformError> {
-    let ui = AppWindow::new()?;
-    draw(&ui, false, 0);
-
-    let mut status = StatusSource::new(Duration::from_secs(2));
-    flipctl_app::apply_status!(&ui, PanelStatus, status.current());
-    let ticking = ui.as_weak();
-    let tick = slint::Timer::default();
-    tick.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
-        if let (Some(ui), Some(now)) = (ticking.upgrade(), status.poll()) {
-            flipctl_app::apply_status!(&ui, PanelStatus, now);
+    fn live() -> Status {
+        Status {
+            battery: 76,
+            wifi_connected: true,
+            wifi_quality: 80,
+            ethernet: Ethernet::Real,
+            ..Status::default()
         }
-    });
+    }
 
-    let (presses, canvas) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(false)));
-    let keys = ui.as_weak();
-    ui.on_keyed(move |text, down| {
-        let (Some(ui), Some(key)) = (keys.upgrade(), Key::from_slint(&text)) else {
-            return;
-        };
-        ui.set_pressed_slot(match (down, key.soft_slot()) {
-            (true, Some(slot)) => slot as i32,
-            _ => -1,
-        });
-        if !down {
-            return;
+    /// Every pixel holds a design-token value, with nothing on the bar: its icons are
+    /// sprites whose edges are greys of their own.
+    #[test]
+    fn both_pages_are_drawn_only_in_tokens() {
+        let allowed: Vec<u8> = theme::ALL_COLORS.iter().map(|(_, _, r, ..)| *r).collect();
+        for canvas in [false, true] {
+            let frame = shot(if canvas { "canvas" } else { "rows" }, canvas, Status::default());
+            let stride = usize::from(theme::PANEL_W);
+            let offenders: Vec<String> = frame
+                .iter()
+                .enumerate()
+                .filter(|(_, px)| !allowed.contains(px))
+                .take(8)
+                .map(|(i, px)| format!("({}, {}) = {px}", i % stride, i / stride))
+                .collect();
+            assert!(offenders.is_empty(), "canvas {canvas}: off-palette pixels: {offenders:?}");
         }
-        match key {
-            Key::Back | Key::Escape => {
-                let _ = slint::quit_event_loop();
-                return;
-            }
-            Key::Ok | Key::Run => presses.set(presses.get() + 1),
-            Key::View => canvas.set(!canvas.get()),
-            _ => return,
-        }
-        draw(&ui, canvas.get(), presses.get());
-    });
+    }
 
-    ui.run()
+    /// The pages as the guide shows them, with a live bar.
+    #[test]
+    fn the_guide_shots() {
+        let rows = shot("hello", false, live());
+        let canvas = shot("hello-canvas", true, live());
+        assert_ne!(rows, canvas);
+    }
 }

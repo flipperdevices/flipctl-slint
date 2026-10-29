@@ -12,6 +12,9 @@ flipctl-app = { path = "../../crates/flipctl-app" }
 slint = { version = "1.17", default-features = false, features = [
     "compat-1-2", "backend-winit-wayland", "renderer-software", "std" ] }
 
+[dev-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["render"] }
+
 [build-dependencies]
 flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
 

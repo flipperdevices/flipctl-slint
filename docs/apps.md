@@ -25,20 +25,64 @@ framework by path:
 | File | What it does |
 |---|---|
 | [`app.toml`](../apps/hello/app.toml) | The manifest: the name in the Apps list, and the program, which the bundler turns into the bundle's entry point. |
-| [`Cargo.toml`](../apps/hello/Cargo.toml) | A `[workspace]` of its own, so cargo does not take the crate for a member of the one around it; `flipctl-app` as a dependency and as a build dependency; Slint with the Wayland backend and the software renderer. |
-| [`build.rs`](../apps/hello/build.rs) | One line: compiles the page with the widgets under `@flipctl`, the window under `@app` and the tokens under `@theme`. |
-| [`ui/app.slint`](../apps/hello/ui/app.slint) | The page. It inherits `Shell`, which is the window, forwards the keys to a `keyed` callback Rust can bind, and shows one of two bodies: `DetailBody` for the rows, `CanvasBody` for the picture. Both draw the status bar and the soft keys; the page only passes properties through. |
-| [`src/main.rs`](../apps/hello/src/main.rs) | Fills the properties in and answers the keys. `rows()` builds the `DetailRow`s, `picture()` paints the canvas, `draw()` puts the current page up, and `main()` starts the status bar's 1s poll and binds the keys. |
+| [`Cargo.toml`](../apps/hello/Cargo.toml) | A `[workspace]` of its own, so cargo does not take the crate for a member of the one around it; `flipctl-app` as a dependency, as a build dependency, and with `render` for its tests; Slint with the Wayland backend and the software renderer. |
+| [`build.rs`](../apps/hello/build.rs) | One line, `flipctl_app::build::pages()`: compiles the pages the framework ships, so the app needs no `.slint` of its own. |
+| [`src/main.rs`](../apps/hello/src/main.rs) | The app. `Hello` implements `App`: `page()` says what is on screen, `buttons()` labels the soft keys, `key()` answers them, and `flipctl_app::main!` runs it. |
 
-A row's `kind` says what it is: 0 a label and a value, 1 a rule, 2 a gauge, 3 a line
-of text (the comment on `DetailRow` in `detail.slint` lists the rest). A soft key's
-label is its slot in `buttons`, left to right, and `pressed_slot` draws the one being
-held, which `Key::soft_slot` gives.
+The whole of an app is the `App` trait:
+
+    impl App for Hello {
+        fn page(&self) -> Page {
+            Page::detail(vec![
+                text("Hello, Flipper One!"),
+                rule(),
+                pair("Presses", self.presses.to_string()),
+                gauge("Progress", "", (self.presses * 100 / SLOTS) as i32),
+            ])
+            .fit_gauges()
+        }
+
+        fn buttons(&self) -> [&str; 5] {
+            ["Close", if self.canvas { "Rows" } else { "Draw" }, "", "", "Add"]
+        }
+
+        fn key(&mut self, key: Key, _: &mut Ui) -> bool {
+            match key {
+                Key::Ok | Key::Run => self.presses += 1,
+                Key::View => self.canvas = !self.canvas,
+                _ => return false,
+            }
+            true
+        }
+    }
+
+    flipctl_app::main!(Hello { presses: 0, canvas: false });
+
+The page is drawn again from `page()` and `buttons()` after every key. `key()` gets a
+key as it goes down, after a soft key has been shown pressed for the moment flipctl's
+own screens show it, and returns true for one it used; the rest keep their defaults,
+Escape closing and Up and Down scrolling. The window, the status bar's poll and the
+keys' wiring are `main!`'s.
+
+| `Page` | Shows |
+|---|---|
+| `Page::detail(rows)` | Rows made with `pair`, `rule`, `gauge`, `text`, `choice` and `heading`, `.dim()` for a secondary one. `.fit_gauges()` sizes a gauge around its own label. |
+| `Page::menu(items)` | Rows made with `item("Label")`, then `.status(..)`, `.toggle(..)` or `.range(value, first, last)` for a value Left and Right change. Up and Down move the cursor, `ui.selected()` is the row under it, and Ok flashes the row before `key()` sees it. |
+| `Page::log(title, lines)` | Lines of output, oldest first. |
+| `Page::canvas(picture, texts)` | A picture the app paints, below. |
+
+Each page keeps its own scroll and cursor, so an app can move between pages and come
+back to where it was; `.id("name")` tells two pages of one kind apart. `Ui` in
+`key()` reads and moves them (`selected`, `select`, `offset`, `scroll_to`) and
+`ui.close()` closes the app. For something that changes on its own, `every()` returns
+how often to call `tick()` and draw again, `flipctl_app::redraw()` draws from any
+thread when something the app waits on arrives, and `close()` gives back whatever the
+app took before it leaves.
 
 ![The canvas page](inventory/hello-canvas-3x.png)
 
-Drawing the picture yourself is where an app can go wrong without noticing, so
-`picture()` in `main.rs` keeps to these rules:
+Under Draw, Hello shows a `Page::canvas`. Drawing the picture yourself is where an
+app can go wrong without noticing, so `picture()` in `main.rs` keeps to these rules:
 
 - **The picture is the whole panel.** `Surface::panel()` is 256x144, and
   `CanvasBody` stretches whatever it gets to the panel, so a smaller surface comes out
@@ -52,14 +96,14 @@ Drawing the picture yourself is where an app can go wrong without noticing, so
   45-degree chamfer. Do not plot rounded corners of your own.
 - **Coordinates are whole pixels and they clip.** Drawing partly off the surface
   is safe, so a scrolling or moving shape needs no bounds checks.
-- **Text goes over the picture, not into it.** A `CanvasText` is drawn by Slint in
+- **Text goes over the picture, not into it.** A `Text` is drawn by Slint in
   the panel's fonts at 16px: `x`, `y` is where it goes, `align` -1 starts it at `x`,
   0 centres it on `x` and 1 ends it at `x`, and `font` picks the title face (0) or a
   row's (1, 2). Use `Surface::text` with `font::TITLE` only when text has to be part of
   the bitmap, and measure it with `font::tw`.
-- **A change is a new picture.** Paint a fresh surface and set `picture` again. The
-  panel has no partial update, a picture is 110KB, and a few a second cost nothing; for
-  animation, repaint from a `slint::Timer`.
+- **A change is a new picture.** `page()` paints a fresh surface each time it is
+  called. The panel has no partial update, a picture is 110KB, and a few a second cost
+  nothing; for animation, return the frame rate from `every()`.
 
 Build it once on the host to make `Cargo.lock`, which the bundler builds against with
 `--locked`, then bundle it and push it:
@@ -75,13 +119,14 @@ copy it over yourself:
 
     scp target/appimage/hello-aarch64.fap.AppImage user@<device>:Apps/
 
-Hello is then in the Apps list, with the bundler's own icon until the app has
+Hello World is then in the Apps list, with the bundler's own icon until the app has
 one. Commit `Cargo.lock` and `THIRD-PARTY-LICENSES.md` with the app.
 
-To check pixels without a device, render the page headlessly in a test, as
-`apps/radio` does: `FlipperSlintPlatform::install()` and `render_frame` give the
-256x144 grey bytes the panel would get, to save as a PNG and to test against the
-tokens.
+To check pixels without a device, render the page headlessly in a test.
+`flipctl_pages::shot(app, status)`, which `main!` gives a test built with the `render`
+feature, returns the 256x144 grey bytes the panel would get, with `status` on the bar.
+Hello's tests check every pixel against the tokens, and `HELLO_RENDER=1 cargo test`
+leaves both pages in `target/render` as PNGs to look at; the pictures above are those.
 
 ### As a script
 
@@ -92,7 +137,7 @@ runtime carries. In Python, as `hello.fap.py`:
 
     #!/usr/bin/env python3
     # /// flipctl
-    # name = "Hello"
+    # name = "Hello World"
     # status = true
     # ///
 
@@ -128,7 +173,7 @@ In JavaScript, as `hello.fap.js`:
 
     #!/usr/bin/env node
     // /// flipctl
-    // name = "Hello"
+    // name = "Hello World"
     // status = true
     // ///
 
@@ -382,23 +427,41 @@ and as a build dependency:
     [build-dependencies]
     flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
 
-`build.rs` is one line, and it puts the widget library under `@flipctl` and the
-generated theme under `@theme`:
+`build.rs` is one line. `build::pages()` compiles the pages an `App` runs on;
+`build::compile("ui/app.slint")` compiles a page of the app's own instead, with the
+widget library under `@flipctl`, the window under `@app` and the generated theme
+under `@theme`. A binary has one Slint compilation, never both: two put every widget
+in twice and give two types for one struct.
 
-    fn main() {
-        flipctl_app::build::compile("ui/app.slint");
-    }
+An app whose screen is not one of the pages (`apps/radio`'s dropdown rows, a layout
+of its own) writes the page in Slint and keeps the rest from the framework with
+`attach!`:
+
+    let ui = AppWindow::new()?;
+    let _keys = flipctl_app::attach!(&ui, PanelStatus, AppKeys, |key| match key {
+        Key::Run => { /* .. */ true }
+        _ => false,
+    });
+    ui.run()
+
+The page inherits `Shell`, binds `AppKeys.pressed_slot` and `AppKeys.arrow_pressed`
+into its bodies and exports `AppKeys` and `PanelStatus`. `attach!` polls the status
+bar, lights the chevrons, flashes a soft key before the handler sees it and closes on
+an Escape the handler leaves; keep what it returns, which is the status poll.
 
 What the crate gives the app:
 
 | Item | What |
 |---|---|
-| `Shell` | The 256x144 window, the panel's fonts, and the keyboard wired up. Inherit it and forward its `key` callback to one of your own, which is what Rust can then bind. |
-| `AppKeys` | The same keys as a global, which `Shell` also feeds, with `pressed_slot` and `arrow_pressed` beside them. A page that binds the global needs no forwarding; the script runtimes' pages work this way. |
+| `App`, `Page`, `main!` | An app on the pages, above. |
+| `attach!` | The keys and the status bar for a page of the app's own. |
+| `render` | With the feature of that name: the panel headlessly, `frame` and `save`, for tests. |
+| `Shell` | The 256x144 window, the panel's fonts, and the keyboard wired up. Inherit it for a page of your own. Its `key` callback is still there for a page that forwards keys itself, as the older examples do. |
+| `AppKeys` | The same keys as a global, which `Shell` also feeds, with `pressed_slot` and `arrow_pressed` beside them. A page that binds the global needs no forwarding; the pages, `attach!` and the script runtimes all work this way. |
 | `PanelStatus` | A Slint global the status bar reads. Set it once and every bar in the app shows it. |
 | `Key::from_slint` | The panel's buttons by name. They arrive as ordinary keys: the D-pad as arrows, Ok as Return, Back as Backspace, and the five soft buttons as z x c v b. A hosted app never sees Back: flipctl keeps it to send the app to the background. Close is the first soft key, Escape. |
 | `Key::soft_slot` | Which soft key was pressed, for the pressed state on the bar. |
-| `apply_status!` | Fills `PanelStatus` from a `StatusSource`, which reads sysfs. An app has the same access flipctl does. |
+| `apply_status!` | Fills `PanelStatus` from a `StatusSource`, which reads sysfs. `main!` and `attach!` do this; an app has the same access flipctl does. |
 | `picture` | A `paint::Surface` as an image, for an app that draws pixels. |
 | `paint`, `font`, `pixel`, `theme` | The primitives, the panel's bitmap fonts, and every token. |
 | `dropdown` | The settings row's own geometry: what to put in a `DropRow`, and where a picker's options go. |
@@ -424,8 +487,10 @@ Imported from `@flipctl`, the same components flipctl's own screens are built fr
 
 ## The examples
 
-`apps/hello` is the smallest, and the one to copy: rows and a gauge in `DetailBody`,
-and a page it paints itself in `CanvasBody`. "Hello world" above walks through it.
+`apps/hello` is the smallest, and the one to copy: an `App` with rows and a gauge, and
+a canvas it paints itself. "Hello world" above walks through it. The examples below
+predate `App` and `attach!` and wire their keys and status bar by hand; they still
+build and run as they are.
 
 `apps/sysmon` is the fuller one: four pages, three of rows in `DetailBody` and one
 that paints two graphs into a `Surface` and shows them through `CanvasBody`, with
@@ -439,8 +504,8 @@ look at.
 
 `apps/browser` is the one that owns the pad: it reads it on a thread of its own and
 drives headless Chromium over the DevTools protocol, drawing the page, the cursor and
-the minimap itself. `cargo test -- --ignored real` puts a live site through the whole path
-when a chromium is installed.
+the minimap itself. `cargo test -- --ignored real` puts a live site through the whole
+path when a chromium is installed.
 
 `apps/speedtest` is the one that carries what it runs: speedtest-go, librespeed-cli and
 cfspeedtest from their projects' releases and iperf3 from Debian, run as they ship and
