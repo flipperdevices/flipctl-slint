@@ -1431,6 +1431,7 @@ dependencies = [
  "flipper-tokens",
  "flipper-ui",
  "i-slint-common",
+ "png 0.17.16",
  "slint",
  "slint-build",
 ]

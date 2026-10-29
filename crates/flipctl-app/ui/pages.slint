@@ -9,11 +9,12 @@ import { Shell, AppKeys, PanelStatus } from "shell.slint";
 import { DetailBody, DetailRow } from "@flipctl/detail.slint";
 import { LogBody } from "@flipctl/log.slint";
 import { MenuBody, ListItem } from "@flipctl/list.slint";
+import { CanvasBody, CanvasText } from "@flipctl/canvas.slint";
 
-export { AppKeys, PanelStatus, DetailRow, ListItem }
+export { AppKeys, PanelStatus, DetailRow, ListItem, CanvasText }
 
 export component Page inherits Shell {
-    // 0 detail rows, 1 a log, 2 a menu.
+    // 0 detail rows, 1 a log, 2 a menu, 3 a picture the app paints.
     in property <int> mode;
     in property <[string]> buttons;
 
@@ -39,6 +40,10 @@ export component Page inherits Shell {
     in property <[string]> lines;
     in property <int> total;
     in property <int> log_offset;
+
+    // A picture, as CanvasBody takes it, and the text placed over it.
+    in property <image> picture;
+    in property <[CanvasText]> texts;
 
     detail := DetailBody {
         visible: root.mode == 0;
@@ -70,6 +75,14 @@ export component Page inherits Shell {
         lines: root.lines;
         total: root.total;
         offset: root.log_offset;
+        buttons: root.buttons;
+        pressed_slot: AppKeys.pressed_slot;
+    }
+
+    if root.mode == 3: CanvasBody {
+        bitmap: root.picture;
+        texts: root.texts;
+        status_bar: true;
         buttons: root.buttons;
         pressed_slot: AppKeys.pressed_slot;
     }

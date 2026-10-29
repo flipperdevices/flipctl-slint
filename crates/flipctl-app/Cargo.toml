@@ -18,11 +18,14 @@ publish = false
 build = ["flipper-tokens", "slint-build"]
 # The touchpad and the vibration motor, read straight from evdev.
 device = ["flipper-ui/device"]
+# Drawing an app headlessly as the panel would get it, for an app's own tests.
+render = ["flipper-ui/slint", "dep:png"]
 
 [dependencies]
 flipper-ui = { path = "../flipper-ui", default-features = false }
 flipper-tokens = { path = "../flipper-tokens", optional = true }
 slint-build = { version = "1.17", optional = true }
+png = { version = "0.17", optional = true }
 
 # A window on a compositor, drawn by the software renderer: the same renderer
 # flipctl uses for the panel, so a widget is the same pixels either side. No GPU
