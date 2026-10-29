@@ -9,9 +9,10 @@ it draws with flipctl's own widgets.
 ## Hello world
 
 The smallest whole app: a greeting, a counter Ok or Add raises, a gauge that fills as
-it goes, the real status bar, and Back or Close to leave. In Rust it has a second
-page, under Draw, that it paints itself. Every rule behind it is in the sections that
-follow; this is the shape to start from.
+it goes, the real status bar, and Close to leave. Back is not the app's: flipctl takes
+it and sends the app to the background, where it keeps running. In Rust it has a
+second page, under Draw, that it paints itself. Every rule behind it is in the
+sections that follow; this is the shape to start from.
 
 ![Hello on the panel](inventory/hello-3x.png)
 
@@ -30,8 +31,9 @@ framework by path:
 | [`src/main.rs`](../apps/hello/src/main.rs) | Fills the properties in and answers the keys. `rows()` builds the `DetailRow`s, `picture()` paints the canvas, `draw()` puts the current page up, and `main()` starts the status bar's 1s poll and binds the keys. |
 
 A row's `kind` says what it is: 0 a label and a value, 1 a rule, 2 a gauge, 3 a line
-of text (the comment on `DetailRow` in `detail.slint` lists the rest). A soft key's label is its slot in `buttons`, left to right,
-and `pressed_slot` draws the one being held, which `Key::soft_slot` gives.
+of text (the comment on `DetailRow` in `detail.slint` lists the rest). A soft key's
+label is its slot in `buttons`, left to right, and `pressed_slot` draws the one being
+held, which `Key::soft_slot` gives.
 
 ![The canvas page](inventory/hello-canvas-3x.png)
 
@@ -358,10 +360,14 @@ tag's base and the file's own name, never its folder, and two apps in different
 folders cannot share a file name.
 
 The App Manager checks the sha256 of what it downloads (the size is what its progress
-bar counts towards), refuses a `path`
-that would leave `~/Apps`, and makes a bundle executable but never a script. A script
-whose runtime is not installed brings the runtime along: the manager offers the entry
-that `provides` it before the download, rather than the script failing at launch.
+bar counts towards), refuses a `path` that would leave `~/Apps`, and makes a bundle
+executable but never a script. A script whose runtime is not installed brings the
+runtime along: the manager offers the entry that `provides` it before the download,
+rather than the script failing at launch.
+
+A script and its runtime go together: the `flipctl` module is in the runtime, so a
+change to its API means publishing the runtime and every script that uses it in one
+update of `apps.toml`.
 
 ## The framework
 
@@ -388,8 +394,9 @@ What the crate gives the app:
 | Item | What |
 |---|---|
 | `Shell` | The 256x144 window, the panel's fonts, and the keyboard wired up. Inherit it and forward its `key` callback to one of your own, which is what Rust can then bind. |
+| `AppKeys` | The same keys as a global, which `Shell` also feeds, with `pressed_slot` and `arrow_pressed` beside them. A page that binds the global needs no forwarding; the script runtimes' pages work this way. |
 | `PanelStatus` | A Slint global the status bar reads. Set it once and every bar in the app shows it. |
-| `Key::from_slint` | The panel's buttons by name. They arrive as ordinary keys: the D-pad as arrows, Ok as Return, Back as Backspace, and the five soft buttons as z x c v b. |
+| `Key::from_slint` | The panel's buttons by name. They arrive as ordinary keys: the D-pad as arrows, Ok as Return, Back as Backspace, and the five soft buttons as z x c v b. A hosted app never sees Back: flipctl keeps it to send the app to the background. Close is the first soft key, Escape. |
 | `Key::soft_slot` | Which soft key was pressed, for the pressed state on the bar. |
 | `apply_status!` | Fills `PanelStatus` from a `StatusSource`, which reads sysfs. An app has the same access flipctl does. |
 | `picture` | A `paint::Surface` as an image, for an app that draws pixels. |
@@ -430,9 +437,9 @@ one with tests that draw: `cargo test` renders the page headlessly and reads the
 pixels back, and `RADIO_RENDER=1 cargo test` leaves the frames in `target/render` to
 look at.
 
-`apps/browser` is the one that owns the pad: it reads it on a thread of its own and drives
-headless Chromium over the DevTools protocol, drawing the page, the cursor and the
-minimap itself. `cargo test -- --ignored real` puts a live site through the whole path
+`apps/browser` is the one that owns the pad: it reads it on a thread of its own and
+drives headless Chromium over the DevTools protocol, drawing the page, the cursor and
+the minimap itself. `cargo test -- --ignored real` puts a live site through the whole path
 when a chromium is installed.
 
 `apps/speedtest` is the one that carries what it runs: speedtest-go, librespeed-cli and
