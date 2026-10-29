@@ -5,7 +5,7 @@
 //! patching, for the same reason the panel commits a frame rather than a diff:
 //! there is no second copy of the state to fall out of step.
 //!
-//! The strings are the panel's. "Boot Menu", "Auto start in Ns...", "(no profiles)"
+//! The strings are the panel's. "Select Profile", "Auto start in Ns...", "(no profiles)"
 //! and "Booting" are what `boot.slint` writes, and a second wording for the same
 //! screen would be a second thing to keep true.
 //!
@@ -63,7 +63,7 @@ pub fn window(selected: i32, count: usize, visible: usize) -> usize {
 /// Padded to the full width because the fill inverts a prefix of it, and a short
 /// string would invert to a stub rather than a bar.
 pub fn header(view: &View, cols: usize) -> String {
-    let left = "Boot Menu";
+    let left = "Select Profile";
     let right = if view.countdown >= 0 {
         format!("Auto start in {}s...", view.remaining)
     } else if view.loading {
@@ -800,7 +800,7 @@ mod tests {
         view.countdown = 50;
         view.remaining = 3;
         let head = header(&view, 40);
-        assert!(head.starts_with("Boot Menu"), "{head}");
+        assert!(head.starts_with("Select Profile"), "{head}");
         assert!(head.contains("Auto start in 3s..."), "{head}");
         assert_eq!(head.chars().count(), 40);
         assert_eq!(fill(&view, 40), 20);
@@ -811,7 +811,7 @@ mod tests {
         let mut view = blank();
         view.countdown = -1;
         assert_eq!(fill(&view, 40), 0);
-        assert_eq!(header(&view, 12).trim_end(), "Boot Menu");
+        assert_eq!(header(&view, 16).trim_end(), "Select Profile");
     }
 
     /// Slot 0 flush left, slot 4 flush right, the middle three across what is left:
@@ -931,7 +931,7 @@ mod tests {
         let lines = screen(&view, 275, 19);
         assert_eq!(lines.len(), 19);
         assert!(lines[18].contains("F2 View"), "soft keys on the last row: {}", lines[18]);
-        assert!(lines[17].contains("Boot Menu"), "countdown above them: {}", lines[17]);
+        assert!(lines[17].contains("Select Profile"), "countdown above them: {}", lines[17]);
         assert!(lines[16].starts_with('\u{2514}'), "panes close above that: {}", lines[16]);
         for l in &lines {
             assert_eq!(l.chars().count(), 275);

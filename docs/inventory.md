@@ -442,7 +442,7 @@ anywhere on the device.
 Apps. Both now sit under Settings: App Manager, then the boot menu as OS
 Profiles, then Update FlipperOS (was Update profile) and Reinstall FlipperOS (was
 Install FlipperOS). The boot menu's header reads OS Profiles when flipctl opens it;
-the standalone boot menu and its terminal keep Boot Menu. The manager's trail starts
+the standalone boot menu and its terminal read Select Profile. The manager's trail starts
 at Settings, and its switcher card puts Settings under it, so Close lands there.
 
 **Update FlipperOS updates every profile**, through `update-profile --every`. The
