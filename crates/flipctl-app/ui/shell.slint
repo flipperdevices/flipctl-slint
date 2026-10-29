@@ -8,6 +8,18 @@ import { FlipperTheme } from "@theme";
 import { PanelStatus } from "@flipctl/statusbar.slint";
 export { PanelStatus }
 
+// The keys, and how the soft bar and the chevrons show a press, for a page that
+// binds a global instead of forwarding a callback: a component cannot export a
+// callback it inherited, a global needs no forwarding at all.
+export global AppKeys {
+    // The key's text and whether it went down, as `Shell.key`.
+    callback key(string, bool);
+    // Which soft key is shown pressed, or -1.
+    in-out property <int> pressed_slot: -1;
+    // Which chevron is shown pressed: 0 none, 1 left, 2 right.
+    in-out property <int> arrow_pressed;
+}
+
 export component Shell inherits Window {
     width: FlipperTheme.panel_w;
     height: FlipperTheme.panel_h;
@@ -41,10 +53,12 @@ export component Shell inherits Window {
 
         key-pressed(event) => {
             root.key(event.text, true);
+            AppKeys.key(event.text, true);
             EventResult.accept
         }
         key-released(event) => {
             root.key(event.text, false);
+            AppKeys.key(event.text, false);
             EventResult.accept
         }
 

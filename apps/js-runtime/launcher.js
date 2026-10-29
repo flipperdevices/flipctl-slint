@@ -14,36 +14,6 @@ const os = require("node:os");
 const path = require("node:path");
 const flipctl = require("flipctl");
 
-const PAGE = `
-import { Shell } from "@app/shell.slint";
-import { DetailBody, DetailRow } from "@flipctl/detail.slint";
-import { LogBody } from "@flipctl/log.slint";
-
-export component App inherits Shell {
-    in property <[DetailRow]> rows;
-    in property <[string]> lines;
-    in property <int> offset;
-    in property <int> total;
-    in property <bool> log;
-    in property <[string]> buttons;
-    callback keyed(string, bool);
-    key(text, down) => { root.keyed(text, down); }
-
-    if !root.log: DetailBody {
-        rows: root.rows;
-        buttons: root.buttons;
-    }
-
-    if root.log: LogBody {
-        title: "Last error";
-        lines: root.lines;
-        total: root.total;
-        offset: root.offset;
-        buttons: root.buttons;
-    }
-}
-`;
-
 // Where flipctl gives every app a writable directory of its own, and where AppRun
 // leaves what a script said as it died.
 const APPS = path.join(
@@ -51,14 +21,6 @@ const APPS = path.join(
     "flipctl/apps",
 );
 const ERROR = "last-error.log";
-
-function pair(label, value) {
-    return { kind: 0, label, value, percent: 0, dim: false };
-}
-
-function rule() {
-    return { kind: 1, label: "", value: "", percent: 0, dim: false };
-}
 
 // The scripts in the Apps folder that this runtime would be asked to run.
 //
@@ -123,11 +85,11 @@ function newestLog() {
 function facts() {
     const newest = newestLog();
     return [
-        pair("Node", process.versions.node),
-        pair("Slint", require("slint-ui/package.json").version),
-        rule(),
-        pair("Scripts", String(scripts().length)),
-        pair("Last error", newest ? newest.name : "none"),
+        flipctl.pair("Node", process.versions.node),
+        flipctl.pair("Slint", require("slint-ui/package.json").version),
+        flipctl.rule(),
+        flipctl.pair("Scripts", String(scripts().length)),
+        flipctl.pair("Last error", newest ? newest.name : "none"),
     ];
 }
 
@@ -161,51 +123,36 @@ function clearError() {
 }
 
 function main() {
-    const ui = flipctl.load(PAGE, "launcher.slint");
-    const visible = Math.trunc(flipctl.theme("log_visible_lines", 8));
-    const state = { log: false, offset: 0 };
-
-    const show = () => {
-        ui.log = state.log;
-        if (state.log) {
-            const lines = logLines();
-            state.offset = Math.max(0, Math.min(state.offset, lines.length - visible));
-            ui.lines = flipctl.rows(lines.slice(state.offset, state.offset + visible));
-            ui.total = lines.length;
-            ui.offset = state.offset;
-            // Nothing to clear, no button offering to: the slot empties instead.
-            ui.buttons = flipctl.rows(["Close", "", "", newestLog() ? "Clear" : "", "Runtime"]);
-        } else {
-            ui.rows = flipctl.rows(facts());
-            ui.buttons = flipctl.rows(["Close", "", "", "", "Last error"]);
-        }
-    };
-
-    flipctl.onKey(ui, (key, down) => {
-        if (!down) {
-            return;
-        }
-        if (key === flipctl.Key.Back || key === flipctl.Key.Escape) {
-            flipctl.quit();
-        } else if (key === flipctl.Key.Run) {
-            state.log = !state.log;
-            state.offset = 0;
-            show();
-        } else if (state.log && key === flipctl.Key.Edit) {
-            clearError();
-            state.offset = 0;
-            show();
-        } else if (state.log && key === flipctl.Key.Down) {
-            state.offset += 1;
-            show();
-        } else if (state.log && key === flipctl.Key.Up) {
-            state.offset = Math.max(0, state.offset - 1);
-            show();
-        }
+    const about = flipctl.detail({ rows: facts, buttons: ["Close", "", "", "", "Last error"] });
+    // Nothing to clear, no button offering to: the slot empties instead.
+    const log = flipctl.log({
+        lines: logLines,
+        title: "Last error",
+        buttons: () => ["Close", "", "", newestLog() ? "Clear" : "", "Runtime"],
     });
 
-    show();
-    flipctl.run(ui);
+    about.onKey((key) => {
+        if (key === flipctl.Key.Run) {
+            log.offset = 0;
+            log.show();
+            return true;
+        }
+        return false;
+    });
+    log.onKey((key) => {
+        if (key === flipctl.Key.Run) {
+            about.show();
+            return true;
+        }
+        if (key === flipctl.Key.Edit && newestLog()) {
+            clearError();
+            log.offset = 0;
+            return true;
+        }
+        return false;
+    });
+
+    about.run();
 }
 
 main();

@@ -22,38 +22,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const flipctl = require("flipctl");
 
-const PAGE = `
-import { Shell } from "@app/shell.slint";
-import { DetailBody, DetailRow } from "@flipctl/detail.slint";
-
-export component App inherits Shell {
-    in property <[DetailRow]> rows;
-    in property <[string]> buttons;
-    callback keyed(string, bool);
-    key(text, down) => { root.keyed(text, down); }
-
-    DetailBody {
-        rows: root.rows;
-        buttons: root.buttons;
-        // The gauge is sized around its own label, which is an app's to choose.
-        fit_gauges: true;
-    }
-}
-`;
-
 const CORES = os.cpus().length;
-
-function pair(label, value, dim = false) {
-    return { kind: 0, label, value, percent: 0, dim };
-}
-
-function rule() {
-    return { kind: 1, label: "", value: "", percent: 0, dim: false };
-}
-
-function gauge(label, value, percent) {
-    return { kind: 2, label, value, percent, dim: false };
-}
 
 // Days, hours, minutes, seconds, dropping the units that are zero from the left.
 // Seconds are shown only while there are no days, since a machine up for a week does
@@ -115,36 +84,20 @@ function rows() {
     const day = booted.toDateString().slice(4, 10);
 
     return [
-        pair("Uptime", spell(up)),
-        pair("Booted", `${day} ${clock}`),
-        rule(),
-        pair("Load", load.one.toFixed(2)),
-        pair("5m / 15m", `${load.five.toFixed(2)} ${load.fifteen.toFixed(2)}`, true),
-        pair("Processes", `${load.running} of ${load.total}`, true),
-        pair("Idle", `${wasIdle}%`, true),
-        gauge(`Busy of ${CORES}`, `${busy}%`, busy),
+        flipctl.pair("Uptime", spell(up)),
+        flipctl.pair("Booted", `${day} ${clock}`),
+        flipctl.rule(),
+        flipctl.pair("Load", load.one.toFixed(2)),
+        flipctl.pair("5m / 15m", `${load.five.toFixed(2)} ${load.fifteen.toFixed(2)}`, true),
+        flipctl.pair("Processes", `${load.running} of ${load.total}`, true),
+        flipctl.pair("Idle", `${wasIdle}%`, true),
+        flipctl.gauge(`Busy of ${CORES}`, `${busy}%`, busy),
     ];
 }
 
 function main() {
-    const ui = flipctl.load(PAGE, "uptime.slint");
-
-    const draw = () => {
-        ui.rows = flipctl.rows(rows());
-        ui.buttons = flipctl.rows(["Close", "", "", "", ""]);
-    };
-
-    flipctl.onKey(ui, (key, down) => {
-        if (down && (key === flipctl.Key.Back || key === flipctl.Key.Escape)) {
-            flipctl.quit();
-        }
-    });
-
-    draw();
-    // Node's timers keep running while the Slint loop does, because the binding
-    // watches libuv's backend rather than replacing the loop.
-    const beat = setInterval(draw, 1000);
-    flipctl.run(ui).then(() => clearInterval(beat));
+    // The gauge is sized around its own label, which is an app's to choose.
+    flipctl.detail({ rows, buttons: ["Close", "", "", "", ""], fitGauges: true }).run({ every: 1 });
 }
 
 main();

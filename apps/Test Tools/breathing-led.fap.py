@@ -46,7 +46,6 @@ import math
 import subprocess
 
 import flipctl
-import slint
 
 # Name on the device and what to call it on screen, in the order they sit along the
 # top of the device.
@@ -78,49 +77,6 @@ MU, SIGMA_IN, SIGMA_OUT = 0.30, 0.10, 0.17
 
 ROWS = len(LEDS) + 4
 COLOUR_ROW, PERIOD_ROW, PEAK_ROW, CURVE_ROW = ROWS - 4, ROWS - 3, ROWS - 2, ROWS - 1
-
-# Slint has no way to build one array out of another, and a Python caller cannot
-# fill ListItem's `image` field, so the rows are turned into ListItems by a literal
-# each, which fills every field it does not mention with a default. Written out here
-# rather than by hand so the count follows the row list above.
-ITEM = """            {{ label: root.rows[{i}].label, value: root.rows[{i}].value,
-              chevrons: root.rows[{i}].chevrons, at_start: root.rows[{i}].at_start,
-              at_end: root.rows[{i}].at_end }},"""
-
-PAGE = """
-import { Shell } from "@app/shell.slint";
-import { MenuBody } from "@flipctl/list.slint";
-
-export struct BreathRow {
-    label: string,
-    value: string,
-    chevrons: int,
-    at_start: bool,
-    at_end: bool,
-}
-
-export component App inherits Shell {
-    in property <[BreathRow]> rows;
-    in property <int> selected;
-    in property <int> scroll;
-    in property <int> arrow_pressed;
-    in property <[string]> buttons;
-    callback keyed(string, bool);
-    key(text, down) => { root.keyed(text, down); }
-
-    MenuBody {
-        items: [
-%s
-        ];
-        selected: root.selected;
-        scroll: root.scroll;
-        arrow_pressed: root.arrow_pressed;
-        total: %d;
-        real_frame: true;
-        buttons: root.buttons;
-    }
-}
-""" % ("\n".join(ITEM.format(i=i) for i in range(ROWS)), ROWS)
 
 # Runs as root and does nothing but write, so the app keeps one sudo for its life
 # instead of one per frame. Takes the four LEDs off their trigger, opens each
@@ -256,34 +212,20 @@ class Breath:
             # rather than raise a broken pipe on every frame from here on.
             self.writer = None
 
-    def rows(self) -> list[dict]:
+    def items(self) -> list[dict]:
         values = [
             (COLOURS[self.colour][0], self.colour, len(COLOURS)),
             (f"{PERIODS[self.period]:.1f}s", self.period, len(PERIODS)),
             (f"{PEAKS[self.peak]}%", self.peak, len(PEAKS)),
             (CURVES[self.curve], self.curve, len(CURVES)),
         ]
-        rows = [
-            {
-                "label": label,
-                "value": "ON" if self.on[i] else "OFF",
-                "chevrons": 1,
-                "at_start": False,
-                "at_end": False,
-            }
+        items = [
+            flipctl.item(label, value="ON" if self.on[i] else "OFF", chevrons=1)
             for i, (_, label) in enumerate(LEDS)
         ]
         for label, (text, at, total) in zip(("Colour", "Period", "Peak", "Curve"), values):
-            rows.append(
-                {
-                    "label": label,
-                    "value": text,
-                    "chevrons": 2,
-                    "at_start": at == 0,
-                    "at_end": at == total - 1,
-                }
-            )
-        return rows
+            items.append(flipctl.item(label, value=text, chevrons=2, first=at == 0, last=at == total - 1))
+        return items
 
     def adjust(self, row: int, by: int) -> None:
         """Left or right on one row. A toggle flips; a value steps and stops at its ends."""
@@ -300,45 +242,19 @@ class Breath:
 
 
 def main() -> None:
-    ui = flipctl.load(PAGE, "breathing-led.slint")
     breath = Breath()
-    visible = int(flipctl.theme("list_visible_rows", 5))
-    state = {"selected": 0, "scroll": 0, "arrow": 0}
+    app = flipctl.Menu(
+        items=breath.items,
+        buttons=lambda: ["Close", "All", "", "None", "Stop" if breath.running else "Start"],
+        on_close=breath.stop,
+    )
 
-    def draw() -> None:
-        # The selected row is kept in the viewport, which is the whole of the
-        # scrolling: MenuBody draws the window and its own scrollbar from these two.
-        top = min(max(state["scroll"], state["selected"] - visible + 1), state["selected"])
-        state["scroll"] = min(max(top, 0), max(0, ROWS - visible))
-        ui.rows = breath.rows()
-        ui.selected = state["selected"]
-        ui.scroll = state["scroll"]
-        ui.arrow_pressed = state["arrow"]
-        ui.buttons = ["Close", "All", "", "None", "Stop" if breath.running else "Start"]
-
-    async def leave() -> None:
-        breath.stop()
-        slint.quit_event_loop()
-
-    @flipctl.on_key(ui)
-    def _(key, down):
-        # The chevron flash is the key's own press: held while the key is down and
-        # gone when it comes up, which costs no timer.
+    @app.on_key
+    def _(key):
         if key in (flipctl.Key.LEFT, flipctl.Key.RIGHT):
-            state["arrow"] = 0 if not down else 1 if key is flipctl.Key.LEFT else 2
-        if not down:
-            draw()
-            return
-        if key in (flipctl.Key.BACK, flipctl.Key.ESCAPE):
-            asyncio.get_running_loop().create_task(leave())
-        elif key is flipctl.Key.DOWN:
-            state["selected"] = (state["selected"] + 1) % ROWS
-        elif key is flipctl.Key.UP:
-            state["selected"] = (state["selected"] - 1) % ROWS
-        elif key in (flipctl.Key.LEFT, flipctl.Key.RIGHT):
-            breath.adjust(state["selected"], 1 if key is flipctl.Key.RIGHT else -1)
-        elif key is flipctl.Key.OK and state["selected"] < len(LEDS):
-            breath.adjust(state["selected"], 1)
+            breath.adjust(app.selected, 1 if key is flipctl.Key.RIGHT else -1)
+        elif key is flipctl.Key.OK and app.selected < len(LEDS):
+            breath.adjust(app.selected, 1)
         elif key is flipctl.Key.VIEW:
             breath.on = [True] * len(LEDS)
         elif key is flipctl.Key.EDIT:
@@ -348,15 +264,16 @@ def main() -> None:
                 breath.stop()
             else:
                 breath.start()
-        draw()
+        else:
+            return False
+        return True
 
     async def tick() -> None:
         while True:
             await asyncio.sleep(FRAME)
             breath.step()
 
-    draw()
-    flipctl.run(ui, tick())
+    app.run(tick())
 
 
 if __name__ == "__main__":

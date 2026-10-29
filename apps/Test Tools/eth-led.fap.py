@@ -38,7 +38,6 @@ import struct
 import subprocess
 
 import flipctl
-import slint
 
 # The interface behind the LED called eth0, which is what 99-network-leds.rules
 # binds it to.
@@ -77,53 +76,6 @@ SETTINGS = [
     ("Floor", "floor", FLOORS, FLOORS.index(35), "%"),
 ]
 FACTS = ("Link", "Address", "LED")
-ROWS = len(FACTS) + len(SETTINGS)
-
-# Slint has no way to build one array out of another, and a Python caller cannot
-# fill ListItem's `image` field, so each row is turned into a ListItem by a literal,
-# which fills every field it does not mention with a default. Written out here
-# rather than by hand so the count follows the rows above.
-ITEM = """            {{ label: root.rows[{i}].label, status: root.rows[{i}].status,
-              value: root.rows[{i}].value, chevrons: root.rows[{i}].chevrons,
-              dim: root.rows[{i}].dim, at_start: root.rows[{i}].at_start,
-              at_end: root.rows[{i}].at_end }},"""
-
-PAGE = """
-import { Shell } from "@app/shell.slint";
-import { MenuBody } from "@flipctl/list.slint";
-
-export struct EthRow {
-    label: string,
-    status: string,
-    value: string,
-    chevrons: int,
-    dim: bool,
-    at_start: bool,
-    at_end: bool,
-}
-
-export component App inherits Shell {
-    in property <[EthRow]> rows;
-    in property <int> selected;
-    in property <int> scroll;
-    in property <int> arrow_pressed;
-    in property <[string]> buttons;
-    callback keyed(string, bool);
-    key(text, down) => { root.keyed(text, down); }
-
-    MenuBody {
-        items: [
-%s
-        ];
-        selected: root.selected;
-        scroll: root.scroll;
-        arrow_pressed: root.arrow_pressed;
-        total: %d;
-        real_frame: true;
-        buttons: root.buttons;
-    }
-}
-""" % ("\n".join(ITEM.format(i=i) for i in range(ROWS)), ROWS)
 
 # Runs as root and does nothing but write, so the app keeps one sudo for its life
 # instead of one per frame, and hands the LED back on the way out: the pipe closing
@@ -315,38 +267,25 @@ class Port:
             # rather than raise a broken pipe on every frame from here on.
             self.writer = None
 
-    def rows(self) -> list[dict]:
+    def items(self) -> list[dict]:
         facts = [
             ("Link", "up" if self.link else "down"),
             ("Address", self.ip or "-"),
             ("LED", self.lamp.says()),
         ]
-        rows = [
-            {
-                "label": label,
-                "status": status,
-                "value": "",
-                "chevrons": 0,
-                "dim": True,
-                "at_start": False,
-                "at_end": False,
-            }
-            for label, status in facts
-        ]
+        items = [flipctl.item(label, status=status, dim=True) for label, status in facts]
         for label, name, choices, _, unit in SETTINGS:
             shown = choices[self.at[name]]
-            rows.append(
-                {
-                    "label": label,
-                    "status": "",
-                    "value": f"{shown:.1f}s" if unit == "s" else f"{shown}{unit}",
-                    "chevrons": 2,
-                    "dim": False,
-                    "at_start": self.at[name] == 0,
-                    "at_end": self.at[name] == len(choices) - 1,
-                }
+            items.append(
+                flipctl.item(
+                    label,
+                    value=f"{shown:.1f}s" if unit == "s" else f"{shown}{unit}",
+                    chevrons=2,
+                    first=self.at[name] == 0,
+                    last=self.at[name] == len(choices) - 1,
+                )
             )
-        return rows
+        return items
 
     def adjust(self, row: int, by: int) -> None:
         if row < len(FACTS):
@@ -356,44 +295,18 @@ class Port:
 
 
 def main() -> None:
-    ui = flipctl.load(PAGE, "eth-led.slint")
     port = Port()
-    visible = int(flipctl.theme("list_visible_rows", 5))
+    app = flipctl.Menu(items=port.items, buttons=["Close", "", "", "", ""], on_close=port.stop)
     # Opened on the first timing rather than the first row: the three above it are
     # readings, and left and right do nothing on them.
-    state = {"selected": len(FACTS), "scroll": 0, "arrow": 0}
+    app.selected = len(FACTS)
 
-    def draw() -> None:
-        top = min(max(state["scroll"], state["selected"] - visible + 1), state["selected"])
-        state["scroll"] = min(max(top, 0), max(0, ROWS - visible))
-        ui.rows = port.rows()
-        ui.selected = state["selected"]
-        ui.scroll = state["scroll"]
-        ui.arrow_pressed = state["arrow"]
-        ui.buttons = ["Close", "", "", "", ""]
-
-    async def leave() -> None:
-        port.stop()
-        slint.quit_event_loop()
-
-    @flipctl.on_key(ui)
-    def _(key, down):
-        # The chevron flash is the key's own press: held while the key is down and
-        # gone when it comes up, which costs no timer.
+    @app.on_key
+    def _(key):
         if key in (flipctl.Key.LEFT, flipctl.Key.RIGHT):
-            state["arrow"] = 0 if not down else 1 if key is flipctl.Key.LEFT else 2
-        if not down:
-            draw()
-            return
-        if key in (flipctl.Key.BACK, flipctl.Key.ESCAPE):
-            asyncio.get_running_loop().create_task(leave())
-        elif key is flipctl.Key.DOWN:
-            state["selected"] = (state["selected"] + 1) % ROWS
-        elif key is flipctl.Key.UP:
-            state["selected"] = (state["selected"] - 1) % ROWS
-        elif key in (flipctl.Key.LEFT, flipctl.Key.RIGHT):
-            port.adjust(state["selected"], 1 if key is flipctl.Key.RIGHT else -1)
-        draw()
+            port.adjust(app.selected, 1 if key is flipctl.Key.RIGHT else -1)
+            return True
+        return False
 
     async def tick() -> None:
         """The light every frame, the port five times a second, the screen once.
@@ -412,12 +325,11 @@ def main() -> None:
                 port.look()
             port.step()
             if counted % 50 == 0 or port.lamp.says() != said:
-                draw()
+                app.redraw()
 
     port.look()
     port.start()
-    draw()
-    flipctl.run(ui, tick())
+    app.run(tick())
 
 
 if __name__ == "__main__":

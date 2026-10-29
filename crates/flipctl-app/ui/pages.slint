@@ -1,0 +1,76 @@
+// The pages a script app is made of, one window holding them all.
+//
+// A script hands over rows and buttons and nothing else: the window, the keys and
+// every property each body takes are declared here once rather than in every app,
+// which is what a page written in the app itself used to repeat. One component with
+// a body per kind, chosen by `mode`, rather than a component per kind, because an
+// app that moves between a list and a log is one window on the panel.
+import { Shell, AppKeys, PanelStatus } from "shell.slint";
+import { DetailBody, DetailRow } from "@flipctl/detail.slint";
+import { LogBody } from "@flipctl/log.slint";
+import { MenuBody, ListItem } from "@flipctl/list.slint";
+
+export { AppKeys, PanelStatus, DetailRow, ListItem }
+
+export component Page inherits Shell {
+    // 0 detail rows, 1 a log, 2 a menu.
+    in property <int> mode;
+    in property <[string]> buttons;
+
+    // A menu: its items, the one under the cursor, the first shown, and whether the
+    // one under the cursor is showing a press of OK.
+    in property <[ListItem]> items;
+    in property <int> selected;
+    in property <int> scroll;
+    in property <bool> pressed;
+
+    // Detail rows, as DetailBody takes them.
+    in property <[DetailRow]> rows;
+    in property <[string]> asides;
+    in property <int> offset;
+    in property <bool> fit_gauges;
+    in property <bool> at_start;
+    in property <bool> at_end;
+    out property <int> visible_rows: detail.visible_rows;
+
+    // A log, as LogBody takes it: the lines shown, how many there are in all, and
+    // the first one shown.
+    in property <string> log_title;
+    in property <[string]> lines;
+    in property <int> total;
+    in property <int> log_offset;
+
+    detail := DetailBody {
+        visible: root.mode == 0;
+        rows: root.rows;
+        asides: root.asides;
+        offset: root.offset;
+        buttons: root.buttons;
+        fit_gauges: root.fit_gauges;
+        at_start: root.at_start;
+        at_end: root.at_end;
+        pressed_slot: AppKeys.pressed_slot;
+        arrow_pressed: AppKeys.arrow_pressed;
+    }
+
+    if root.mode == 2: MenuBody {
+        items: root.items;
+        total: root.items.length;
+        selected: root.selected;
+        scroll: root.scroll;
+        pressed: root.pressed;
+        real_frame: true;
+        buttons: root.buttons;
+        pressed_slot: AppKeys.pressed_slot;
+        arrow_pressed: AppKeys.arrow_pressed;
+    }
+
+    if root.mode == 1: LogBody {
+        title: root.log_title;
+        lines: root.lines;
+        total: root.total;
+        offset: root.log_offset;
+        buttons: root.buttons;
+        pressed_slot: AppKeys.pressed_slot;
+    }
+}

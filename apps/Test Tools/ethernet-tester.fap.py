@@ -53,7 +53,6 @@ import threading
 import time
 
 import flipctl
-import slint
 
 # The kernel names the ports end0 and end1; the panel calls them what the LEDs do.
 PORTS = ("end0", "end1")
@@ -73,31 +72,6 @@ AT_PORT = 0.1
 STATUS_BITS = ((0x01, "busy"), (0x10, "short"), (0x02, "cross"), (0x08, "open"), (0x20, "OK"))
 FAULT_BITS = 0x1A
 KNOWN_BITS = 0x7B
-
-PAGE = """
-import { Shell } from "@app/shell.slint";
-import { DetailBody, DetailRow } from "@flipctl/detail.slint";
-
-export component App inherits Shell {
-    in property <[DetailRow]> rows;
-    in property <int> offset;
-    in property <[string]> buttons;
-    in property <int> arrow_pressed;
-    in property <bool> at_start;
-    in property <bool> at_end;
-    callback keyed(string, bool);
-    key(text, down) => { root.keyed(text, down); }
-
-    DetailBody {
-        rows: root.rows;
-        offset: root.offset;
-        buttons: root.buttons;
-        arrow_pressed: root.arrow_pressed;
-        at_start: root.at_start;
-        at_end: root.at_end;
-    }
-}
-"""
 
 # Runs as root, once per test, and prints one JSON line per result. It is fed to
 # python on stdin rather than as an argument, which sudo would log whole on every
@@ -616,82 +590,57 @@ class Tester:
                 self.helper.kill()
 
     def rows(self) -> list[dict]:
-        def row(label, value, dim=False, kind=0):
-            return {"kind": kind, "label": label, "value": value, "percent": 0, "dim": dim}
-
-        divider = row("", "", kind=1)
         both = len(self.ports) == 2
-        rows = [row("Port", CHOICES[self.choice], kind=4)]
+        rows = [flipctl.choice("Port", CHOICES[self.choice],
+                               first=self.choice == 0, last=self.choice == len(CHOICES) - 1)]
         for port in self.ports:
-            rows.append(row(f"Link {NAMES[port]}" if both else "Link", link(port)))
+            rows.append(flipctl.pair(f"Link {NAMES[port]}" if both else "Link", link(port)))
         state = self.state
         if self.running and state == "waiting for link":
             state += f" {int(time.monotonic() - self.since)}s"
-        rows.append(row("Test", state))
-        rows.append(divider)
-        for i, pair in enumerate(PAIRS):
+        rows.append(flipctl.pair("Test", state))
+        rows.append(flipctl.rule())
+        for i, name in enumerate(PAIRS):
             found = [self.results.get(p, ["-"] * 4)[i] for p in self.ports]
-            rows.append(row(f"Pair {pair}", " / ".join(found)))
+            rows.append(flipctl.pair(f"Pair {name}", " / ".join(found)))
         if both:
-            rows.append(divider)
+            rows.append(flipctl.rule())
             for tx, rx in (PORTS, PORTS[::-1]):
                 got = self.traffic.get(tx)
                 if got is None:
-                    rows.append(row(f"{NAMES[tx]} > {NAMES[rx]}", "-"))
+                    rows.append(flipctl.pair(f"{NAMES[tx]} > {NAMES[rx]}", "-"))
                     continue
                 # Frames the socket dropped because this app read too slowly arrived
                 # fine, so they are not the cable's loss.
                 missed = got.get("missed", 0)
                 lost = max(got["sent"] - got["received"] - got["corrupt"] - missed, 0)
-                rows.append(row(f"{NAMES[tx]} > {NAMES[rx]}",
-                                f"received {got['received']}/{got['sent']}"))
-                rows.append(row("Lost/corrupt", f"{lost}/{got['corrupt']}", dim=True))
+                rows.append(flipctl.pair(f"{NAMES[tx]} > {NAMES[rx]}",
+                                        f"received {got['received']}/{got['sent']}"))
+                rows.append(flipctl.pair("Lost/corrupt", f"{lost}/{got['corrupt']}", dim=True))
                 if missed:
-                    rows.append(row("Missed by app", str(missed), dim=True))
-                rows.append(row("CRC errors", str(got["crc"]), dim=True))
-                rows.append(row("Receive rate", f"{got['mbit']}Mbps", dim=True))
+                    rows.append(flipctl.pair("Missed by app", str(missed), dim=True))
+                rows.append(flipctl.pair("CRC errors", str(got["crc"]), dim=True))
+                rows.append(flipctl.pair("Receive rate", f"{got['mbit']}Mbps", dim=True))
         return rows
 
 
 def main() -> None:
-    ui = flipctl.load(PAGE, "ethernet-tester.slint")
     tester = Tester()
-    visible = int(flipctl.theme("detail_visible_rows_bare") or flipctl.theme("detail_visible_rows", 8))
-    state = {"offset": 0, "arrow": 0}
+    app = flipctl.Detail(
+        rows=tester.rows,
+        buttons=lambda: ["Close", "", "", "", "" if tester.running else "Run"],
+        on_close=tester.stop,
+    )
 
-    def draw() -> None:
-        rows = tester.rows()
-        state["offset"] = min(max(state["offset"], 0), max(0, len(rows) - visible))
-        ui.rows = rows
-        ui.offset = state["offset"]
-        ui.arrow_pressed = state["arrow"]
-        ui.at_start = tester.choice == 0
-        ui.at_end = tester.choice == len(CHOICES) - 1
-        run = "" if tester.running else "Run"
-        ui.buttons = ["Close", "", "", "", run]
-
-    async def leave() -> None:
-        tester.stop()
-        slint.quit_event_loop()
-
-    @flipctl.on_key(ui)
-    def _(key, down):
-        if key in (flipctl.Key.LEFT, flipctl.Key.RIGHT):
-            state["arrow"] = 0 if not down else 1 if key is flipctl.Key.LEFT else 2
-        if not down:
-            draw()
-            return
-        if key in (flipctl.Key.BACK, flipctl.Key.ESCAPE):
-            asyncio.get_running_loop().create_task(leave())
-        elif key is flipctl.Key.RUN:
+    @app.on_key
+    def _(key):
+        if key is flipctl.Key.RUN:
             tester.run()
         elif key in (flipctl.Key.LEFT, flipctl.Key.RIGHT):
             tester.choose(1 if key is flipctl.Key.RIGHT else -1)
-        elif key is flipctl.Key.DOWN:
-            state["offset"] += 1
-        elif key is flipctl.Key.UP:
-            state["offset"] -= 1
-        draw()
+        else:
+            return False
+        return True
 
     async def tick() -> None:
         """Results as they arrive, and the links once a second."""
@@ -700,10 +649,9 @@ def main() -> None:
             await asyncio.sleep(0.1)
             counted += 1
             if tester.take() or counted % 10 == 0:
-                draw()
+                app.redraw()
 
-    draw()
-    flipctl.run(ui, tick())
+    app.run(tick())
 
 
 if __name__ == "__main__":

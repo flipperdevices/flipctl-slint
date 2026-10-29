@@ -16,36 +16,6 @@ import sys
 import flipctl
 import slint
 
-PAGE = """
-import { Shell } from "@app/shell.slint";
-import { DetailBody, DetailRow } from "@flipctl/detail.slint";
-import { LogBody } from "@flipctl/log.slint";
-
-export component App inherits Shell {
-    in property <[DetailRow]> rows;
-    in property <[string]> lines;
-    in property <int> offset;
-    in property <int> total;
-    in property <bool> log;
-    in property <[string]> buttons;
-    callback keyed(string, bool);
-    key(text, down) => { root.keyed(text, down); }
-
-    if !root.log: DetailBody {
-        rows: root.rows;
-        buttons: root.buttons;
-    }
-
-    if root.log: LogBody {
-        title: "Last error";
-        lines: root.lines;
-        total: root.total;
-        offset: root.offset;
-        buttons: root.buttons;
-    }
-}
-"""
-
 # Where flipctl gives every app a writable directory of its own, and where AppRun
 # leaves what a script said as it died.
 APPS = pathlib.Path(
@@ -62,14 +32,6 @@ def first_line(*command: str) -> str:
         return "-"
     said = (out.stdout or out.stderr).strip().splitlines()
     return said[0] if said else "-"
-
-
-def pair(label: str, value: str) -> dict:
-    return {"kind": 0, "label": label, "value": value, "percent": 0, "dim": False}
-
-
-def rule() -> dict:
-    return {"kind": 1, "label": "", "value": "", "percent": 0, "dim": False}
 
 
 def scripts() -> list[pathlib.Path]:
@@ -125,13 +87,13 @@ def facts(here: pathlib.Path) -> list[dict]:
     cache = pathlib.Path(os.environ.get("UV_CACHE_DIR", pathlib.Path.home() / ".cache/uv"))
     who, _ = last_error()
     return [
-        pair("Python", version),
-        pair("uv", first_line(str(uv), "--version").replace("uv ", "") if uv.exists() else "-"),
-        pair("Slint", getattr(slint, "__version__", "1.17")),
-        rule(),
-        pair("Scripts", str(len(scripts()))),
-        pair("Packages", str(len(list(cache.glob("archive-v*/*")))) if cache.is_dir() else "0"),
-        pair("Last error", who or "none"),
+        flipctl.pair("Python", version),
+        flipctl.pair("uv", first_line(str(uv), "--version").replace("uv ", "") if uv.exists() else "-"),
+        flipctl.pair("Slint", getattr(slint, "__version__", "1.17")),
+        flipctl.rule(),
+        flipctl.pair("Scripts", str(len(scripts()))),
+        flipctl.pair("Packages", str(len(list(cache.glob("archive-v*/*")))) if cache.is_dir() else "0"),
+        flipctl.pair("Last error", who or "none"),
     ]
 
 
@@ -150,51 +112,34 @@ def log_lines() -> list[str]:
 
 def main() -> None:
     here = pathlib.Path(os.environ.get("APPDIR", pathlib.Path(__file__).parent.parent.parent))
-    ui = flipctl.load(PAGE, "launcher.slint")
+    about = flipctl.Detail(rows=lambda: facts(here), buttons=["Close", "", "", "", "Last error"])
+    # Nothing to clear, no button offering to: the slot empties instead.
+    log = flipctl.Log(
+        lines=log_lines,
+        title="Last error",
+        buttons=lambda: ["Close", "", "", "Clear" if newest_log() else "", "Runtime"],
+    )
 
-    state = {"log": False, "offset": 0}
+    @about.on_key
+    def _(key):
+        if key is flipctl.Key.RUN:
+            log.offset = 0
+            log.show()
+            return True
+        return False
 
-    visible = int(flipctl.theme("log_visible_lines", 8))
-
-    def show() -> None:
-        ui.log = state["log"]
-        if state["log"]:
-            # The body draws from the top of what it is given, so the window is cut
-            # here and `total` is what the scrollbar measures itself against.
-            lines = log_lines()
-            state["offset"] = max(0, min(state["offset"], len(lines) - visible))
-            ui.lines = lines[state["offset"]:state["offset"] + visible]
-            ui.total = len(lines)
-            ui.offset = state["offset"]
-            # Nothing to clear, no button offering to: the slot empties instead.
-            ui.buttons = ["Close", "", "", "Clear" if newest_log() else "", "Runtime"]
-        else:
-            ui.rows = facts(here)
-            ui.buttons = ["Close", "", "", "", "Last error"]
-
-    @flipctl.on_key(ui)
-    def _(key, down):
-        if not down:
-            return
-        if key in (flipctl.Key.BACK, flipctl.Key.ESCAPE):
-            slint.quit_event_loop()
-        elif key is flipctl.Key.RUN:
-            state["log"] = not state["log"]
-            state["offset"] = 0
-            show()
-        elif state["log"] and key is flipctl.Key.EDIT:
+    @log.on_key
+    def _(key):
+        if key is flipctl.Key.RUN:
+            about.show()
+            return True
+        if key is flipctl.Key.EDIT and newest_log():
             clear_error()
-            state["offset"] = 0
-            show()
-        elif state["log"] and key is flipctl.Key.DOWN:
-            state["offset"] += 1
-            show()
-        elif state["log"] and key is flipctl.Key.UP:
-            state["offset"] = max(0, state["offset"] - 1)
-            show()
+            log.offset = 0
+            return True
+        return False
 
-    show()
-    flipctl.run(ui)
+    about.run()
 
 
 if __name__ == "__main__":

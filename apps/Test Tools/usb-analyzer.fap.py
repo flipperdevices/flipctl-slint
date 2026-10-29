@@ -53,7 +53,6 @@ import uuid
 from collections import deque
 
 import flipctl
-import slint
 
 DEVICES = pathlib.Path("/sys/bus/usb/devices")
 TYPEC = pathlib.Path("/sys/class/typec")
@@ -63,31 +62,6 @@ GADGETS = pathlib.Path("/sys/kernel/config/usb_gadget")
 REGULATORS = pathlib.Path("/sys/class/regulator")
 DEVICE_TREE = pathlib.Path("/sys/firmware/devicetree/base")
 USB_IDS = ("/usr/share/misc/usb.ids", "/usr/share/hwdata/usb.ids", "/var/lib/usbutils/usb.ids")
-
-PAGE = """
-import { Shell } from "@app/shell.slint";
-import { DetailBody, DetailRow } from "@flipctl/detail.slint";
-
-export component App inherits Shell {
-    in property <[DetailRow]> rows;
-    in property <int> offset;
-    in property <[string]> buttons;
-    in property <int> arrow_pressed;
-    in property <bool> at_start;
-    in property <bool> at_end;
-    callback keyed(string, bool);
-    key(text, down) => { root.keyed(text, down); }
-
-    DetailBody {
-        rows: root.rows;
-        offset: root.offset;
-        buttons: root.buttons;
-        arrow_pressed: root.arrow_pressed;
-        at_start: root.at_start;
-        at_end: root.at_end;
-    }
-}
-"""
 
 # Advance widths of Busy9px, the face detail rows are drawn in, ASCII 32..126. From
 # crates/flipper-ui/src/font/row.rs. `flipctl.text_width` measures the title face,
@@ -236,19 +210,15 @@ def uptime() -> float:
     return number(read("/proc/uptime"))
 
 
-def row(label, value="", kind=0, dim=False) -> dict:
+def row(label, value="", dim=False) -> dict:
     """One detail row, the value cut to the room its label leaves."""
     label = clean(str(label))
-    value = clean(str(value))
-    if kind == 0:
-        value = fit(value, WIDTH - width(label) - GAP)
-    elif kind == 3:
-        label = fit(label, WIDTH)
-    return {"kind": kind, "label": label, "value": value, "percent": 0, "dim": dim}
+    return flipctl.pair(label, fit(clean(str(value)), WIDTH - width(label) - GAP), dim)
 
 
-def divider() -> dict:
-    return row("", kind=1)
+def line(text, dim=False) -> dict:
+    """A line across the whole row, cut to fit it."""
+    return flipctl.text(fit(clean(str(text)), WIDTH), dim)
 
 
 class Ids:
@@ -807,7 +777,9 @@ class Analyzer:
 
     def rows(self) -> list[dict]:
         entry = self.entry
-        rows = [row("Port", entry.name if entry else "none", kind=4)]
+        last = max(0, len(self.entries) - 1)
+        rows = [flipctl.choice("Port", entry.name if entry else "none",
+                               first=self.choice == 0, last=self.choice >= last)]
         if entry is None:
             return rows + [row("Device", "no USB found")]
         said = self.messages(entry)
@@ -856,7 +828,7 @@ class Analyzer:
 
     @staticmethod
     def heading(title: str) -> list[dict]:
-        return [divider(), row(title, kind=3)]
+        return [flipctl.rule(), line(title)]
 
     @staticmethod
     def socket_max(entry: Entry) -> float:
@@ -1124,56 +1096,47 @@ class Analyzer:
                         rx, tx = read(stats / "rx_errors"), read(stats / "tx_errors")
                         rows.append(row("Net errors", f"rx {rx or '-'} tx {tx or '-'} {name}"))
         for at, _, driver, token, text in errors[-MESSAGES_SHOWN:][::-1]:
-            for line in wrap(f"{span(now - at)} ago, {token}: {text}"):
-                rows.append(row(line, kind=3, dim=True))
+            for wrapped in wrap(f"{span(now - at)} ago, {token}: {text}"):
+                rows.append(line(wrapped, dim=True))
         return rows
 
 
 def main() -> None:
-    ui = flipctl.load(PAGE, "usb-analyzer.slint")
     analyzer = Analyzer()
     analyzer.start()
-    state = {"offset": 0, "arrow": 0, "rows": [], "jump": None}
+    shown: list[dict] = []
 
-    def sections(rows: list[dict]) -> list[tuple[int, str]]:
-        return [(i - 1, SECTIONS[r["label"]]) for i, r in enumerate(rows)
-                if r["kind"] == 3 and r["label"] in SECTIONS]
-
-    def draw() -> None:
+    def rows() -> list[dict]:
         if analyzer.selected_new:
             analyzer.selected_new = False
-            state["offset"] = 0
-        rows = analyzer.rows()
-        last = max(0, len(rows) - VISIBLE)
-        state["offset"] = min(max(state["offset"], 0), last)
-        ahead = [(min(i, last), word) for i, word in sections(rows) if min(i, last) > state["offset"]]
-        state["jump"] = ahead[0][0] if ahead else 0
-        ui.rows = rows
-        ui.offset = state["offset"]
-        ui.arrow_pressed = state["arrow"]
-        ui.at_start = analyzer.choice == 0
-        ui.at_end = analyzer.choice >= len(analyzer.entries) - 1
-        ui.buttons = ["Close", "", "", "", ahead[0][1] if ahead else "Top"]
+            app.offset = 0
+        shown[:] = analyzer.rows()
+        return shown
 
-    @flipctl.on_key(ui)
-    def _(key, down):
-        if key in (flipctl.Key.LEFT, flipctl.Key.RIGHT):
-            state["arrow"] = 0 if not down else 1 if key is flipctl.Key.LEFT else 2
-        if not down:
-            draw()
-            return
-        if key in (flipctl.Key.BACK, flipctl.Key.ESCAPE):
-            slint.quit_event_loop()
-        elif key is flipctl.Key.RUN:
-            state["offset"] = state["jump"] or 0
+    def ahead() -> list[tuple[int, str]]:
+        """The sections below the top row, each with the offset that shows it."""
+        last = max(0, len(shown) - VISIBLE)
+        found = [(min(i - 1, last), SECTIONS[r["label"]]) for i, r in enumerate(shown)
+                 if r["kind"] == 3 and r["label"] in SECTIONS]
+        return [(at, word) for at, word in found if at > app.offset]
+
+    # Run jumps to the next section down, named on its key, and from the last one
+    # back to the top.
+    app = flipctl.Detail(
+        rows=rows,
+        buttons=lambda: ["Close", "", "", "", next((w for _, w in ahead()), "Top")],
+    )
+
+    @app.on_key
+    def _(key):
+        if key is flipctl.Key.RUN:
+            app.offset = next((at for at, _ in ahead()), 0)
         elif key in (flipctl.Key.LEFT, flipctl.Key.RIGHT):
             analyzer.choose(1 if key is flipctl.Key.RIGHT else -1)
-            state["offset"] = 0
-        elif key is flipctl.Key.DOWN:
-            state["offset"] += 1
-        elif key is flipctl.Key.UP:
-            state["offset"] -= 1
-        draw()
+            app.offset = 0
+        else:
+            return False
+        return True
 
     async def tick() -> None:
         """A rescan the moment the kernel says something changed, the counters once a
@@ -1193,10 +1156,9 @@ def main() -> None:
                 news = True
             if news:
                 seen = (analyzer.log.version, analyzer.version)
-                draw()
+                app.redraw()
 
-    draw()
-    flipctl.run(ui, tick())
+    app.run(tick())
 
 
 if __name__ == "__main__":

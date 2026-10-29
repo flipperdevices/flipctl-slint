@@ -19,11 +19,9 @@ The names are shortened to what the panel's left column holds, so the whole set
 fits on one screen with nothing to scroll.
 """
 
-import asyncio
 import pathlib
 
 import flipctl
-import slint
 
 THERMAL = pathlib.Path("/sys/class/thermal")
 HWMON = pathlib.Path("/sys/class/hwmon")
@@ -41,32 +39,6 @@ NAMES = {
     "bq28z610-0": "Battery",
     "mt7921_phy0": "Wi-Fi",
 }
-
-PAGE = """
-import { Shell } from "@app/shell.slint";
-import { DetailBody, DetailRow } from "@flipctl/detail.slint";
-
-export { DetailRow }
-
-export component App inherits Shell {
-    in property <[DetailRow]> rows;
-    in property <int> offset;
-    in property <[string]> buttons;
-    callback keyed(string, bool);
-    key(text, down) => { root.keyed(text, down); }
-
-    DetailBody {
-        rows: root.rows;
-        breadcrumb: "Thermals";
-        offset: root.offset;
-        buttons: root.buttons;
-    }
-}
-"""
-
-# Rows the body shows at once. The sensors fit inside this today; the offset is
-# kept so a kernel that adds one does not hide it.
-VISIBLE = int(flipctl.theme("detail_visible_rows_bare") or flipctl.theme("detail_visible_rows", 8))
 
 
 def read(path: pathlib.Path) -> str:
@@ -151,54 +123,14 @@ def sensors() -> list[tuple[str, int]]:
     return found + hwmon_only(known)
 
 
-def rows_for(readings: list[tuple[str, int]]) -> list[dict]:
-    """Rows for the body, every field of the struct spelled out.
-
-    A struct handed over from Python has to carry all of its fields: a row that
-    leaves `dim` out reaches the body as nothing rather than false, and the
-    conditional that reads it takes the interpreter down with it.
-    """
-    return [
-        {"kind": 0, "label": label(name), "value": celsius(value), "percent": 0, "dim": False}
-        for name, value in readings
-    ]
+def rows() -> list[dict]:
+    return [flipctl.pair(label(name), celsius(value)) for name, value in sensors()]
 
 
 def main() -> None:
-    ui = flipctl.load(PAGE, "thermals.slint")
-    state = {"offset": 0, "rows": []}
-
-    def draw() -> None:
-        state["rows"] = rows_for(sensors())
-        # A sensor can appear when a driver loads, so the offset is clamped to
-        # what is there now rather than to what was there when a key was pressed.
-        limit = max(0, len(state["rows"]) - VISIBLE)
-        state["offset"] = min(state["offset"], limit)
-        ui.rows = state["rows"]
-        ui.offset = state["offset"]
-        ui.buttons = ["Close", "", "", "", ""]
-
-    @flipctl.on_key(ui)
-    def _(key, down):
-        if not down:
-            return
-        if key in (flipctl.Key.BACK, flipctl.Key.ESCAPE):
-            slint.quit_event_loop()
-            return
-        limit = max(0, len(state["rows"]) - VISIBLE)
-        if key is flipctl.Key.DOWN:
-            state["offset"] = min(state["offset"] + 1, limit)
-        elif key is flipctl.Key.UP:
-            state["offset"] = max(state["offset"] - 1, 0)
-        draw()
-
-    async def tick() -> None:
-        while True:
-            await asyncio.sleep(1)
-            draw()
-
-    draw()
-    flipctl.run(ui, tick())
+    # A sensor can appear when a driver loads, so the rows are read again each second
+    # rather than once.
+    flipctl.Detail(rows=rows, buttons=["Close", "", "", "", ""]).run(every=1)
 
 
 if __name__ == "__main__":

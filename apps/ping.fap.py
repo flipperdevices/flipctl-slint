@@ -19,7 +19,7 @@ is awaited rather than polled: the reply wakes the app when it lands. A timer lo
 every 100ms instead would report every round trip as 100ms, which on a link that
 answers in half of one is not a measurement.
 
-Left, Right or Host change what is being pinged, Run starts and stops it, Back leaves.
+Left, Right or Host change what is being pinged, Run starts and stops it, Close leaves.
 """
 
 import asyncio
@@ -28,26 +28,6 @@ import struct
 import time
 
 import flipctl
-import slint
-
-PAGE = """
-import { Shell } from "@app/shell.slint";
-import { DetailBody, DetailRow } from "@flipctl/detail.slint";
-
-export component App inherits Shell {
-    in property <[DetailRow]> rows;
-    in property <[string]> buttons;
-    callback keyed(string, bool);
-    key(text, down) => { root.keyed(text, down); }
-
-    DetailBody {
-        rows: root.rows;
-        buttons: root.buttons;
-        // The gauge is sized around its own label, which is an app's to choose.
-        fit_gauges: true;
-    }
-}
-"""
 
 ECHO_REQUEST = 8
 ECHO_REPLY = 0
@@ -192,50 +172,45 @@ class Pinger:
         loss = (100 * self.lost // self.sent) if self.sent else 0
         average = (self.total / got) if got else None
 
-        def pair(label, value, dim=False):
-            return {"kind": 0, "label": label, "value": value, "percent": 0, "dim": dim}
-
         def ms(value):
             return "-" if value is None else f"{value:.1f} ms"
 
         return [
-            pair("Host", self.host),
-            pair("Last", ms(self.last)),
-            pair("Average", ms(average)),
-            {"kind": 1, "label": "", "value": "", "percent": 0, "dim": False},
-            pair("Best", ms(self.best), dim=True),
-            pair("Worst", ms(self.worst), dim=True),
-            pair("Sent", str(self.sent), dim=True),
+            flipctl.pair("Host", self.host),
+            flipctl.pair("Last", ms(self.last)),
+            flipctl.pair("Average", ms(average)),
+            flipctl.rule(),
+            flipctl.pair("Best", ms(self.best), dim=True),
+            flipctl.pair("Worst", ms(self.worst), dim=True),
+            flipctl.pair("Sent", str(self.sent), dim=True),
             # Loss is what says whether a link is usable when the times alone look
             # healthy, so it is the one drawn as a bar.
-            {"kind": 2, "label": "Loss", "value": f"{loss}%", "percent": loss, "dim": False},
+            flipctl.gauge("Loss", f"{loss}%", loss),
         ]
 
 
 def main() -> None:
-    ui = flipctl.load(PAGE, "ping.slint")
     pinger = Pinger()
+    app = flipctl.Detail(
+        rows=pinger.rows,
+        buttons=lambda: ["Close", "", "", "Host", "Stop" if pinger.running else "Start"],
+        # The gauge is sized around its own label, which is an app's to choose.
+        fit_gauges=True,
+    )
 
-    def draw() -> None:
-        ui.rows = pinger.rows()
-        ui.buttons = ["Close", "", "", "Host", "Stop" if pinger.running else "Start"]
-
-    @flipctl.on_key(ui)
-    def _(key, down):
-        if not down:
-            return
-        if key in (flipctl.Key.BACK, flipctl.Key.ESCAPE):
-            slint.quit_event_loop()
-        elif key is flipctl.Key.RUN:
+    @app.on_key
+    def _(key):
+        if key is flipctl.Key.RUN:
             pinger.toggle()
         elif key in (flipctl.Key.EDIT, flipctl.Key.RIGHT):
             pinger.choose(1)
         elif key is flipctl.Key.LEFT:
             pinger.choose(-1)
-        draw()
+        else:
+            return False
+        return True
 
-    draw()
-    flipctl.run(ui, pinger.run(draw))
+    app.run(pinger.run(app.redraw))
 
 
 if __name__ == "__main__":

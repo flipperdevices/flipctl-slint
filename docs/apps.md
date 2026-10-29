@@ -83,9 +83,10 @@ tokens.
 
 ### As a script
 
-The same app as one file, with nothing to build, and with the rows page only. The page
-is the Rust app's rows half, compiled when the script starts by the `flipctl` module its runtime carries. In Python,
-as `hello.fap.py`:
+The same app as one file, with nothing to build, and with the rows page only. The
+script says what the rows are and what its keys do; the window, the page, scrolling,
+the press shown on a soft key and Escape closing come from the `flipctl` module its
+runtime carries. In Python, as `hello.fap.py`:
 
     #!/usr/bin/env python3
     # /// flipctl
@@ -93,61 +94,35 @@ as `hello.fap.py`:
     # status = true
     # ///
 
-    import slint
-
     import flipctl
 
-    PAGE = """
-    import { Shell } from "@app/shell.slint";
-    import { DetailBody, DetailRow } from "@flipctl/detail.slint";
-
-    export component App inherits Shell {
-        in property <[DetailRow]> rows;
-        in property <[string]> buttons;
-
-        callback keyed(string, bool);
-        key(text, down) => { root.keyed(text, down); }
-
-        DetailBody { rows: root.rows; buttons: root.buttons; fit_gauges: true; }
-    }
-    """
-
-
-    def row(kind, label="", value="", percent=0):
-        return {"kind": kind, "label": label, "value": value, "percent": percent, "dim": False}
-
-
-    ui = flipctl.load(PAGE)
     presses = 0
 
 
-    def draw():
-        ui.rows = [
-            row(3, "Hello, Flipper One!"),
-            row(1),
-            row(0, "Presses", str(presses)),
-            row(2, "Progress", percent=min(100, presses * 10)),
+    def rows():
+        return [
+            flipctl.text("Hello, Flipper One!"),
+            flipctl.rule(),
+            flipctl.pair("Presses", str(presses)),
+            flipctl.gauge("Progress", "", min(100, presses * 10)),
         ]
 
 
-    @flipctl.on_key(ui)
-    def _(key, down):
+    app = flipctl.Detail(rows=rows, buttons=["Close", "", "", "", "Add"], fit_gauges=True)
+
+
+    @app.on_key
+    def _(key):
         global presses
-        if not down:
-            return
-        if key in (flipctl.Key.BACK, flipctl.Key.ESCAPE):
-            slint.quit_event_loop()
-        elif key in (flipctl.Key.OK, flipctl.Key.RUN):
+        if key in (flipctl.Key.OK, flipctl.Key.RUN):
             presses += 1
-            draw()
+            return True
+        return False
 
 
-    ui.buttons = ["Close", "", "", "", "Add"]
-    draw()
-    flipctl.run(ui)
+    app.run()
 
-In JavaScript, as `hello.fap.js`, where an array property takes `flipctl.rows(...)`
-rather than a plain array:
+In JavaScript, as `hello.fap.js`:
 
     #!/usr/bin/env node
     // /// flipctl
@@ -159,50 +134,48 @@ rather than a plain array:
 
     const flipctl = require("flipctl");
 
-    const PAGE = `
-    import { Shell } from "@app/shell.slint";
-    import { DetailBody, DetailRow } from "@flipctl/detail.slint";
-
-    export component App inherits Shell {
-        in property <[DetailRow]> rows;
-        in property <[string]> buttons;
-
-        callback keyed(string, bool);
-        key(text, down) => { root.keyed(text, down); }
-
-        DetailBody { rows: root.rows; buttons: root.buttons; fit_gauges: true; }
-    }
-    `;
-
-    function row(kind, label = "", value = "", percent = 0) {
-        return { kind, label, value, percent, dim: false };
-    }
-
-    const ui = flipctl.load(PAGE);
     let presses = 0;
 
-    function draw() {
-        ui.rows = flipctl.rows([
-            row(3, "Hello, Flipper One!"),
-            row(1),
-            row(0, "Presses", String(presses)),
-            row(2, "Progress", "", Math.min(100, presses * 10)),
-        ]);
-    }
-
-    flipctl.onKey(ui, (key, down) => {
-        if (!down) return;
-        if (key === flipctl.Key.Back || key === flipctl.Key.Escape) {
-            flipctl.quit();
-        } else if (key === flipctl.Key.Ok || key === flipctl.Key.Run) {
-            presses += 1;
-            draw();
-        }
+    const app = flipctl.detail({
+        rows: () => [
+            flipctl.text("Hello, Flipper One!"),
+            flipctl.rule(),
+            flipctl.pair("Presses", String(presses)),
+            flipctl.gauge("Progress", "", Math.min(100, presses * 10)),
+        ],
+        buttons: ["Close", "", "", "", "Add"],
+        fitGauges: true,
     });
 
-    ui.buttons = flipctl.rows(["Close", "", "", "", "Add"]);
-    draw();
-    flipctl.run(ui);
+    app.onKey((key) => {
+        if (key === flipctl.Key.Ok || key === flipctl.Key.Run) {
+            presses += 1;
+            return true;
+        }
+        return false;
+    });
+
+    app.run();
+
+A handler gets each key as it goes down and returns true for one it used; the rest
+keep their defaults, Escape closing and Up and Down scrolling. After every key the
+page is drawn again from `rows`. Back never reaches an app: flipctl takes it and sends
+the app to the background.
+
+There are three views, and an app may have several, each shown with `show()` in the
+one window:
+
+| View | Python | JavaScript | Shows |
+|---|---|---|---|
+| Rows | `flipctl.Detail(rows=...)` | `flipctl.detail({rows})` | `pair`, `rule`, `gauge`, `text`, `choice`, `heading` |
+| Menu | `flipctl.Menu(items=...)` | `flipctl.menu({items})` | `item` rows, a cursor that Up and Down move, and `selected` |
+| Log | `flipctl.Log(lines=...)` | `flipctl.log({lines})` | lines under a title, scrolling |
+
+`buttons` is a list or a function returning one, `on_close` (`onClose`) runs before the
+app leaves and may be awaited, and `run(every=1)` (`run({every: 1})`) draws on a clock
+for an app that only reads. An app with something to wait on hands Python's `run` a
+coroutine and calls `app.redraw()` when it has news; in JavaScript the usual timers and
+promises run beside the window.
 
 `status = true` has flipctl paint the real status bar into the frame, so a script
 reads no sysfs for it. Copy the file into `~/Apps` on the device and it is listed; it
@@ -283,17 +256,16 @@ own name, because a script names no command of its own. An icon is a PNG beside 
 
 `apps/ping.fap.py` and `apps/uptime.fap.js` are the worked examples, and each is the
 whole app: a file in the tree beside the bundle directories, pushed to `~/Apps` as it
-stands by `--apps`, with nothing to build. Each draws with the panel's own widgets
-through the `flipctl` module its runtime carries, which hands the page's Slint source
-to the compiler at run time with `@flipctl`, `@app` and `@theme` meaning what they mean
-in a crate. Both runtimes run the device's own interpreter, `python3` or `nodejs` from
-their `apt`, and carry only the drawing stack.
+stands by `--apps`, with nothing to build. `apps/Test Tools/network-leds.fap.py` is the
+menu. Each draws with the panel's own widgets through the `flipctl` module its runtime
+carries, which compiles the pages in `crates/flipctl-app/ui/pages.slint` at run time.
+Both runtimes run the device's own interpreter, `python3` or `nodejs` from their `apt`,
+and carry only the drawing stack.
 
-A Python script must fill every field of a Slint struct it hands over. A `DetailRow`
-built without `dim` reaches a conditional as nothing rather than false, and the
-interpreter panics at launch (`conditional expression did not evaluate to boolean`).
-`MenuBody`'s items have an image field Python cannot build, so a Python app shows its
-rows in `DetailBody` instead, which takes any number and scrolls past eight.
+Build rows with the module's constructors rather than as plain dicts. A Python row
+handed to Slint must carry every field of its struct: one left out reaches the body as
+nothing rather than a default, and the interpreter panics at launch. The constructors
+fill them all.
 
 What actually starts it is the launcher bundle whose `provides` matches its `runtime`,
 with the script as its argument, in a working directory of the script's own under
