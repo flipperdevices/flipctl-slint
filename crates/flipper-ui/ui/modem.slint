@@ -1,0 +1,159 @@
+// The 5G Modem app's main screen: four selectable items, two of them blocks of
+// three lines, and the signal bars.
+//
+// Nothing here measures or positions: `flipper_ui::modem::main_view` places every
+// run of text, every item and the bars, and the binary hands them over as they are.
+// The component draws them, frames the selected item, and inverts it while it is
+// pressed. The pages it opens are drawn on the detail screen.
+import { FlipperTheme } from "@theme";
+import { SelectorFrame, SoftBar } from "frame.slint";
+import { StatusBar, PanelStatus } from "statusbar.slint";
+
+// A run of text, placed by Rust.
+export struct ModemRun {
+    // The left edge, or the right edge when `right` is set.
+    x: length,
+    // The top of the 12px row it sits in.
+    y: length,
+    text: string,
+    // The item it belongs to, so it inverts with that item's press.
+    item: int,
+    dim: bool,
+    right: bool,
+}
+
+// One selectable item: the band the selector frames.
+export struct ModemItem {
+    y: length,
+    h: length,
+}
+
+export component ModemBody inherits Rectangle {
+    in property <[ModemRun]> runs;
+    in property <[ModemItem]> items;
+    in property <[length]> dividers;
+    in property <int> selected;
+    // The selected item is inverted while Ok's press is shown.
+    in property <bool> pressed;
+    in property <bool> bars_show;
+    in property <length> bars_x;
+    in property <length> bars_y;
+    in property <int> bars_lit;
+    in property <int> bars_item;
+    // A message alone on the screen: no modem, or one restarting.
+    in property <string> message;
+    in property <string> breadcrumb;
+    in property <[string]> buttons;
+    in property <int> pressed_slot: -1;
+
+    in property <int> battery: PanelStatus.battery;
+    in property <bool> charging: PanelStatus.charging;
+    in property <bool> wifi_connected: PanelStatus.wifi_connected;
+    in property <int> wifi_quality: PanelStatus.wifi_quality;
+    in property <int> ethernet: PanelStatus.ethernet;
+    in property <bool> recording: PanelStatus.recording;
+    in property <bool> modem_available: PanelStatus.modem_available;
+    in property <string> access_tech: PanelStatus.access_tech;
+    in property <int> modem_quality: PanelStatus.modem_quality;
+
+    width: 100%;
+    height: 100%;
+    background: FlipperTheme.white;
+
+    StatusBar {
+        x: 0;
+        y: 0;
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+    }
+
+    if root.breadcrumb != "": Text {
+        x: FlipperTheme.breadcrumb_x;
+        y: FlipperTheme.breadcrumb_y;
+        text: root.breadcrumb;
+        font-size: 16px;
+        font-family: "HaxrCorp 4090";
+        color: FlipperTheme.divider;
+    }
+
+    for d in root.dividers: Rectangle {
+        x: FlipperTheme.margin_h;
+        y: d;
+        width: root.width - 2 * FlipperTheme.margin_h;
+        height: 1px;
+        background: FlipperTheme.divider;
+    }
+
+    // The selector goes under the text, so a pressed item's fill sits behind its own
+    // inverted runs.
+    if root.items.length > 0: SelectorFrame {
+        x: FlipperTheme.selector_x;
+        y: root.items[root.selected].y + FlipperTheme.selector_y_offset;
+        frame_w: root.width - 2 * FlipperTheme.selector_x - 1px;
+        frame_h: root.items[root.selected].h + 2px;
+        filled: root.pressed;
+        stroke: true;
+    }
+
+    // A pixel above its row's top: the row's ink is its bottom nine pixels, and the
+    // selector's bottom edge is the row's last, so drawn on the row the text sat on
+    // the frame. Raised, it has two pixels above it inside the frame and one below.
+    for run in root.runs: Text {
+        property <bool> inverted: root.pressed && run.item == root.selected;
+        x: run.right ? run.x - (self.width - 1px) : run.x;
+        y: run.y - 1px;
+        text: run.text;
+        font-size: 16px;
+        font-family: "Busy9px";
+        color: self.inverted ? FlipperTheme.white
+            : run.dim ? FlipperTheme.status_dim : FlipperTheme.black;
+    }
+
+    // Six bars rising left to right on their row's bottom edge, lit up to the
+    // signal. An unlit bar keeps its outline so the six stay countable.
+    if root.bars_show: Rectangle {
+        property <color> ink: root.pressed && root.bars_item == root.selected
+            ? FlipperTheme.white : FlipperTheme.black;
+        x: root.bars_x;
+        // Raised with the text, so they stand on its baseline.
+        y: root.bars_y - 1px;
+        width: FlipperTheme.modem_bars * (FlipperTheme.modem_bar_w + FlipperTheme.modem_bar_gap);
+        height: FlipperTheme.item_h;
+        background: transparent;
+
+        for bar[i] in FlipperTheme.modem_bars: Rectangle {
+            property <length> h: FlipperTheme.modem_bar_min_h + i * FlipperTheme.modem_bar_step;
+            property <color> ink: parent.ink;
+            x: i * (FlipperTheme.modem_bar_w + FlipperTheme.modem_bar_gap);
+            y: FlipperTheme.item_h - self.h;
+            width: FlipperTheme.modem_bar_w;
+            height: self.h;
+            background: i < root.bars_lit ? self.ink : transparent;
+            Rectangle { x: 0; y: 0; width: parent.width; height: 1px; background: parent.ink; }
+            Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: parent.ink; }
+            Rectangle { x: 0; y: 0; width: 1px; height: parent.height; background: parent.ink; }
+            Rectangle { x: parent.width - 1px; y: 0; width: 1px; height: parent.height; background: parent.ink; }
+        }
+    }
+
+    if root.message != "": Text {
+        x: (root.width - (self.width - 1px)) / 2;
+        y: (root.height - FlipperTheme.item_h) / 2;
+        text: root.message;
+        font-size: 16px;
+        font-family: "Busy9px";
+        color: FlipperTheme.black;
+    }
+
+    SoftBar {
+        buttons: root.buttons;
+        pressed_slot: root.pressed_slot;
+    }
+}

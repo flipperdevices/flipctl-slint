@@ -247,3 +247,27 @@ fn a_table_keeps_its_columns() {
     let next_start = next.iter().map(|&x| x as i32).find(|&x| x >= after - 1).unwrap();
     assert_eq!(next_start, cell_start, "the next line is off the cell's edge");
 }
+
+/// Render `rows` on a detail screen under a breadcrumb and return the frame.
+fn render_rows(rows: Vec<DetailRow>) -> Vec<flipper_ui::pixel::Gray8> {
+    let window = FlipperSlintPlatform::install();
+    let screen = Root::new().expect("create Root");
+    screen.set_screen(Screen::Detail);
+    screen.set_breadcrumb("> Network > 5G Modem".into());
+    screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    screen.set_detail_offset(0);
+    screen.show().expect("show");
+    slint::platform::update_timers_and_animations();
+    render_frame(&window).expect("a fresh screen always paints")
+}
+
+/// A message on an empty screen sits in the middle of it, left and right.
+#[test]
+fn a_centred_row_is_centred() {
+    let frame = render_rows(vec![row(10, "", "No modem found", 0)]);
+    let cols = ink_columns(&frame, 0);
+    let (first, last) = (cols[0], *cols.last().expect("the message drew something"));
+    let centre = usize::from(theme::PANEL_W) / 2;
+    let off = (first + last) as i32 / 2 - centre as i32;
+    assert!(off.abs() <= 1, "the message is {off}px off centre ({first}..{last})");
+}

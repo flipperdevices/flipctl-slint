@@ -12,7 +12,7 @@
 // and overlaps it. This keeps their data and row order and draws them like
 // Network and Settings.
 import { FlipperTheme } from "@theme";
-import { SoftBar } from "frame.slint";
+import { SelectorFrame, SoftBar } from "frame.slint";
 import { StatusBar, PanelStatus } from "statusbar.slint";
 import { ChevronStatus } from "list.slint";
 
@@ -24,7 +24,8 @@ export struct DetailRow {
     // three-column table, the label left, the row's aside right and the value in the
     // cell between: 7 right-aligned against the right column, 6 a cell that wraps,
     // starting one gap after its own label, and 8 that cell's next line, its label
-    // measured to find the same edge but not drawn.
+    // measured to find the same edge but not drawn. 10 `value` centred across the
+    // screen. 11 an action: `label`, framed when it is the `selected` row.
     kind: int,
     label: string,
     value: string,
@@ -62,6 +63,10 @@ export component DetailBody inherits Rectangle {
     // the end is left out, which is how the panel says "no further".
     in property <bool> at_start;
     in property <bool> at_end;
+    // The row the cursor is on, when the screen has one: a kind 11 row, an action.
+    // -1 on every screen without one. It inverts while Ok's press is shown.
+    in property <int> selected: -1;
+    in property <bool> row_pressed;
 
     in property <int> battery: PanelStatus.battery;
     in property <bool> charging: PanelStatus.charging;
@@ -113,6 +118,25 @@ export component DetailBody inherits Rectangle {
         visible: i >= root.offset && i < root.offset + root.visible_rows;
 
         property <color> ink: row.dim ? FlipperTheme.status_dim : FlipperTheme.black;
+
+        // An action: framed like a menu row while the cursor is on it, filled while
+        // it is pressed. Drawn first, so its text sits on the fill.
+        if row.kind == 11 && i == root.selected: SelectorFrame {
+            x: FlipperTheme.selector_x;
+            y: FlipperTheme.selector_y_offset;
+            frame_w: root.width - 2 * FlipperTheme.selector_x - 1px;
+            frame_h: FlipperTheme.item_h + 2px;
+            filled: root.row_pressed;
+        }
+        // Its text a pixel above the row's, so the frame's bottom edge clears it.
+        if row.kind == 11: Text {
+            x: root.left;
+            y: -1px;
+            text: row.label;
+            font-size: 16px;
+            font-family: "Busy9px";
+            color: root.row_pressed && i == root.selected ? FlipperTheme.white : parent.ink;
+        }
 
         // The label, measured. A gauge's bar starts clear of its own label, so the
         // width has to be known before the bar is placed, and the label element
@@ -277,6 +301,17 @@ export component DetailBody inherits Rectangle {
                 height: FlipperTheme.gauge_h;
                 background: parent.ink;
             }
+        }
+
+        // A message alone on the screen, centred across it. Rust puts it on the
+        // middle row.
+        if row.kind == 10: Text {
+            x: (root.width - (self.width - 1px)) / 2;
+            y: 0;
+            text: row.value;
+            font-size: 16px;
+            font-family: "Busy9px";
+            color: parent.ink;
         }
     }
 
