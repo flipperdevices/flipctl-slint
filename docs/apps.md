@@ -6,6 +6,25 @@ and puts them on the panel. Nothing describes the app's screen to flipctl: the a
 owns every pixel of its surface, and what keeps it looking like the device is that
 it draws with flipctl's own widgets.
 
+The exception is the top row. The status bar, 13px with the battery and the radios,
+is the same on every screen, and flipctl can draw it for an app: with `status = true`
+in the manifest, flipctl paints its own bar over the top of every frame the app
+sends. The app then reads no battery or radio state and simply gives up those 13
+rows. Scripts and programs that are not built on the framework work this way.
+
+An app can draw the top row itself instead, and then leaves `status` off, since
+flipctl's bar would cover whatever it drew there:
+
+- **The real bar, drawn by the app.** Every body in the framework but `CanvasBody`
+  draws `StatusBar`, which reads the `PanelStatus` global. `main!` and `attach!` fill
+  that global every second from `StatusSource`, the same sysfs readings flipctl uses,
+  so the bar looks and behaves exactly like flipctl's. This is what `apps/hello` does.
+- **A top row of the app's own.** A page of the app's own, wired with `attach!`, can
+  show a `CanvasBody` with `status_bar: false` (its default) and paint the whole
+  panel, top row included, or put any row of its own above the content in place of
+  `StatusBar`. The app then shows no battery or radio state unless it draws them
+  itself.
+
 ## Hello world
 
 The smallest whole app: a greeting, a counter Ok or Add raises, a gauge that fills as
