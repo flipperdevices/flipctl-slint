@@ -418,8 +418,16 @@ the page (no SD card, radios, or anything that changes by the minute) so the tex
 fits error correction Q, which pays for the icon's square with room to spare.
 
 **The SD card's ratings come from its SD Status register** (speed class, UHS grade,
-video class, app performance class), the way the SD spec lays them out. The bus mode
-is only in debugfs, so it is not shown.
+video class, app performance class, each with what it promises), the way the SD
+spec lays them out, and so do its allocation unit, cache and command queue, and
+discard. Its spec version is in the SCR; SDUC and write protection are in the CSD.
+An SDUC card gets a "SD boot no (SDUC)" row: Linux drives one, the boot ROM cannot.
+
+**What the card supports and has selected is asked of the card**: speeds, power
+limit, current and command system come from CMD6 in check mode, which switches
+nothing but needs CAP_SYS_RAWIO. System info runs `sudo flipctl sd-modes` once per
+card, not every poll, and leaves the rows out when it gets no answer. The host's
+own view, debugfs `ios`, is not shown.
 
 **Memory is what is fitted**, from the device tree, in binary gigabytes, beside what
 is in use. `MemTotal` is short by the firmware's carve-out and what the kernel keeps.

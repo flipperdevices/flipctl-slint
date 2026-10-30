@@ -26,6 +26,9 @@ fn main() -> ExitCode {
     if args.first().map(String::as_str) == Some("open") {
         return open_bundle(args.get(1).map(String::as_str));
     }
+    if args.first().map(String::as_str) == Some("sd-modes") {
+        return sd_modes();
+    }
 
     let result = if has("--panel") || has("--headless") || has("--wayland") {
         let frames = value("--frames").and_then(|v| v.parse::<u64>().ok());
@@ -73,6 +76,19 @@ fn main() -> ExitCode {
     }
 }
 
+/// `flipctl sd-modes`: what the SD card supports and has selected, for System info,
+/// which runs it through sudo. Takes no device: it asks the SD card and nothing else.
+fn sd_modes() -> ExitCode {
+    use flipper_ui::sysinfo;
+    match sysinfo::sd_disk().and_then(|disk| sysinfo::sd_switch_status(&disk)) {
+        Some(status) => {
+            print!("{}", sysinfo::sd_switch_of(&status).to_text());
+            ExitCode::SUCCESS
+        }
+        None => ExitCode::FAILURE,
+    }
+}
+
 /// `flipctl open FILE`: the desktop side of the hand-off.
 ///
 /// Exit 0 when the app is on the panel, 1 when flipctl refused, 2 when nothing is
@@ -113,9 +129,13 @@ const EMPTY_BUTTONS: [String; 0] = [];
 const USAGE: &str = "\
 usage: flipctl [--panel [--kms-device PATH]] [--png PATH]
        flipctl open FILE
+       flipctl sd-modes
 
   open FILE      put an AppImage on the panel through the running flipctl, which
                  is what a bundle's AppRun does when a desktop starts it
+  sd-modes       what the SD card supports and has selected: speeds, power
+                 limit, current, command system. Asks the card with CMD6 in
+                 check mode, which needs root
 
   --panel        drive the real 256x144 SPI panel and its buttons
   --wayland      present to the compositor that owns the panel, and take its keys
@@ -1161,15 +1181,28 @@ mod detail {
                 // seconds is the cadence of the other pages that move.
                 // The installer's record is read once per opening, on the poller's
                 // thread: it takes sudo, and it only changes when someone writes it.
+                // The card's modes take sudo too, and are read again only for
+                // another card.
                 Detail::System => {
                     let install = std::sync::OnceLock::new();
+                    let switch = std::sync::Mutex::new((String::new(), Default::default()));
                     Live::System(Watch::spawn(
                         "watch-system",
                         Duration::from_secs(2),
                         System::default(),
-                        move || System {
-                            install: install.get_or_init(sysinfo::install).clone(),
-                            ..sysinfo::system()
+                        move || {
+                            let mut s = System {
+                                install: install.get_or_init(sysinfo::install).clone(),
+                                ..sysinfo::system()
+                            };
+                            if let Some(card) = &mut s.sd {
+                                let mut known = switch.lock().unwrap();
+                                if known.0 != card.serial {
+                                    *known = (card.serial.clone(), sysinfo::sd_switch());
+                                }
+                                card.switch = known.1.clone();
+                            }
+                            s
                         },
                     ))
                 }
@@ -1574,17 +1607,51 @@ mod detail {
         }
         match &s.sd {
             Some(c) => {
+                for (label, value) in
+                    [("SD card", c.name.as_str()), ("SD size", &c.size), ("SD type", &c.kind)]
+                {
+                    out.extend(long(label, value));
+                }
+                let r = &c.ratings;
                 for (label, value) in [
-                    ("SD card", c.name.as_str()),
-                    ("SD size", &c.size),
-                    ("SD type", &c.kind),
-                    ("SD class", &c.classes),
+                    ("SD speed class", &r.speed),
+                    ("SD UHS grade", &r.uhs),
+                    ("SD video class", &r.video),
+                    ("SD app class", &r.app),
+                ] {
+                    if !value.is_empty() {
+                        out.extend(long(label, value));
+                    }
+                }
+                // Only there when sudo answered: it asks the card, not sysfs.
+                let w = &c.switch;
+                if !w.speeds.is_empty() {
+                    for (label, value) in [
+                        ("SD speeds", &w.speeds),
+                        ("SD power limit", &w.power),
+                        ("SD current", &w.current),
+                        ("SD commands", &w.commands),
+                    ] {
+                        out.extend(long(label, value));
+                    }
+                }
+                for (label, value) in [
+                    ("SD spec", &c.spec),
+                    ("SD allocation unit", &c.au),
+                    ("SD perf", &c.perf),
+                    ("SD discard", &c.discard),
                     ("SD made", &c.made),
                     ("SD serial", &c.serial),
                     ("SD OEM", &c.oem),
                     ("SD rev", &c.rev),
                 ] {
                     out.extend(long(label, value));
+                }
+                if c.sduc {
+                    out.push(row("SD boot", "no (SDUC)"));
+                }
+                if c.locked {
+                    out.push(row("SD lock", "write-protected"));
                 }
             }
             None => out.push(row("SD card", "none")),

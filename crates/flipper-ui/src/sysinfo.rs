@@ -1286,15 +1286,31 @@ pub fn uptime(secs: u64) -> String {
     }
 }
 
-/// An SD card, from what the kernel read of its CID, CSD and SD Status registers.
+/// An SD card, from what the kernel read of its CID, CSD, SCR and SD Status
+/// registers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SdCard {
     pub name: String,
     pub size: String,
     /// SD, SDHC or SDXC.
     pub kind: String,
-    /// What its SD Status says it is rated for: `C10 U3 V30 A2`.
-    pub classes: String,
+    /// What its SD Status says it is rated for, each empty when it is not.
+    pub ratings: SdRatings,
+    /// The physical layer spec it implements: `6.xx`.
+    pub spec: String,
+    /// Its allocation unit: `4M`.
+    pub au: String,
+    /// What it has for speed beyond its classes: `cache, CQ 32`.
+    pub perf: String,
+    /// Whether it takes discard, and full user area logical erase: `yes, FULE`.
+    pub discard: String,
+    /// Write-protected by its CSD, permanently or until power off.
+    pub locked: bool,
+    /// A CSD 3.0 card, which the boot ROM cannot read.
+    pub sduc: bool,
+    /// What it supports and has selected, from CMD6. Left empty by [`system`];
+    /// whoever shows it reads it with [`sd_switch`].
+    pub switch: SdSwitch,
     pub made: String,
     pub serial: String,
     pub oem: String,
@@ -1324,8 +1340,15 @@ fn sd_card() -> Option<SdCard> {
     Some(SdCard {
         name: format!("{} {}", sd_maker(id(&attr("manfid"))), attr("name")).trim().to_string(),
         size: format_bytes(bytes),
-        kind: sd_kind(bytes).into(),
-        classes: sd_classes(&attr("ssr")),
+        kind: if reg_bits(&attr("csd"), 127, 126) == 2 { "SDUC" } else { sd_kind(bytes) }.into(),
+        ratings: sd_ratings(&attr("ssr")),
+        spec: sd_spec(&attr("scr")),
+        au: sd_au(&attr("ssr")),
+        perf: sd_perf(&attr("ssr")),
+        discard: sd_discard(&attr("ssr")),
+        locked: reg_bits(&attr("csd"), 13, 12) != 0,
+        sduc: reg_bits(&attr("csd"), 127, 126) == 2,
+        switch: SdSwitch::default(),
         made: sd_date(&attr("date")),
         serial: attr("serial"),
         oem: sd_oem(id(&attr("oemid"))),
@@ -1381,35 +1404,255 @@ pub fn sd_date(date: &str) -> String {
     }
 }
 
-/// The ratings in the SD Status register, 512 bits as hex, bit 511 first:
-/// SPEED_CLASS in 447:440, UHS_SPEED_GRADE in 399:396, VIDEO_SPEED_CLASS in 391:384
-/// and APP_PERF_CLASS in 339:336.
-pub fn sd_classes(ssr: &str) -> String {
-    let byte = |at: usize| {
-        ssr.get(at * 2..at * 2 + 2).and_then(|h| u8::from_str_radix(h, 16).ok()).unwrap_or(0)
+/// Bits `hi..=lo` of a register as the kernel prints it: hex, most significant bit
+/// first. Bits past the end of a short or missing register read as zero.
+pub fn reg_bits(hex: &str, hi: usize, lo: usize) -> u32 {
+    let total = hex.len() * 4;
+    (lo..=hi).rev().fold(0, |acc, bit| {
+        let nibble = (bit < total)
+            .then(|| hex.as_bytes()[(total - 1 - bit) / 4])
+            .and_then(|c| (c as char).to_digit(16))
+            .unwrap_or(0);
+        acc << 1 | (nibble >> (bit % 4) & 1)
+    })
+}
+
+/// An SD card's ratings, each with what it promises.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SdRatings {
+    /// `C10 (10 MB/s)`.
+    pub speed: String,
+    /// `U3 (30 MB/s)`.
+    pub uhs: String,
+    /// `V30 (30 MB/s)`.
+    pub video: String,
+    /// `A2 (4000/2000 IOPS)`, random read and write.
+    pub app: String,
+}
+
+/// The ratings in the SD Status register, 512 bits as hex: SPEED_CLASS in 447:440,
+/// UHS_SPEED_GRADE in 399:396, VIDEO_SPEED_CLASS in 391:384 and APP_PERF_CLASS in
+/// 339:336. Every speed is a minimum for sequential writes.
+pub fn sd_ratings(ssr: &str) -> SdRatings {
+    let speed = match reg_bits(ssr, 447, 440) {
+        c @ 1..=4 => {
+            let mb = [2, 4, 6, 10][c as usize - 1];
+            format!("C{mb} ({mb} MB/s)")
+        }
+        _ => String::new(),
     };
+    let uhs = match reg_bits(ssr, 399, 396) {
+        0 => String::new(),
+        1 => "U1 (10 MB/s)".into(),
+        3 => "U3 (30 MB/s)".into(),
+        u => format!("U{u}"),
+    };
+    let video = match reg_bits(ssr, 391, 384) {
+        0 => String::new(),
+        v => format!("V{v} ({v} MB/s)"),
+    };
+    let app = match reg_bits(ssr, 339, 336) {
+        0 => String::new(),
+        1 => "A1 (1500/500 IOPS)".into(),
+        2 => "A2 (4000/2000 IOPS)".into(),
+        a => format!("A{a}"),
+    };
+    SdRatings { speed, uhs, video, app }
+}
+
+/// The spec version in the SCR, 64 bits as hex: SD_SPEC in 59:56, then SD_SPEC3
+/// (47), SD_SPEC4 (42) and SD_SPECX (41:38) each marking a later one.
+pub fn sd_spec(scr: &str) -> String {
+    if scr.is_empty() {
+        return "-".into();
+    }
+    let specx = reg_bits(scr, 41, 38);
+    if specx > 0 {
+        format!("{}.xx", specx + 4)
+    } else if reg_bits(scr, 42, 42) == 1 {
+        "4.xx".into()
+    } else if reg_bits(scr, 47, 47) == 1 {
+        "3.0x".into()
+    } else {
+        ["1.0x", "1.10", "2.00"].get(reg_bits(scr, 59, 56) as usize).unwrap_or(&"-").to_string()
+    }
+}
+
+/// The allocation unit in the SD Status: UHS_AU_SIZE in 395:392 where a UHS card
+/// sets it, AU_SIZE in 431:428 otherwise.
+pub fn sd_au(ssr: &str) -> String {
+    const AU: [&str; 16] = [
+        "-", "16K", "32K", "64K", "128K", "256K", "512K", "1M", "2M", "4M", "8M", "12M", "16M",
+        "24M", "32M", "64M",
+    ];
+    let uhs = reg_bits(ssr, 395, 392);
+    AU[if uhs > 0 { uhs } else { reg_bits(ssr, 431, 428) } as usize].into()
+}
+
+/// PERFORMANCE_ENHANCE in the SD Status, 335:328: a cache in bit 2, and in 7:3 the
+/// command queue's depth less one, zero for none.
+pub fn sd_perf(ssr: &str) -> String {
     let mut out = Vec::new();
-    match byte(8) {
-        1 => out.push("C2".to_string()),
-        2 => out.push("C4".into()),
-        3 => out.push("C6".into()),
-        4 => out.push("C10".into()),
-        _ => {}
+    if reg_bits(ssr, 330, 330) == 1 {
+        out.push("cache".to_string());
     }
-    if let u @ 1.. = byte(14) >> 4 {
-        out.push(format!("U{u}"));
-    }
-    if let v @ 1.. = byte(15) {
-        out.push(format!("V{v}"));
-    }
-    if let a @ 1.. = byte(21) & 0x0f {
-        out.push(format!("A{a}"));
+    if let q @ 1.. = reg_bits(ssr, 335, 331) {
+        out.push(format!("CQ {}", q + 1));
     }
     if out.is_empty() {
         "-".into()
     } else {
-        out.join(" ")
+        out.join(", ")
     }
+}
+
+/// DISCARD_SUPPORT (313) and FULE_SUPPORT (312) in the SD Status.
+pub fn sd_discard(ssr: &str) -> String {
+    let discard = if reg_bits(ssr, 313, 313) == 1 { "yes" } else { "no" };
+    if reg_bits(ssr, 312, 312) == 1 {
+        format!("{discard}, FULE")
+    } else {
+        discard.into()
+    }
+}
+
+/// `struct mmc_ioc_cmd` from `linux/mmc/ioctl.h`.
+#[repr(C)]
+#[derive(Default)]
+struct MmcIocCmd {
+    write_flag: i32,
+    is_acmd: i32,
+    opcode: u32,
+    arg: u32,
+    response: [u32; 4],
+    flags: u32,
+    blksz: u32,
+    blocks: u32,
+    postsleep_min_us: u32,
+    postsleep_max_us: u32,
+    data_timeout_ns: u32,
+    cmd_timeout_ms: u32,
+    pad: u32,
+    data_ptr: u64,
+}
+
+/// `_IOWR(MMC_BLOCK_MAJOR, 0, struct mmc_ioc_cmd)`.
+const MMC_IOC_CMD: libc::c_ulong = 0xc048_b300;
+/// `MMC_RSP_R1 | MMC_CMD_ADTC`.
+const R1_ADTC: u32 = 0x35;
+
+/// The card's answer to CMD6 in check mode, which switches nothing: what each
+/// function group supports and has selected. The ioctl needs CAP_SYS_RAWIO, so this
+/// is what `flipctl sd-modes` runs as root.
+pub fn sd_switch_status(disk: &str) -> Option<[u8; 64]> {
+    use std::os::fd::AsRawFd;
+    let file = fs::File::open(disk).ok()?;
+    let mut status = [0u8; 64];
+    let mut cmd = MmcIocCmd {
+        opcode: 6,
+        arg: 0x00ff_ffff,
+        flags: R1_ADTC,
+        blksz: 64,
+        blocks: 1,
+        data_ptr: status.as_mut_ptr() as u64,
+        ..Default::default()
+    };
+    let ret = unsafe { libc::ioctl(file.as_raw_fd(), MMC_IOC_CMD as _, &mut cmd) };
+    (ret == 0).then_some(status)
+}
+
+/// What a card says to CMD6, each list with the selected function in brackets
+/// where there is a choice.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SdSwitch {
+    /// The most it draws in the mode it is in: `250 mA`.
+    pub current: String,
+    /// `SDR12, SDR25, SDR50, [SDR104], DDR50`.
+    pub speeds: String,
+    /// `[default], vendor`.
+    pub commands: String,
+    /// `[0.72W], 1.44W`, or `0.72W` alone.
+    pub power: String,
+}
+
+impl SdSwitch {
+    /// Its fields as lines, `key: value`, which is how `flipctl sd-modes` hands them
+    /// over.
+    pub fn to_text(&self) -> String {
+        format!(
+            "current: {}\nspeeds: {}\ncommands: {}\npower: {}\n",
+            self.current, self.speeds, self.commands, self.power
+        )
+    }
+
+    pub fn from_text(text: &str) -> SdSwitch {
+        let mut out = SdSwitch::default();
+        for (key, value) in text.lines().filter_map(|l| l.split_once(": ")) {
+            let field = match key {
+                "current" => &mut out.current,
+                "speeds" => &mut out.speeds,
+                "commands" => &mut out.commands,
+                "power" => &mut out.power,
+                _ => continue,
+            };
+            *field = value.to_string();
+        }
+        out
+    }
+}
+
+/// A CMD6 status, 64 bytes: the current in 511:496, then from 415:400 down each
+/// group's supported functions, group 1 lowest, and from 379:376 up each group's
+/// selected one. A card with no UHS mode runs its first two speeds at 3.3V and
+/// calls them DS and HS.
+pub fn sd_switch_of(status: &[u8; 64]) -> SdSwitch {
+    let group = |g: usize, names: &[&str]| {
+        // Bit 15 is set in every group and names no function.
+        let supported = u16::from_be_bytes([status[14 - 2 * g], status[15 - 2 * g]]) & 0x7fff;
+        let nibble = status[16 - (g - 1) / 2];
+        let selected = if g % 2 == 0 { nibble >> 4 } else { nibble & 0x0f } as usize;
+        // A lone function is selected by having no other: no brackets for it.
+        let choice = supported.count_ones() > 1;
+        (0..15)
+            .filter(|i| supported >> i & 1 == 1)
+            .map(|i| {
+                let name = names
+                    .get(i)
+                    .filter(|n| !n.is_empty())
+                    .map_or(format!("fn{i}"), |n| n.to_string());
+                if choice && i == selected {
+                    format!("[{name}]")
+                } else {
+                    name
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let uhs = u16::from_be_bytes([status[12], status[13]]) & 0x1c != 0;
+    let speeds: &[&str] = if uhs {
+        &["SDR12", "SDR25", "SDR50", "SDR104", "DDR50"]
+    } else {
+        &["DS", "HS", "SDR50", "SDR104", "DDR50"]
+    };
+    let mut commands = ["default", "eC", "", "OTP", "ASSD"].to_vec();
+    commands.resize(14, "");
+    commands.push("vendor");
+    SdSwitch {
+        current: format!("{} mA", u16::from_be_bytes([status[0], status[1]])),
+        speeds: group(1, speeds),
+        commands: group(2, &commands),
+        power: group(4, &["0.72W", "1.44W", "2.16W", "2.88W", "1.80W"]),
+    }
+}
+
+/// What the card says to CMD6, through `sudo flipctl sd-modes`. It sends the card a
+/// command, so it is read once per card, not every poll. Empty when it cannot be.
+pub fn sd_switch() -> SdSwitch {
+    let Ok(exe) = std::env::current_exe() else { return SdSwitch::default() };
+    crate::boot::sudo(&[&exe.to_string_lossy(), "sd-modes"])
+        .map(|out| SdSwitch::from_text(&out))
+        .unwrap_or_default()
 }
 
 /// The battery pack: what it is and how worn.
@@ -1741,7 +1984,7 @@ mod system_tests {
         assert_eq!(uptime(2 * 86_400 + 4 * 3600 + 59), "2d 4h");
     }
 
-    /// The classes sit where the SD spec puts them in the SD Status register, here
+    /// The ratings sit where the SD spec puts them in the SD Status register, here
     /// a card rated C10 U3 V30 A2.
     #[test]
     fn an_sd_cards_ratings_come_from_its_status_register() {
@@ -1751,9 +1994,87 @@ mod system_tests {
         ssr[15] = 30;
         ssr[21] = 0x02;
         let hex: String = ssr.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(sd_classes(&hex), "C10 U3 V30 A2");
-        assert_eq!(sd_classes(&"0".repeat(128)), "-");
-        assert_eq!(sd_classes(""), "-");
+        assert_eq!(
+            sd_ratings(&hex),
+            SdRatings {
+                speed: "C10 (10 MB/s)".into(),
+                uhs: "U3 (30 MB/s)".into(),
+                video: "V30 (30 MB/s)".into(),
+                app: "A2 (4000/2000 IOPS)".into(),
+            }
+        );
+        assert_eq!(sd_ratings(&"0".repeat(128)), SdRatings::default());
+        assert_eq!(sd_ratings(""), SdRatings::default());
+    }
+
+    /// A card with SD_SPEC 2, SD_SPEC3 and SD_SPECX 2 is a 6.xx card.
+    #[test]
+    fn an_sd_cards_spec_comes_from_its_scr() {
+        assert_eq!(sd_spec("0285848783800000"), "6.xx");
+        assert_eq!(sd_spec("0235800000000000"), "3.0x");
+        assert_eq!(sd_spec("0225000000000000"), "2.00");
+        assert_eq!(sd_spec(""), "-");
+    }
+
+    /// A card with a 4M UHS allocation unit, a cache, a 32-deep queue, discard and
+    /// FULE.
+    #[test]
+    fn an_sd_cards_features_come_from_its_status_register() {
+        let mut ssr = vec![0u8; 64];
+        ssr[10] = 0x10;
+        ssr[14] = 0x09;
+        ssr[22] = 0xfc;
+        ssr[24] = 0x03;
+        let hex: String = ssr.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(sd_au(&hex), "4M");
+        assert_eq!(sd_perf(&hex), "cache, CQ 32");
+        assert_eq!(sd_discard(&hex), "yes, FULE");
+        let zero = "0".repeat(128);
+        assert_eq!(sd_au(&zero), "-");
+        assert_eq!(sd_perf(&zero), "-");
+        assert_eq!(sd_discard(&zero), "no");
+        ssr[14] = 0;
+        let hex: String = ssr.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(sd_au(&hex), "16K");
+    }
+
+    /// A UHS card running SDR104 at 250mA under the lowest power limit, with a
+    /// vendor command system; and a 3.3V one running High Speed.
+    #[test]
+    fn an_sd_cards_modes_come_from_its_switch_status() {
+        let mut status = [0u8; 64];
+        status[1] = 250;
+        status[7] = 0x0f;
+        status[10] = 0x40;
+        status[11] = 0x01;
+        status[13] = 0x1f;
+        status[16] = 0x03;
+        let switch = sd_switch_of(&status);
+        assert_eq!(
+            switch,
+            SdSwitch {
+                current: "250 mA".into(),
+                speeds: "SDR12, SDR25, SDR50, [SDR104], DDR50".into(),
+                commands: "[default], vendor".into(),
+                power: "[0.72W], 1.44W, 2.16W, 2.88W".into(),
+            }
+        );
+        assert_eq!(SdSwitch::from_text(&switch.to_text()), switch);
+        status[13] = 0x03;
+        status[16] = 0x01;
+        assert_eq!(sd_switch_of(&status).speeds, "DS, [HS]");
+        status[6] = 0x80;
+        status[7] = 0x01;
+        assert_eq!(sd_switch_of(&status).power, "0.72W");
+    }
+
+    #[test]
+    fn register_bits_count_from_the_least_significant() {
+        assert_eq!(reg_bits("8001", 15, 15), 1);
+        assert_eq!(reg_bits("8001", 0, 0), 1);
+        assert_eq!(reg_bits("8001", 14, 1), 0);
+        assert_eq!(reg_bits("0f0", 7, 4), 0xf);
+        assert_eq!(reg_bits("", 3, 0), 0);
     }
 
     #[test]
