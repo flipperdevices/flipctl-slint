@@ -62,6 +62,8 @@ GADGETS = pathlib.Path("/sys/kernel/config/usb_gadget")
 REGULATORS = pathlib.Path("/sys/class/regulator")
 DEVICE_TREE = pathlib.Path("/sys/firmware/devicetree/base")
 USB_IDS = ("/usr/share/misc/usb.ids", "/usr/share/hwdata/usb.ids", "/var/lib/usbutils/usb.ids")
+# usbutils 018 reads names from udev's hwdb, the same data, and the image has no usb.ids.
+HWDB = ("/usr/lib/udev/hwdb.d/20-usb-vendor-model.hwdb", "/usr/lib/udev/hwdb.d/20-usb-classes.hwdb")
 
 # Advance widths of Busy9px, the face detail rows are drawn in, ASCII 32..126. From
 # crates/flipper-ui/src/font/row.rs. `flipctl.text_width` measures the title face,
@@ -222,16 +224,29 @@ def line(text, dim=False) -> dict:
 
 
 class Ids:
-    """Names from usb.ids, looked up in the file's text rather than parsed whole."""
+    """Names from usb.ids, or from udev's hwdb where usb.ids is not installed, looked
+    up in the file's text rather than parsed whole."""
 
     def __init__(self) -> None:
         self.text = None
+        self.hwdb = None
 
     def load(self) -> str:
         if self.text is None:
             self.text = next((read(p) for p in USB_IDS if os.path.exists(p)), "")
             self.text = "\n" + self.text
         return self.text
+
+    def entry(self, key: str) -> str | None:
+        """The value of the hwdb entry `key`, written as udev writes it: hex in
+        capitals, without the trailing `*`."""
+        if self.hwdb is None:
+            self.hwdb = "\n" + "\n".join(read(p) for p in HWDB) + "\n"
+        at = self.hwdb.find(f"\n{key}*\n ")
+        if at < 0:
+            return None
+        at = self.hwdb.find("=", at + len(key) + 3) + 1
+        return self.hwdb[at:self.hwdb.find("\n", at)].strip()
 
     def _line(self, start: int, prefix: str, stop: str):
         """The name on the first line from `start` that begins with `prefix`, before
@@ -251,6 +266,8 @@ class Ids:
 
     def vendor(self, vid: str):
         text = self.load()
+        if not text.strip():
+            return self.entry(f"usb:v{vid.upper()}"), -1
         at = text.find(f"\n{vid}  ")
         if at < 0:
             return None, -1
@@ -258,20 +275,28 @@ class Ids:
         return text[at + len(vid) + 3:end].strip(), at
 
     def product(self, vid: str, pid: str):
+        if not self.load().strip():
+            return self.entry(f"usb:v{vid.upper()}p{pid.upper()}")
         _, at = self.vendor(vid)
         return self._line(at + 1, f"\t{pid}  ", "\t")[0] if at >= 0 else None
 
     def klass(self, code: int, sub: int, proto: int) -> str:
         short = CLASSES.get(code, f"class {code:02x}")
         text = self.load()
-        at = text.find(f"\nC {code:02x}  ")
-        if at < 0 or code in (0x00, 0xFF):
+        if code in (0x00, 0xFF):
             return short
-        sub_name, sub_at = self._line(at + 1, f"\t{sub:02x}  ", "\t")
-        proto_name = None
-        if sub_at >= 0 and proto:
-            proto_name, _ = self._line(sub_at, f"\t\t{proto:02x}  ", "\t\t")
-        detail = proto_name or sub_name
+        if not text.strip():
+            key = f"usb:v*p*d*dc{code:02X}dsc{sub:02X}"
+            detail = (proto and self.entry(f"{key}dp{proto:02X}")) or self.entry(key)
+        else:
+            at = text.find(f"\nC {code:02x}  ")
+            if at < 0:
+                return short
+            sub_name, sub_at = self._line(at + 1, f"\t{sub:02x}  ", "\t")
+            proto_name = None
+            if sub_at >= 0 and proto:
+                proto_name, _ = self._line(sub_at, f"\t\t{proto:02x}  ", "\t\t")
+            detail = proto_name or sub_name
         if not detail or detail.lower() in ("none", "unused", "no subclass"):
             return short
         return f"{short} {detail}"
