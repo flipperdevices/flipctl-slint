@@ -11,10 +11,11 @@ firmware description says) is a socket, a `hardwired` one leads to something ins
 the case, and a `not used` one is skipped. A socket has a port on each bus, the USB 2
 and the USB 3 one, joined by `peer`, so the two count as one socket and whichever has
 the device shows it. Anything plugged in behind a hub in a socket is listed after it
-as that socket's `.port`. A socket is named for the connector the device tree wires
-it to, so it reads as the case does: USB-A, and a USB-C numbered after the Type-C
-port the PD controller drives, which is USB-C1 and comes from the typec class. Any
-bus that port's controller grows in host mode is counted as its own. A cable with an
+as that socket's `.port`. A socket takes the `label` of the connector the device tree
+wires it to, which is what the case says. One without a label is named for its kind,
+USB-A or USB-C, numbered after the Type-C port the PD controller drives, which comes
+from the typec class. Any bus that port's controller grows in host mode is counted as
+its own. A cable with an
 e-marker is decoded from its VDOs, which only the VCONN source can read.
 
 Most of it is sysfs, readable by anyone. Two things are not there:
@@ -502,6 +503,17 @@ def connector(port: pathlib.Path) -> pathlib.Path | None:
     return None
 
 
+def suppliers(port: pathlib.Path) -> list[str]:
+    """The platform devices a Type-C port depends on: its USB controller and PHY. A
+    `supplier:` link leads to the device link, whose own `supplier` is the device."""
+    return [os.path.realpath(link / "supplier") for link in port.glob("supplier:platform:*")]
+
+
+def label(node: pathlib.Path) -> str:
+    """A device tree node's `label`, the name printed beside the connector."""
+    return clean(read(node / "label").strip("\0"))
+
+
 def scan() -> list[Entry]:
     sockets: dict[str, Entry] = {}
     internal: list[Entry] = []
@@ -512,8 +524,8 @@ def scan() -> list[Entry]:
         entry = Entry("", "typec")
         entry.typec = port
         typecs.append(entry)
-        for link in port.glob("supplier:platform:*"):
-            controllers[os.path.realpath(link)] = entry
+        for supplier in suppliers(port):
+            controllers[supplier] = entry
 
     def typec_of(hub: str):
         where = os.path.realpath(DEVICES / hub)
@@ -566,8 +578,9 @@ def scan() -> list[Entry]:
     for root in roots:
         walk(root, None)
 
-    # Named for the connector, numbered only where a board has more than one of a
-    # kind, and the Type-C port the PD controller drives is the first C.
+    # Named for the connector's label, or failing one for its kind, numbered only where
+    # a board has more than one of a kind, and the Type-C port the PD controller
+    # drives is the first C.
     lettered = {"C": list(typecs), "A": [], "B": []}
     unknown = []
     for entry in sockets.values():
@@ -580,6 +593,11 @@ def scan() -> list[Entry]:
             entry.name = f"USB-{letter}" + (f"{i + 1}" if len(group) > 1 else "")
     for i, entry in enumerate(unknown):
         entry.name = f"USB {i + 1}"
+    for entry in typecs:
+        entry.name = label(entry.typec / "device" / "of_node" / "connector") or entry.name
+    for entry in sockets.values():
+        if entry.connector:
+            entry.name = label(entry.connector) or entry.name
 
     def flat(entry: Entry) -> list[Entry]:
         out = [entry]
@@ -783,8 +801,8 @@ class Analyzer:
             if entry.typec:
                 names[entry.typec.name] = entry
                 names[os.path.basename(os.path.realpath(entry.typec / "device"))] = entry
-                for link in entry.typec.glob("supplier:platform:*"):
-                    names[os.path.basename(os.path.realpath(link))] = entry
+                for supplier in suppliers(entry.typec):
+                    names[os.path.basename(supplier)] = entry
         return names
 
     def owner(self, token: str, names: dict[str, Entry]) -> Entry | None:
@@ -1096,8 +1114,7 @@ class Analyzer:
 
     def gadget_rows(self, port: pathlib.Path) -> list[dict]:
         """What this side looks like to a host, when the port is a device."""
-        controllers = {os.path.basename(os.path.realpath(link))
-                       for link in port.glob("supplier:platform:*")}
+        controllers = {os.path.basename(s) for s in suppliers(port)}
         udcs = [u for u in UDC.glob("*") if u.name in controllers] or list(UDC.glob("*"))
         if not udcs:
             return []
