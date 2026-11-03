@@ -14,7 +14,8 @@ the device shows it. Anything plugged in behind a hub in a socket is listed afte
 as that socket's `.port`. A socket is named for the connector the device tree wires
 it to, so it reads as the case does: USB-A, and a USB-C numbered after the Type-C
 port the PD controller drives, which is USB-C1 and comes from the typec class. Any
-bus that port's controller grows in host mode is counted as its own.
+bus that port's controller grows in host mode is counted as its own. A cable with an
+e-marker is decoded from its VDOs, which only the VCONN source can read.
 
 Most of it is sysfs, readable by anyone. Two things are not there:
 
@@ -92,6 +93,15 @@ SVIDS = {"ff01": "DisplayPort", "8087": "Thunderbolt"}
 OPERATION = {"default": "default USB", "1.5A": "Type-C 1.5A", "3.0A": "Type-C 3A",
              "usb_power_delivery": "USB PD"}
 
+# Cable makers usb.ids does not list, since they make no USB device of their own.
+CABLE_VENDORS = {"291a": "Anker"}
+# The Cable VDO's fields, PD 3.x layout: plug, current, highest speed, maximum VBUS.
+CABLE_PLUGS = {0: "Type-A", 1: "Type-B", 2: "Type-C", 3: "captive"}
+CABLE_CURRENTS = {1: 3, 2: 5}
+CABLE_SPEEDS = {0: "USB 2.0 only", 1: "5Gbps USB 3.2 Gen1", 2: "10Gbps USB 3.2 Gen2",
+                3: "40Gbps USB4 Gen3", 4: "80Gbps USB4 Gen4"}
+CABLE_VOLTS = {0: 20, 1: 30, 2: 40, 3: 50}
+
 USBDEVFS_CONTROL = 0xC0185500
 BOS_TYPE = 0x0F
 BOS_CAPS = {
@@ -127,7 +137,7 @@ NODES = {"block": "Disk", "net": "Network", "tty": "Serial", "sound": "Sound",
          "hidraw": "HID raw", "video4linux": "Video", "usbmisc": "Misc", "bluetooth": "BT"}
 
 # Sections the right soft key jumps between: the heading, and the word on the key.
-SECTIONS = {"Capabilities": "Caps", "Power": "Power", "Gadget": "Gadget",
+SECTIONS = {"Capabilities": "Caps", "Power": "Power", "Cable": "Cable", "Gadget": "Gadget",
             "Alt modes": "Modes", "Interfaces": "Ifaces", "Ports": "Ports",
             "Errors": "Errors"}
 
@@ -839,6 +849,7 @@ class Analyzer:
         rows += self.heading("Power")
         rows += self.power_rows(entry, device)
         if entry.typec:
+            rows += self.cable_rows(entry.typec)
             rows += self.gadget_rows(entry.typec)
             rows += self.altmode_rows(entry.typec)
         if device:
@@ -1011,6 +1022,76 @@ class Analyzer:
             rows.append(row(f"Flipper sink {i + 1}", pdo, dim=True))
         for i, pdo in enumerate(pdos(ours / "source-capabilities")):
             rows.append(row(f"Flipper source {i + 1}", pdo, dim=True))
+        return rows
+
+    def cable_rows(self, port: pathlib.Path) -> list[dict]:
+        """The cable's e-marker, decoded from the VDOs its Discover Identity answered
+        with. Only the VCONN source may talk to the cable, so with the partner giving
+        VCONN there is nothing to read."""
+        if not (port.parent / f"{port.name}-partner").exists():
+            return []
+        rows = self.heading("Cable")
+        cable = port.parent / f"{port.name}-cable"
+        identity = cable / "identity"
+
+        def vdo(name: str) -> int:
+            try:
+                return int(read(identity / name), 16)
+            except ValueError:
+                return 0
+
+        header = vdo("id_header")
+        if not header:
+            vconn = read(port / "vconn_source") == "yes"
+            return rows + [row("Cable", "no e-marker" if vconn else "not read, no VCONN")]
+        cable_vdo, product = vdo("product_type_vdo1"), vdo("product")
+        vid = f"{header & 0xFFFF:04x}"
+        pd3 = number(read(cable / "usb_power_delivery_revision")) >= 3
+        active = (header >> 27) & 7 == 4
+        kind = "active" if active else "passive"
+        if header & (1 << 26):
+            kind += ", modal"
+        rows.append(row("Type", f"{kind}, {CABLE_PLUGS[(cable_vdo >> 18) & 3]} plug"))
+        rows.append(row("Maker", IDS.vendor(vid)[0] or CABLE_VENDORS.get(vid, f"VID {vid}")))
+        rows.append(row("ID", f"{vid}:{product >> 16:04x}"))
+        speed = cable_vdo & 7
+        rows.append(row("Speed", CABLE_SPEEDS.get(speed, f"speed {speed}")))
+        amps = CABLE_CURRENTS.get((cable_vdo >> 5) & 3)
+        rows.append(row("Current", f"{amps}A" if amps else "-"))
+        epr = pd3 and bool(cable_vdo & (1 << 17))
+        volts = CABLE_VOLTS[(cable_vdo >> 9) & 3] if pd3 else 20
+        if pd3:
+            rows.append(row("Max VBUS", f"{volts}V"))
+        # EPR tops out at 48V, which a 50V cable carries.
+        if amps:
+            rows.append(row("Power", f"{(min(volts, 48) if epr else 20) * amps}W"))
+        if pd3:
+            rows.append(row("EPR", "yes" if epr else "no"))
+        latency = (cable_vdo >> 13) & 0xF
+        if latency == 1:
+            length = "<10ns, ~1m"
+        elif latency <= 7 and latency:
+            length = f"{(latency - 1) * 10}-{latency * 10}ns, ~{latency}m"
+        elif latency == 8:
+            length = ">70ns, >7m"
+        elif latency > 8:
+            length = f"{(latency - 8) * 1000}ns, ~{(latency - 8) * 200}m"
+        else:
+            length = "-"
+        rows.append(row("Length", length))
+        ends = (cable_vdo >> 11) & 3
+        if active:
+            rows.append(row("Active", "both ends" if ends == 3 else "one end"))
+            rows.append(row("SBU", "no" if cable_vdo & (1 << 8) else
+                            "active" if cable_vdo & (1 << 7) else "passive"))
+            rows.append(row("VBUS through", "yes" if cable_vdo & (1 << 4) else "no"))
+        else:
+            rows.append(row("VCONN", "required" if ends & 1 else "not required"))
+        rows.append(row("PD rev", read(cable / "usb_power_delivery_revision") or "-", dim=True))
+        rows.append(row("XID", f"{vdo('cert_stat'):x}", dim=True))
+        rows.append(row("Release", f"{(product >> 8) & 0xFF:x}.{product & 0xFF:02x}", dim=True))
+        rows.append(row("HW/FW", f"{cable_vdo >> 28} / {(cable_vdo >> 24) & 0xF}", dim=True))
+        rows.append(row("VDO", f"{header:08x} {cable_vdo:08x}", dim=True))
         return rows
 
     def gadget_rows(self, port: pathlib.Path) -> list[dict]:
