@@ -60,7 +60,7 @@ export component AppWindow inherits Shell {
     // What is coming out of the speaker, and where to put it: under the last row,
     // where a line has the width of the page instead of what the app's name leaves
     // of the title bar.
-    in property <string> note;
+    in property <[string]> note;
     in property <length> note_y;
     in property <int> pressed_slot: -1;
     in property <string> play_label: "Play";
@@ -68,7 +68,7 @@ export component AppWindow inherits Shell {
     in property <bool> picking;
     in property <DropView> view;
     in property <[DropItem]> items;
-    // The dialog: mpv missing, or a stream that never came up.
+    // The dialog: a stream that never came up.
     in property <[string]> dialog;
     in property <string> dialog_left;
     in property <string> dialog_right;
@@ -111,13 +111,14 @@ export component AppWindow inherits Shell {
             y: root.rule_y;
         }
 
-        // Aligned with the rows' own titles, on the line a fifth row would have
+        // Aligned with the rows' own titles, from the line a fifth row would have
         // started on, so it keeps the page's rhythm without pretending to be a
-        // row: there is nothing here to select or change.
-        if root.note != "": Text {
+        // row: there is nothing here to select or change. Wrapped in Rust, one
+        // Text per line.
+        for line[i] in root.note: Text {
             x: FlipperTheme.drop_title_x;
-            y: root.note_y;
-            text: root.note;
+            y: root.note_y + i * FlipperTheme.item_h;
+            text: line;
             font-size: 16px;
             font-family: "HaxrCorp 4090";
             color: FlipperTheme.black;

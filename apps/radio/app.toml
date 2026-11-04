@@ -3,17 +3,11 @@
 # `audio` is what earns it the sound server, and with it the pinned sink: the stream
 # comes out of the device rather than out of whatever the desktop last plugged in.
 #
-# mpv is the player. mpg123 would do the decoding in a tenth of the size, but mpv
-# answers questions while it plays: it takes a JSON command socket, which is where
-# the output device and the station's own now-playing title come from.
+# Nothing to install: the stream is fetched, decoded and played in the binary, over
+# the sound server every profile has, so the app works the same in all of them.
 name = "Internet radio"
 # The strip the app draws itself, eight 14px frames: the row animates it while it is
 # selected, as the menu does with its own icons.
 icon = "assets/internet_radio_animated.png"
 wayland = "./target/release/radio-app"
 audio = true
-# wpctl and pw-cli are the volume: it is the speaker's own gain, reached through the
-# sound server rather than through the codec, which the app cannot open. Without them
-# the volume row would move on screen and change nothing, which is worse than an app
-# that says what it needs before it starts.
-apt = ["mpv", "wireplumber", "pipewire-bin"]

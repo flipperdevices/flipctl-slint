@@ -392,10 +392,12 @@ AppRun puts first on PATH and a library in the directory it puts first on
 `LD_LIBRARY_PATH`; an app with an AppRun of its own (`apps/doom`) points at it
 itself. glibc is never carried: a program cannot bring its own loader.
 
-What to carry is a size question. The radio's `mpv` stays in `apt`: it is in the
-Desktop image, and bundling it would drag ffmpeg's whole dependency fan-out in
-(measured: 118 packages, 177 MB extracted) for a 5 MB app. The speed test carries
-its four, about 28 MB, because none of them is in any image.
+What to carry is a size question, and the cheapest answer is often to carry no
+program at all. The radio used `mpv` from `apt`, which only the Desktop image has;
+bundling it would have dragged ffmpeg's whole dependency fan-out in (measured: 118
+packages, 177 MB extracted), so the radio now fetches, decodes and plays in its own
+binary and needs nothing. The speed test carries its four, about 28 MB, because
+none of them is in any image.
 
 ## Publishing
 
@@ -515,9 +517,9 @@ build and run as they are.
 that paints two graphs into a `Surface` and shows them through `CanvasBody`, with
 the soft keys switching pages. It needs nothing from the device but `/proc` and `/sys`.
 
-`apps/radio` is the one that runs something: four `DropLine` rows over a child mpv,
-which it starts, asks questions of over a socket and kills with itself. It is also the
-one with tests that draw: `cargo test` renders the page headlessly and reads the
+`apps/radio` is the one that streams: four `DropLine` rows over a player of its own,
+which fetches a station over HTTP or HTTPS, decodes it and plays it on the sound
+server's PulseAudio socket, as the recorder does. It is also one with tests that draw: `cargo test` renders the page headlessly and reads the
 pixels back, and `RADIO_RENDER=1 cargo test` leaves the frames in `target/render` to
 look at.
 

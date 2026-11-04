@@ -3,20 +3,24 @@
 //!
 //! Ported from the prototype's js/apps/internet_radio.js, which asked a server to
 //! run mpg123 for it and polled an API to find out what happened. There is no
-//! server here: the app starts the player itself, and everything the API answered
-//! comes either from the child process or from the socket it listens on.
+//! server here and no player to install: the stream is fetched, decoded and played
+//! in this binary, as the recorder plays its takes, so the app needs nothing on the
+//! device but the sound server every profile has.
 //!
 //! The screen is four of flipctl's dropdown lines. Each one's numbers were worked
 //! out by `flipctl_app::dropdown`, which is also where the strings were cut to the
 //! chip, so what this file does is decide what the rows say, stack them, and turn
 //! a keypress into a change.
 
-mod mpv;
-mod speaker;
+mod http;
+mod icy;
+mod outputs;
+mod player;
+mod pulse;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use flipctl_app::theme::{metric, radius, PANEL_W};
@@ -63,6 +67,41 @@ const URLS: &[(&str, &str)] = &[
     ("Naxi Radio", "http://naxi128.streaming.rs:9150/"),
 ];
 
+/// How many lines the now-playing note may take: from its first line at 97 on the
+/// item_h pitch the second ends clear of the soft keys at 130, and a third ran
+/// into them.
+const NOTE_LINES: usize = 2;
+
+/// `text` broken at spaces into at most `lines` lines of `room` pixels. A word too
+/// long for a line is cut, and whatever does not fit on the last line is cut there
+/// with "..".
+fn wrap(text: &str, room: i32, lines: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut words = text.split_whitespace().peekable();
+    while out.len() < lines {
+        let Some(first) = words.next() else { break };
+        let mut line = first.to_string();
+        while let Some(word) = words.peek() {
+            let longer = format!("{line} {word}");
+            if font::tw(&longer) > room {
+                break;
+            }
+            line = longer;
+            words.next();
+        }
+        if out.len() + 1 == lines && words.peek().is_some() {
+            let rest: Vec<&str> = words.by_ref().collect();
+            line = format!("{line} {}", rest.join(" "));
+        }
+        let cut = font::fit(&line, room);
+        out.push(match cut.strip_suffix("..") {
+            Some(kept) if cut != line => format!("{}..", kept.trim_end()),
+            _ => cut,
+        });
+    }
+    out
+}
+
 /// The volume moves in fives, which is 20 presses end to end.
 const VOLUME_STEP: i32 = 5;
 
@@ -74,14 +113,12 @@ const RULE_DY: i32 = 49;
 const RULE_AFTER: usize = 3;
 const RULE_PAD_AFTER: i32 = 1;
 
-/// The output the app plays to when it asks for none: the sink flipctl pinned for
-/// it, which is the panel's own speaker.
-const DEFAULT_DEVICE: &str = "Default";
+/// What the sink flipctl pinned is called on the row, as the recorder calls it.
+const SPEAKER: &str = "Speaker";
 
 /// What the Audio device row says until the outputs are known, as the prototype's
-/// own picker says it while its request is in flight. Asking mpv what it can play
-/// to means starting mpv, which takes 2.3 seconds on the device: long enough that
-/// doing it before the first frame would show the user a blank panel.
+/// own picker says it while its request is in flight. They are asked for off the
+/// thread that draws, so the first frame does not wait for the sound server.
 const ASKING: &str = "Updating...";
 
 /// The rows, in the order they appear.
@@ -109,6 +146,42 @@ fn rule_y() -> i32 {
     BODY_TOP + RULE_DY
 }
 
+fn pinned() -> String {
+    pulse::pinned()
+}
+
+/// The sound server's sinks, named and ordered as the recorder has them: the
+/// pinned sink first as Speaker, then HDMI, then DisplayPort, then anything else under its
+/// own description. The speaker is there even if it is not listed, since that is
+/// where the app plays by default.
+fn outputs(devices: Vec<(String, String)>) -> Vec<(String, String)> {
+    let pinned = pinned();
+    let mut others: Vec<_> = devices
+        .into_iter()
+        .filter(|(id, _)| *id != pinned)
+        .map(|(id, description)| {
+            let (rank, label) = label(&id, description);
+            (rank, id, label)
+        })
+        .collect();
+    others.sort_by_key(|(rank, _, _)| *rank);
+    std::iter::once((pinned, SPEAKER.to_string()))
+        .chain(others.into_iter().map(|(_, id, label)| (id, label)))
+        .collect()
+}
+
+/// What an output other than the speaker is called, and where it sorts.
+fn label(id: &str, description: String) -> (usize, String) {
+    let lower = id.to_ascii_lowercase();
+    if lower.contains("hdmi") {
+        (0, "HDMI".into())
+    } else if lower.contains("-dp") || lower.contains("displayport") {
+        (1, "DisplayPort".into())
+    } else {
+        (2, description)
+    }
+}
+
 fn url(station: &str) -> Option<&'static str> {
     URLS.iter().find(|(name, _)| *name == station).map(|(_, url)| *url)
 }
@@ -119,24 +192,30 @@ struct Radio {
     /// was left on rather than to the first one in its list.
     stations: Vec<usize>,
     volume: i32,
-    /// What mpv says it can play to, as `(what to pass it, what to show)`.
+    /// Where the stream can go, as `(sink name, what to show)`. Empty
+    /// until the sound server has answered, and never empty after.
     devices: Vec<(String, String)>,
-    /// The thread asking it, while it is still asking.
-    asking: Option<Receiver<Vec<(String, String)>>>,
-    /// 0 is the pinned sink, and the rest index `devices`.
+    /// Each new list of them, from the thread watching the sound server.
+    watching: Option<Receiver<Vec<(String, String)>>>,
+    /// Which of `devices`. 0 is the pinned sink, which [`outputs`] puts first.
     device: usize,
     selected: usize,
     /// The option highlighted in the open picker, which is always the selected
     /// row's own.
     picking: Option<usize>,
-    player: Option<mpv::Player>,
+    player: Option<player::Player>,
+    /// The sound server, for the volume and for moving the stream. Opened again
+    /// after a failure, so a server that restarted is found again.
+    control: Option<pulse::Conn>,
+    /// Whether to reach the sound server at all, which the tests do not.
+    online: bool,
     /// The station a stream was started for, whether or not it came up.
     playing: Option<String>,
     /// The title the station is broadcasting, when it broadcasts one.
     now: String,
     /// True from the moment a stream is started until sound actually comes out of
     /// it. The player being up is not the same as the stream being up: an
-    /// unreachable host leaves mpv running and waiting.
+    /// unreachable host leaves it waiting.
     connecting: bool,
     /// The station a stream was wanted for and never arrived from.
     failed: Option<String>,
@@ -144,32 +223,52 @@ struct Radio {
 
 impl Radio {
     fn new() -> Self {
-        // Off the thread that draws, so the first frame does not wait for mpv to
-        // start, enumerate and exit. The answer is picked up by the next tick.
-        let (tx, rx) = mpsc::channel();
-        std::thread::Builder::new()
-            .name("outputs".into())
-            .spawn(move || {
-                let _ = tx.send(mpv::devices());
-            })
-            .expect("spawn outputs");
         Self {
             city: 0,
             stations: vec![0; CITIES.len()],
-            // What the machine is set to, asked rather than assumed: the row is the
-            // speaker's gain, and a number of our own would be a guess about it.
-            volume: speaker::volume().unwrap_or(50),
+            // Until the server has said: see `connect`.
+            volume: 50,
             devices: Vec::new(),
-            asking: Some(rx),
+            watching: None,
             device: 0,
             selected: 0,
             picking: None,
             player: None,
+            control: None,
+            online: false,
             playing: None,
             now: String::new(),
             connecting: false,
             failed: None,
         }
+    }
+
+    /// Reach the sound server: the volume as the machine has it, asked rather than
+    /// assumed, and the outputs from now on. Kept out of `new` so the tests owe
+    /// nothing to the machine they run on.
+    fn connect(&mut self) {
+        self.online = true;
+        let sink = self.sink();
+        if let Some(volume) = self.control(|c| Ok(c.sink_volume(&sink))).flatten() {
+            self.volume = volume;
+        }
+        self.watching = Some(outputs::watch());
+    }
+
+    /// One request on the control connection, opening it first if need be. A
+    /// connection that fails is dropped, and the next request opens another.
+    fn control<T>(&mut self, ask: impl FnOnce(&mut pulse::Conn) -> std::io::Result<T>) -> Option<T> {
+        if !self.online {
+            return None;
+        }
+        if self.control.is_none() {
+            self.control = pulse::Conn::open().ok();
+        }
+        let answer = ask(self.control.as_mut()?);
+        if answer.is_err() {
+            self.control = None;
+        }
+        answer.ok()
     }
 
     fn city_stations(&self) -> &'static [&'static str] {
@@ -190,10 +289,8 @@ impl Radio {
             Row::Volume => Vec::new(),
             // None at all until they are known, which is what stops the chevrons
             // and Ok from offering a choice between one thing and itself.
-            Row::Device if self.asking.is_some() => Vec::new(),
-            Row::Device => std::iter::once(DEFAULT_DEVICE.to_string())
-                .chain(self.devices.iter().map(|(_, label)| label.clone()))
-                .collect(),
+            Row::Device if self.devices.is_empty() => Vec::new(),
+            Row::Device => self.devices.iter().map(|(_, label)| label.clone()).collect(),
         }
     }
 
@@ -210,7 +307,7 @@ impl Radio {
     fn value(&self, row: Row) -> String {
         match row {
             Row::Volume => format!("{}%", self.volume),
-            Row::Device if self.asking.is_some() => ASKING.to_string(),
+            Row::Device if self.devices.is_empty() => ASKING.to_string(),
             row => self.options(row).get(self.current(row)).cloned().unwrap_or_default(),
         }
     }
@@ -237,28 +334,60 @@ impl Radio {
             }
             Row::Volume => {}
             Row::Device => {
-                self.device = index.min(self.devices.len());
-                // mpv reopens its output when told, so the stream moves without a
-                // gap the user has to hear.
-                let device = self.device_id().unwrap_or("auto").to_string();
-                if let Some(player) = self.player.as_ref() {
-                    player.set("audio-device", &format!("\"{device}\""));
-                }
+                self.device = index.min(self.devices.len().saturating_sub(1));
+                self.route();
             }
         }
     }
 
-    /// What to pass mpv for the chosen output, or nothing for the pinned sink.
-    fn device_id(&self) -> Option<&str> {
-        let index = self.device.checked_sub(1)?;
-        self.devices.get(index).map(|(id, _)| id.as_str())
+    /// Move the stream to the chosen output. The server moves a playing stream
+    /// without a gap the user has to hear, and the volume row becomes that
+    /// output's.
+    fn route(&mut self) {
+        let sink = self.sink();
+        if let Some(index) = self.player.as_ref().and_then(player::Player::index) {
+            self.control(|c| c.move_stream(index, &sink));
+        }
+        if let Some(volume) = self.control(|c| Ok(c.sink_volume(&sink))).flatten() {
+            self.volume = volume;
+        }
     }
 
-    /// The volume is the speaker's own gain, not the player's, so it moves whether
+    /// A new list of outputs. The chosen one stays chosen while it is there; when
+    /// it goes, the stream comes back to the speaker rather than following the
+    /// server's default, which is usually another display.
+    fn set_outputs(&mut self, listed: Vec<(String, String)>) {
+        let was = self.sink();
+        self.devices = outputs(listed);
+        match self.devices.iter().position(|(id, _)| *id == was) {
+            Some(index) => self.device = index,
+            None => {
+                self.device = 0;
+                self.route();
+            }
+        }
+        // An open picker stays on a row that exists.
+        if ROWS[self.selected] == Row::Device {
+            let last = self.devices.len() - 1;
+            self.picking = self.picking.map(|p| p.min(last));
+        }
+    }
+
+    /// The sink the stream plays on: the chosen output, or the pinned sink until
+    /// the outputs are known. Always named, never left to the server's default,
+    /// which is often a display.
+    fn sink(&self) -> String {
+        self.devices.get(self.device).map_or_else(pinned, |(id, _)| id.clone())
+    }
+
+    /// The volume is the sink's own gain, not the player's, so it moves whether
     /// anything is playing or not and stays where it was left afterwards.
     fn adjust_volume(&mut self, delta: i32) {
         self.volume = (self.volume + delta).clamp(0, 100);
-        speaker::set_volume(self.volume);
+        // Failure is silent on purpose: the row has already moved, and a dialog in
+        // front of somebody pressing a volume key would say nothing they can act on.
+        let (sink, volume) = (self.sink(), self.volume);
+        self.control(|c| c.set_sink_volume(&sink, volume));
     }
 
     /// Start the current station, replacing whatever was playing.
@@ -272,16 +401,14 @@ impl Radio {
         // two players and two streams on the same speaker.
         self.player = None;
         self.now.clear();
-        match mpv::Player::start(url, self.device_id()) {
+        match player::Player::start(url, &self.sink()) {
             Ok(player) => {
                 self.player = Some(player);
                 self.playing = Some(station);
                 self.connecting = true;
             }
-            // mpv is declared in the manifest, so flipctl installed it before the
-            // app was launched. Missing anyway means something is wrong with the
-            // machine rather than with the station, and the dialog says what
-            // happened either way.
+            // Only a thread that could not be started ends up here, which is the
+            // machine rather than the station; the dialog says what happened.
             Err(_) => {
                 self.playing = None;
                 self.connecting = false;
@@ -312,22 +439,19 @@ impl Radio {
     ///
     /// The prototype could only ask whether mpg123 was still running, so it gave a
     /// stream 3.5 seconds to prove itself and called anything else a failure.
-    /// `time-pos` is a better question than a timer: it is the position of the
-    /// audio being played, so it appears when sound does. Which of the two things
-    /// that can go wrong has gone wrong is then plain, and neither is a guess:
+    /// Sound reaching the server is a better question than a timer. Which of the
+    /// two things that can go wrong has gone wrong is then plain, and neither is a
+    /// guess:
     ///
-    ///   * a URL that answers with something unplayable, or does not answer at
-    ///     all, ends mpv. Measured: a 404 exits inside five seconds.
-    ///   * a host that cannot be reached leaves mpv up and waiting, with no
-    ///     position, for as long as its own timeouts take. Nothing has failed yet,
+    ///   * a URL that answers with an error or with something that is not MP3,
+    ///     or a stream that stops, ends the player.
+    ///   * a host that is slow to answer leaves it waiting, for as long as the
+    ///     connect and read timeouts in http.rs allow. Nothing has failed yet,
     ///     and saying so would be a lie; the bar says it is connecting instead.
     fn tick(&mut self) {
-        // The outputs, if the thread that went to ask has come back.
-        if let Some(rx) = self.asking.as_ref() {
-            if let Ok(devices) = rx.try_recv() {
-                self.devices = devices;
-                self.asking = None;
-            }
+        // The outputs, if they have changed. Only the newest list matters.
+        if let Some(listed) = self.watching.as_ref().and_then(|rx| rx.try_iter().last()) {
+            self.set_outputs(listed);
         }
         let Some(player) = self.player.as_mut() else {
             return;
@@ -344,15 +468,11 @@ impl Radio {
             }
             return;
         }
-        self.connecting = player.get("time-pos").is_none();
+        self.connecting = !player.started();
         // The station's own title, which most of them broadcast and some do not.
         // Not read while connecting: a title out of a player that has not made a
         // sound yet would be a claim that it is playing.
-        self.now = if self.connecting {
-            String::new()
-        } else {
-            player.get("metadata/by-key/icy-title").unwrap_or_default()
-        };
+        self.now = if self.connecting { String::new() } else { player.title() };
     }
 
     /// The rows as the component draws them.
@@ -396,12 +516,16 @@ impl Radio {
     /// Under the last row rather than in the title bar, so the line has the page's
     /// full width. A station's title is the longest string on this screen and the
     /// bar could only spare what the app's name left of it, which cut most of them.
-    fn note(&self) -> String {
+    ///
+    /// Wrapped at spaces onto as many lines as clear the soft keys, and cut with
+    /// ".." only on the last of them: a title is often an artist, a song and a
+    /// programme, and one line kept only the first of the three.
+    fn note(&self) -> Vec<String> {
         let Some(station) = self.playing.as_ref() else {
-            return String::new();
+            return Vec::new();
         };
         if self.connecting {
-            return "Connecting...".to_string();
+            return vec!["Connecting...".to_string()];
         }
         let what = if self.now.is_empty() { station.as_str() } else { self.now.as_str() };
         // Transliterated, because a station's title is written in the alphabet of
@@ -412,10 +536,11 @@ impl Radio {
         // The page's own margins: the rows' title inset on the left and the rule's
         // inset on the right.
         let room = PANEL_W as i32 - metric::DROP_TITLE_X - metric::DROP_RULE_PAD_X;
-        font::fit(&font::ascii(&format!("Playing: {what}")), room)
+        wrap(&font::ascii(&format!("Playing: {what}")), room, NOTE_LINES)
     }
 
-    /// Where that line sits: the line a fifth row would have started on.
+    /// Where its first line sits: the line a fifth row would have started on. The
+    /// rest follow on the item_h pitch.
     fn note_y() -> i32 {
         row_y(ROWS.len()) + metric::DROP_TOP_PAD
     }
@@ -446,7 +571,8 @@ fn apply(ui: &AppWindow, state: &Radio) {
     ui.set_rule_y(rule_y() as f32);
     ui.set_sel_y(row_y(state.selected) as f32);
     ui.set_selector(state.picking.is_none() && state.failed.is_none());
-    ui.set_note(state.note().into());
+    let note: Vec<slint::SharedString> = state.note().into_iter().map(Into::into).collect();
+    ui.set_note(ModelRc::new(VecModel::from(note)));
     ui.set_note_y(Radio::note_y() as f32);
     ui.set_play_label(if state.playing.is_some() { "Stop".into() } else { "Play".into() });
     ui.set_dialog(ModelRc::new(VecModel::from(state.dialog())));
@@ -549,7 +675,9 @@ fn key(state: &mut Radio, key: Key) -> bool {
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
-    let state = Rc::new(RefCell::new(Radio::new()));
+    let mut radio = Radio::new();
+    radio.connect();
+    let state = Rc::new(RefCell::new(radio));
     apply(&ui, &state.borrow());
 
     // The panel's own bar, read here rather than handed over: an app has the same
@@ -662,15 +790,15 @@ mod tests {
     }
 
     /// A state that owes nothing to the machine the test runs on: the device list
-    /// comes from mpv, which is not here.
+    /// comes from the sound server, which is not here.
     fn radio() -> Radio {
         Radio {
-            devices: vec![
-                ("pipewire/alsa_output.platform-sound.stereo-fallback".into(), "Panel Speaker".into()),
-                ("pipewire/alsa_output.hdmi-stereo".into(), "Digital Stereo (HDMI)".into()),
-            ],
-            // Answered, so the tests are not racing a thread that starts mpv.
-            asking: None,
+            devices: outputs(vec![
+                ("alsa_output.platform-sound.stereo-fallback".into(), "Panel Speaker".into()),
+                ("alsa_output.hdmi-stereo".into(), "Digital Stereo (HDMI)".into()),
+            ]),
+            // Not watching, so the tests are not racing the machine's sound server.
+            watching: None,
             ..Radio::new()
         }
     }
@@ -778,37 +906,51 @@ mod tests {
     #[test]
     fn the_page_says_what_is_playing() {
         let mut state = radio();
-        assert_eq!(state.note(), "", "nothing is playing");
+        assert!(state.note().is_empty(), "nothing is playing");
 
         state.playing = Some("Heart London".into());
         state.connecting = true;
-        assert_eq!(state.note(), "Connecting...", "no sound yet, so no claim of one");
+        assert_eq!(state.note(), ["Connecting..."], "no sound yet, so no claim of one");
 
         state.connecting = false;
-        assert_eq!(state.note(), "Playing: Heart London");
+        assert_eq!(state.note(), ["Playing: Heart London"]);
 
         state.now = "Jamiroquai - Cosmic Girl".into();
-        assert_eq!(state.note(), "Playing: Jamiroquai - Cosmic Girl");
+        assert_eq!(state.note(), ["Playing: Jamiroquai - Cosmic Girl"]);
         shot("playing", &state);
 
         // A Cyrillic title, which is what Saratov and Belgrade send: drawable
         // letters rather than the row of question marks the fonts would give.
         state.now = "ДДТ - Что такое осень".into();
-        assert_eq!(state.note(), "Playing: DDT - Chto takoe osen");
+        assert_eq!(state.note(), ["Playing: DDT - Chto takoe osen"]);
         shot("cyrillic", &state);
 
         // Cut rather than run off the edge of the page, but with the whole width
         // to use: a title the title bar would have cut in half now fits.
         state.now = "Jamiroquai - Virtual Insanity".into();
-        assert_eq!(state.note(), "Playing: Jamiroquai - Virtual Insanity");
+        assert_eq!(state.note(), ["Playing: Jamiroquai - Virtual Insanity"]);
         let room = PANEL_W as i32 - metric::DROP_TITLE_X - metric::DROP_RULE_PAD_X;
-        state.now = "A very long title of the kind a station sends when it is being thorough".into();
-        assert!(state.note().ends_with(".."), "{}", state.note());
-        assert!(font::tw(&state.note()) <= room, "{}", font::tw(&state.note()));
+        // A long title wraps at spaces, every line inside the page.
+        state.now = "Dado Polumenta - Ljubavi moja (ft Elitni odredi) [Live at the Sava Centar]".into();
+        let lines = state.note();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.join(" "), format!("Playing: {}", state.now));
+        assert!(lines.iter().all(|l| font::tw(l) <= room), "{lines:?}");
+        shot("playing-long", &state);
 
-        // Clear of the last row's chip, and clear of the soft bar under it.
+        // Longer than every line there is: cut on the last of them.
+        state.now = "A title of the kind a station sends when it is being thorough. ".repeat(4);
+        let lines = state.note();
+        assert_eq!(lines.len(), NOTE_LINES, "{lines:?}");
+        assert!(lines[NOTE_LINES - 1].ends_with(".."), "{lines:?}");
+        assert!(!lines[NOTE_LINES - 1].ends_with(" .."), "{lines:?}");
+        assert!(lines.iter().all(|l| font::tw(l) <= room), "{lines:?}");
+        shot("playing-longest", &state);
+
+        // Clear of the last row's chip, and the last line clear of the soft bar.
         assert!(Radio::note_y() > row_y(ROWS.len() - 1) + metric::DROP_CHIP_H);
-        assert!(Radio::note_y() + metric::DROP_ROW_H < theme::PANEL_H as i32 - metric::BUTTON_H);
+        let last = Radio::note_y() + (NOTE_LINES as i32 - 1) * metric::ITEM_H;
+        assert!(last + metric::DROP_ROW_H <= theme::PANEL_H as i32 - metric::BUTTON_H, "{last}");
     }
 
     /// Stopping ends the player, and with it every claim on screen about what is
@@ -908,27 +1050,69 @@ mod tests {
         key(&mut state, Key::Ok);
         assert_eq!(state.picking, Some(0));
         key(&mut state, Key::Down);
-        key(&mut state, Key::Down);
-        assert_eq!(state.picking, Some(2));
+        assert_eq!(state.picking, Some(1));
         key(&mut state, Key::Ok);
         assert_eq!(state.picking, None);
-        assert_eq!(state.value(Row::Device), "Digital Stereo (HDMI)");
-        assert_eq!(state.device_id(), Some("pipewire/alsa_output.hdmi-stereo"));
+        assert_eq!(state.value(Row::Device), "HDMI");
+        assert_eq!(state.sink(), "alsa_output.hdmi-stereo");
 
         key(&mut state, Key::Ok);
         key(&mut state, Key::Up);
         key(&mut state, Key::Back);
         assert_eq!(state.picking, None);
-        assert_eq!(state.value(Row::Device), "Digital Stereo (HDMI)", "back changed it");
+        assert_eq!(state.value(Row::Device), "HDMI", "back changed it");
     }
 
-    /// The first option is the sink flipctl pinned, which is what passing mpv no
-    /// device at all means.
+    /// The first option is the sink flipctl pinned, once and called Speaker, and
+    /// it is named to the server rather than left to the server's default.
     #[test]
-    fn the_default_output_asks_for_nothing() {
-        let state = radio();
-        assert_eq!(state.value(Row::Device), DEFAULT_DEVICE);
-        assert_eq!(state.device_id(), None);
+    fn the_first_output_is_the_pinned_speaker() {
+        let mut state = radio();
+        assert_eq!(state.options(Row::Device), [SPEAKER, "HDMI"]);
+        assert_eq!(state.value(Row::Device), SPEAKER);
+        assert_eq!(state.sink(), pinned());
+        state.choose(Row::Device, 1);
+        assert_eq!(state.sink(), "alsa_output.hdmi-stereo");
+    }
+
+    /// Speaker, HDMI, DisplayPort and then the rest, whatever order the server lists them
+    /// in, under the recorder's names.
+    #[test]
+    fn outputs_are_named_and_ordered_as_the_recorder_has_them() {
+        let listed = vec![
+            ("bluez_output.AA_BB.1".into(), "Headphones".into()),
+            ("alsa_output.platform-dp0-sound.stereo-fallback".into(), "DisplayPort Digital Output".into()),
+            ("alsa_output.platform-sound.stereo-fallback".into(), "On-board NAU8822 Analog Output".into()),
+            ("alsa_output.platform-hdmi-sound.pro-output-0".into(), "HDMI Digital Output".into()),
+        ];
+        let labels: Vec<String> = outputs(listed.clone()).into_iter().map(|(_, label)| label).collect();
+        assert_eq!(labels, [SPEAKER, "HDMI", "DisplayPort", "Headphones"]);
+
+        // The longest of the names, on its chip and in the picker.
+        let mut state = radio();
+        state.set_outputs(listed);
+        state.selected = 3;
+        state.choose(Row::Device, 2);
+        assert_eq!(state.value(Row::Device), "DisplayPort");
+        shot("output-dp", &state);
+        state.picking = Some(2);
+        shot("output-dp-picker", &state);
+    }
+
+    /// The chosen output stays chosen when the list changes around it, and one
+    /// that goes sends the stream back to the speaker.
+    #[test]
+    fn a_new_list_keeps_the_choice_while_it_is_there() {
+        let mut state = radio();
+        state.choose(Row::Device, 1);
+        let hdmi = ("alsa_output.hdmi-stereo".to_string(), "Digital Stereo (HDMI)".to_string());
+        let dp = ("alsa_output.platform-dp0-sound.stereo-fallback".to_string(), "DisplayPort".to_string());
+        state.set_outputs(vec![dp.clone(), hdmi]);
+        assert_eq!(state.sink(), "alsa_output.hdmi-stereo");
+        assert_eq!(state.device, 1);
+        state.set_outputs(vec![dp]);
+        assert_eq!(state.sink(), pinned());
+        assert_eq!(state.value(Row::Device), SPEAKER);
     }
 
     /// Until the outputs are known the row says so and offers nothing, so neither
@@ -936,8 +1120,7 @@ mod tests {
     #[test]
     fn the_output_row_says_it_is_still_asking() {
         let mut state = radio();
-        let (_tx, rx) = mpsc::channel();
-        state.asking = Some(rx);
+        state.devices.clear();
         assert_eq!(state.value(Row::Device), ASKING);
         assert!(state.options(Row::Device).is_empty());
         state.selected = 3;

@@ -12,16 +12,25 @@ edition = "2021"
 license = "MIT"
 publish = false
 
-# The player is mpv, spoken to over its own JSON socket, so nothing here needs a
-# stream, a codec or an HTTP client. What is not free is the drawing: flipctl-app is
-# the framework, and through it the widgets, the panel's fonts and the Slint
-# software renderer.
+# Everything the app does is in this binary, as the recorder's is, so it needs
+# nothing on the device beyond the sound server: the stream is fetched here, decoded
+# here and played over the PulseAudio socket PipeWire serves. What is not small is
+# the drawing: flipctl-app is the framework, and through it the widgets, the panel's
+# fonts and the Slint software renderer.
 [dependencies]
 flipctl-app = { path = "../../crates/flipctl-app" }
 slint = { version = "1.17", default-features = false, features = ["compat-1-2", "backend-winit-wayland", "renderer-software", "std"] }
-# For one call: the player is asked to die with the app, so a stream cannot outlive
-# the window that started it.
-libc = "0.2"
+# The sound server: playback, the volume, the outputs and word of them changing.
+# Pure Rust, the same crate the recorder uses.
+pulseaudio = { version = "0.3", default-features = false }
+# The stations are MP3, decoded by the same library the recorder plays takes with,
+# compiled in.
+minimp3 = "0.6"
+# Four of the stations are https. ring rather than aws-lc-rs, which would want cmake
+# in the cross build, and Mozilla's roots compiled in, so the device needs no
+# ca-certificates for the app to trust a server.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 
 # The panel's own renderer, for the tests: they draw the page headlessly and read
 # the pixels back, which is the only way to check a layout without the device.

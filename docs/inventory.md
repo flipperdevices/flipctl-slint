@@ -181,12 +181,15 @@ writes the codec mixer, `/api/sound/outputs` lists the outputs and
 `/api/radio/install` installs the decoder. There is no server here, so each of those
 became something the app does itself, and that is where every divergence comes from.
 
-**The player is mpv, and the app owns it.** mpg123 decodes the same streams in a
-tenth of the size and cannot be asked anything while it does it. mpv takes a JSON
-command socket, which is where three rows get their answers: the volume it applies
-to a running stream, the output it can move one to, and the station's now-playing
-title. It also dies with the app (`PR_SET_PDEATHSIG`), where the prototype's server
-kept mpg123 playing after the user left the scene.
+**The player is the app, and it needs nothing installed.** The stream is fetched,
+decoded and played in the binary: an HTTP/1.0 GET with `Icy-MetaData: 1` (rustls
+for the four https stations, Mozilla's roots compiled in), minimp3 for the decoding
+and a playback stream on the PulseAudio socket PipeWire serves, which is how the
+recorder plays its takes. Every profile has `pipewire-pulse`, so the app works the
+same in all of them, Minimal included; it was mpv before, which only @Desktop has,
+and bundling that would have meant ffmpeg's whole dependency fan-out. Closing the
+app ends the stream, where the prototype's server kept mpg123 playing after the user
+left the scene.
 
 **Titles are transliterated, not shown as question marks.** The panel's fonts are
 printable ASCII, which the prototype worked around by writing every station name in
@@ -210,25 +213,29 @@ that cannot tell those from a track would put either on the panel as if it were
 one. There is no filtering for it: a station either says what is playing or says
 nothing, and nothing is what the fallback to its own name is for.
 
-**Now playing is the station's own title, not just its name.** New here, and the
-reason for choosing mpv: a line under the last row reads `Playing: <icy-title>`
+**Now playing is the station's own title, not just its name.** New here: the
+titles are taken out of the stream before the decoder sees it, and a line under the
+last row reads `Playing: <icy-title>`
 while the station sends one and falls back to its name when it does not. It went in
 the title bar first, beside the app's name, which is where the prototype puts the
 station name; moved under the rows because a title is the longest string on this
-screen and the bar could only spare 147 of the page's 245 pixels for it. Non-ASCII in a title becomes
+screen and the bar could only spare 147 of the page's 245 pixels for it. It wraps
+onto a second line, which is all that clears the soft keys, and is cut there. Non-ASCII in a title becomes
 `?` in Rust rather than at the glyph table, so what is measured is what appears.
 
-**The volume is the stream's, not the machine's.** The prototype's slider wrote the
-NAU8822 mixer through `amixer`, so it moved the whole device's output. Here it is
-mpv's own volume: it moves this stream and leaves the user's system volume alone.
-Nothing else on the panel is playing, so the two look the same on the device, and
-only this one cannot surprise somebody by turning the desktop down.
+**The volume is the output's, as the prototype's was.** The prototype's slider wrote
+the NAU8822 mixer through `amixer`. Here it is the volume of the sink being played
+on, set over the same socket: WirePlumber puts the codec's `Speaker` control behind
+the speaker sink's volume, so 100% is the amplifier's +6dB, where a stream's own
+volume only attenuates and left the radio quieter than the prototype. Switching
+output makes the row that output's.
 
-**The outputs come from mpv, and the first one is the sink flipctl pinned.** The
-prototype's server split the codec into Speaker and Headphone and hid Loopback.
-mpv's own enumeration of PipeWire sinks is what the player will actually accept, so
-that is the list, with `Default` for passing it no device at all, which leaves the
-app on the panel's speaker that `wl.rs` pinned for it.
+**The outputs are the sound server's sinks, named as the recorder names them.** The
+prototype's server split the codec into Speaker and Headphone and hid Loopback. Here
+the list is the server's sinks: the one `wl.rs` pinned first as Speaker, then HDMI,
+then DisplayPort, then anything else under its own description. The stream is always
+played on a named sink rather than the server's default, which is usually a display,
+and moving it is the server's own move, so the station does not restart.
 
 What the row shows depends on when the television was plugged in, which is a device
 quirk rather than an app one and worth writing down. Measured 2026-09-03:
@@ -247,8 +254,14 @@ quirk rather than an app one and worth writing down. Measured 2026-09-03:
     attached stays off. That is a kernel-side gap in the HDMI codec's jack
     reporting, not something the app or wireplumber can see.
 
-The app therefore lists whatever sinks exist when it starts, which is the honest
-answer to a question whose answer changes.
+The app therefore follows the sinks as they come and go, subscribed to the server's
+events for them; a sink that goes while it is chosen sends the stream back to the
+speaker.
+
+Seen 2026-11-04, with a Dell S2721QS attached at boot: the card came up in
+`pro-audio`, its stereo profile missing, and HDMI stayed silent for everything (a
+`pw-cat` tone included) while its PCM ran, until no stream had used it for long
+enough for the node to suspend. Every later use played. That is below the app too.
 
 Left alone deliberately, 2026-09-03: attach the television before the machine boots
 and HDMI audio works. The two cheap ways to paper over the hotplug case were both
@@ -260,18 +273,17 @@ the HDMI codec, in the kernel.
 
 **A stream is judged by whether sound comes out, not by a timer.** The prototype
 could only ask whether mpg123 was still running, so it gave a stream 3.5 seconds to
-prove itself and treated anything else as a failure. mpv answers a better question:
-`time-pos` is the position of the audio being played, so it appears when sound does.
-Measured on the two ways a station can fail: a URL that answers with something
-unplayable ends mpv inside five seconds, which is the dialog, and a host that cannot
-be reached leaves mpv up with no position for as long as its own timeouts take,
-which that line reports as `Connecting...` because nothing has failed yet. A stream
+prove itself and treated anything else as a failure. Here a stream is up once audio
+has reached the server. A URL that answers with an error or with something that is
+not MP3 ends the player, which is the dialog, and a host that is slow to answer
+leaves it waiting for as long as the connect and read timeouts allow, which that
+line reports as `Connecting...` because nothing has failed yet. A stream
 that dies after it was playing stops without a dialog: the button going back to Play
 is all there is to say about it.
 
 **No install dialog.** The prototype's three-state modal exists because its server
-had no package manager integration. `app.toml` declares mpv and flipctl installs it
-before the app is launched, so the case the modal covered cannot arrive.
+had to install the decoder. The decoder is in the binary here, so there is nothing
+to install and the case the modal covered cannot arrive.
 
 **The failure dialog is flipctl's own.** Same wording as the prototype, "Stream
 error" over "Could not start `<station>`", in `Modal` with `Ok` on the right soft
