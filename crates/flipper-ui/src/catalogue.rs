@@ -86,9 +86,17 @@ impl Listing {
         Some(root.join(&self.path))
     }
 
-    /// Whether it is already on the device, in any of `roots`.
+    /// Whether it is already on the device, in any of `roots`: a file at its path of
+    /// the size the catalogue publishes. A file merely being there is not enough,
+    /// since an empty or cut-off one is not the app and cannot run; that case then
+    /// offers Install, which replaces it. The size rather than the hash, because
+    /// this is asked on every redraw of the list and a bundle is megabytes.
     pub fn present(&self, roots: &[PathBuf]) -> bool {
-        roots.iter().any(|r| self.dest(r).is_some_and(|p| p.exists()))
+        roots.iter().any(|r| {
+            self.dest(r).and_then(|p| std::fs::metadata(p).ok()).is_some_and(|m| {
+                m.is_file() && m.len() > 0 && (self.size == 0 || m.len() == self.size)
+            })
+        })
     }
 
     /// Whether it is a bundle rather than a script, which decides whether the file
@@ -474,6 +482,23 @@ sha256 = "cccc"
         assert!(!root.join("Test Tools/thing.py").exists());
         assert!(!root.join("Test Tools/thing.part").exists());
         assert!(!app.present(&[root]));
+    }
+
+    /// An empty or short file at the path is not the app: it does not count as
+    /// installed, so the manager offers to install it again.
+    #[test]
+    fn an_empty_or_short_file_is_not_installed() {
+        let at = scratch("empty");
+        let root = at.join("Apps");
+        let app = served(&at, "thing-aarch64.fap.AppImage", b"ELF and a squashfs\n");
+        let landed = root.join("Test Tools/thing-aarch64.fap.AppImage");
+        std::fs::create_dir_all(landed.parent().unwrap()).unwrap();
+        std::fs::write(&landed, b"").unwrap();
+        assert!(!app.present(&[root.clone()]), "empty");
+        std::fs::write(&landed, b"ELF and").unwrap();
+        assert!(!app.present(&[root.clone()]), "cut off");
+        assert!(matches!(outcome(&app, &root), crate::fetch::Progress::Ready(_)));
+        assert!(app.present(&[root]), "replaced by the real one");
     }
 
     /// A path the catalogue may not name is refused before curl is ever started.
