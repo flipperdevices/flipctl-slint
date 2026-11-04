@@ -521,6 +521,13 @@ one with tests that draw: `cargo test` renders the page headlessly and reads the
 pixels back, and `RADIO_RENDER=1 cargo test` leaves the frames in `target/render` to
 look at.
 
+`apps/recorder` is the one that does its own sound: it speaks to the sound server's
+PulseAudio socket directly, records, encodes (LAME and libvorbis compiled in) and
+decodes and plays back in its own process, so it installs nothing. Its pages are
+`DropLine` rows and flipctl's menu, with everything else drawn from a list of frames
+and labels that `src/view.rs` positions, so its tests can read the layout as numbers
+as well as pixels (`RECORDER_RENDER=1 cargo test`).
+
 `apps/browser` is the one that owns the pad: it reads it on a thread of its own and
 drives headless Chromium over the DevTools protocol, drawing the page, the cursor and
 the minimap itself. `cargo test -- --ignored real` puts a live site through the whole

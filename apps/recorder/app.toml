@@ -1,0 +1,11 @@
+# Voice recorder: the panel's microphone or the headset jack to WAV, MP3 or OGG in
+# ~/Recordings, with the takes listed and played back on the panel.
+#
+# `audio` is what earns it the sound server, and that is all it needs from the
+# device: capture, playback and the volumes go over the server's PulseAudio socket,
+# and the encoders and decoders are compiled into the binary. The codec itself stays
+# closed to the app (the unit is `DevicePolicy=closed`).
+name = "Voice recorder"
+icon = "assets/voice_recorder.png"
+wayland = "./target/release/recorder-app"
+audio = true

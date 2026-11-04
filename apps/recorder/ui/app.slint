@@ -1,0 +1,278 @@
+// The voice recorder's screen: the recorder page, the Files list, and what opens
+// over them.
+//
+// Settings rows are flipctl's own dropdown lines and the Files list is flipctl's
+// menu, so they are the same pixels as everywhere else. What is the app's own (the
+// level meter, the recording panel, the Edit and Delete boxes and the player) is
+// drawn from two flat lists, frames and labels, positioned in Rust: src/view.rs
+// works out every number, because Slint cannot measure a string or add up a stack,
+// and a list of positioned shapes is something a test can read.
+import { FlipperTheme } from "@theme";
+import { Shell, PanelStatus } from "@app/shell.slint";
+import { StatusBar } from "@flipctl/statusbar.slint";
+import { DropLine, DropPicker, DropRow, DropItem, DropView } from "@flipctl/dropdown.slint";
+import { SelectorFrame, SoftBar } from "@flipctl/frame.slint";
+import { Modal } from "@flipctl/modal.slint";
+import { MenuBody, ListItem } from "@flipctl/list.slint";
+
+export { DropRow, DropItem, DropView, PanelStatus, ListItem }
+
+// The inks a frame or a label can take, by number, so a shape can say which
+// token it is drawn in without a colour crossing the boundary.
+//   0 black  1 white  2 status_dim  3 dialog_body  4 app_bar  5 chip_fill
+global Inks {
+    public pure function of(n: int) -> color {
+        if n == 1 { return FlipperTheme.white; }
+        if n == 2 { return FlipperTheme.status_dim; }
+        if n == 3 { return FlipperTheme.dialog_body; }
+        if n == 4 { return FlipperTheme.app_bar; }
+        if n == 5 { return FlipperTheme.chip_fill; }
+        return FlipperTheme.black;
+    }
+}
+
+// A chamfered box: filled, outlined or both. `fill` -1 is no fill.
+export struct Frame {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    radius: length,
+    fill: int,
+    stroke: bool,
+    shadow: bool,
+    // Which corners are cut; a part-filled bar keeps its right ones square.
+    square_right: bool,
+}
+
+// Text at a place. `bold` is the title face, Born2bSporty; the rest is HaxrCorp.
+export struct Label {
+    x: length,
+    y: length,
+    text: string,
+    bold: bool,
+    ink: int,
+}
+
+// A sprite, white or black, at a place. `which` 0 the record lamp, 1 the pause bars.
+export struct Sprite {
+    x: length,
+    y: length,
+    which: int,
+    white: bool,
+    opacity: float,
+}
+
+component Layer inherits Rectangle {
+    in property <[Frame]> frames;
+    in property <[Label]> labels;
+    in property <[Sprite]> sprites;
+
+    x: 0;
+    y: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    for f in root.frames: SelectorFrame {
+        x: f.x;
+        y: f.y;
+        frame_w: f.w;
+        frame_h: f.h;
+        radius: f.radius;
+        filled: f.fill >= 0;
+        fill_color: Inks.of(f.fill);
+        stroke: f.stroke;
+        stroke_color: FlipperTheme.black;
+        shadow: f.shadow;
+        round_tr: !f.square_right;
+        round_br: !f.square_right;
+    }
+
+    for s in root.sprites: Image {
+        x: s.x;
+        y: s.y;
+        source: s.which == 0
+            ? @image-url("../assets/record_circle.png")
+            : @image-url("../assets/recording_pause.png");
+        colorize: s.white ? FlipperTheme.white : FlipperTheme.black;
+        opacity: s.opacity;
+    }
+
+    for l in root.labels: Text {
+        x: l.x;
+        y: l.y;
+        text: l.text;
+        font-size: 16px;
+        font-family: l.bold ? "Born2bSportyV2" : "HaxrCorp 4090";
+        color: Inks.of(l.ink);
+    }
+}
+
+// The bar under the status bar: the app's icon and its name.
+component AppBar inherits Rectangle {
+    in property <string> name;
+
+    y: FlipperTheme.status_bar_h;
+    width: 100%;
+    height: FlipperTheme.app_bar_h;
+    background: FlipperTheme.app_bar;
+
+    Image {
+        x: FlipperTheme.app_bar_icon_x;
+        y: FlipperTheme.app_bar_icon_dy;
+        width: FlipperTheme.app_bar_icon_w;
+        height: FlipperTheme.app_bar_icon_w;
+        source: @image-url("../assets/voice_recorder.png");
+        colorize: FlipperTheme.black;
+    }
+
+    Text {
+        x: FlipperTheme.app_bar_title_x;
+        y: FlipperTheme.app_bar_title_dy;
+        text: root.name;
+        font-size: 16px;
+        font-family: "Born2bSportyV2";
+        color: FlipperTheme.black;
+    }
+}
+
+export component AppWindow inherits Shell {
+    // 0 the recorder, 1 the Files list.
+    in property <int> page;
+    in property <[string]> buttons;
+    in property <int> pressed_slot: -1;
+
+    // The recorder: its rows, the selector around one of them, and the meter and
+    // the recording panel as shapes.
+    in property <[DropRow]> rows;
+    in property <length> sel_y;
+    in property <bool> selector: true;
+    in property <[Frame]> frames;
+    in property <[Label]> labels;
+    in property <[Sprite]> sprites;
+
+    // The picker over a chip. Its title is drawn by the app, because the Format
+    // picker opens upward and the title stays on its row.
+    in property <bool> picking;
+    in property <DropView> view;
+    in property <[DropItem]> items;
+    in property <Label> pick_title;
+
+    // The Files list.
+    in property <[ListItem]> files;
+    in property <int> file_selected;
+    in property <int> file_scroll;
+    in property <bool> file_pressed;
+
+    // What opens over either page: the wash, its shapes, and soft keys of its own
+    // when it has any.
+    in property <bool> scrim;
+    in property <[Frame]> over_frames;
+    in property <[Label]> over_labels;
+    in property <[string]> over_buttons;
+
+    // An error, as flipctl's dialog.
+    in property <[string]> dialog;
+    in property <string> dialog_right;
+
+    callback keyed(string, bool);
+    key(text, down) => {
+        root.keyed(text, down);
+    }
+
+    if root.page == 0: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: FlipperTheme.white;
+
+        StatusBar {
+            x: 0;
+            y: 0;
+            battery: PanelStatus.battery;
+            charging: PanelStatus.charging;
+            wifi_connected: PanelStatus.wifi_connected;
+            wifi_quality: PanelStatus.wifi_quality;
+            ethernet: PanelStatus.ethernet;
+            recording: PanelStatus.recording;
+            modem_available: PanelStatus.modem_available;
+            access_tech: PanelStatus.access_tech;
+            modem_quality: PanelStatus.modem_quality;
+        }
+
+        AppBar {
+            name: "Voice recorder";
+        }
+
+        for row in root.rows: DropLine {
+            line: row;
+        }
+
+        Layer {
+            frames: root.frames;
+            labels: root.labels;
+            sprites: root.sprites;
+        }
+
+        if root.selector: SelectorFrame {
+            x: FlipperTheme.drop_selector_x;
+            y: root.sel_y;
+            frame_w: FlipperTheme.drop_selector_w;
+            frame_h: FlipperTheme.drop_selector_h;
+            filled: false;
+            stroke: true;
+        }
+
+        SoftBar {
+            buttons: root.buttons;
+            pressed_slot: root.pressed_slot;
+        }
+
+        if root.picking: DropPicker {
+            view: root.view;
+            items: root.items;
+        }
+
+        if root.picking: Layer {
+            labels: [root.pick_title];
+        }
+    }
+
+    if root.page == 1: MenuBody {
+        items: root.files;
+        total: root.files.length;
+        selected: root.files.length > 0 ? root.file_selected : -1;
+        scroll: root.file_scroll;
+        pressed: root.file_pressed;
+        real_frame: true;
+        buttons: root.buttons;
+        pressed_slot: root.over_buttons.length > 0 ? -1 : root.pressed_slot;
+    }
+
+    if root.page == 1: Layer {
+        labels: root.labels;
+    }
+
+    if root.scrim: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: FlipperTheme.white.with-alpha(FlipperTheme.overlay_alpha);
+    }
+
+    Layer {
+        frames: root.over_frames;
+        labels: root.over_labels;
+    }
+
+    if root.over_buttons.length > 0: SoftBar {
+        buttons: root.over_buttons;
+        pressed_slot: root.pressed_slot;
+    }
+
+    if root.dialog.length > 0: Modal {
+        lines: root.dialog;
+        left_label: "";
+        right_label: root.dialog_right;
+        pressed_slot: root.pressed_slot;
+    }
+}

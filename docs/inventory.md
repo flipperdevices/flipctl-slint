@@ -286,6 +286,71 @@ station and the volume in a module-level object so re-entering the scene finds t
 which works because the scene is torn down and the page is not. An app here is a
 process: closing it ends the process, and the state goes with it.
 
+## Voice recorder, ported 2026-11-04
+
+`js/apps/record.js` and `js/apps/voice_recorder_files.js`, transcribed into
+`apps/recorder`. The prototype asked a root server to run sox, amixer, lame, oggenc
+and `play`; an app here has neither root nor the codec (the unit is
+`DevicePolicy=closed`), and it installs nothing, so every divergence below comes
+from doing all of it in the app's own process over the sound server's socket.
+
+**Nothing is run and nothing is installed.** Capture, playback and both volumes go
+over the PulseAudio socket PipeWire serves (the pure-Rust `pulseaudio` crate). LAME
+and libvorbis encode and minimp3 and libvorbis decode, all compiled into the binary;
+a WAV is read and written directly. The manifest has no `apt`; the binary still
+links only libc, libm and libgcc_s. LAME is LGPL-3.0, added to `about.toml` for it
+alone, since there is no MP3 encoder under a permissive license.
+
+**The gain is an AGC, not the prototype's fixed 6dB.** A real take with the fixed
+gain measured -38.5dBFS RMS against a -1.6dBFS peak: the voice sat 37dB under one
+click and played back quiet at any volume. The chain is the prototype's channel and
+80Hz high-pass, then an AGC aiming the envelope at -12dBFS (up to +30dB, down to
+-12dB, held below -55dBFS so the room's hiss is not lifted between words), then a
+soft limiter from -1dBFS. LAME at VBR 4 and Vorbis at quality 0.4 are the
+prototype's `lame -V 4` and `oggenc -q 4`. Pausing stops the writing for every
+format and keeps the meter live.
+
+**Input device picks a channel; it does not change the mixer.** The built-in mic is
+on the codec's left channel and the jack on its right, so the app keeps one. The
+prototype flipped the Internal/Headset Microphone switches, which is system state an
+app may not touch. The first option reads `Built-in mic` where the prototype has
+`Build-in mic`.
+
+**Input gain is the source's volume** on the sound server, shown as a percentage on
+a slider row, like the radio's Volume. The prototype showed dB from its own amixer
+mapping.
+
+**Names are a counter, `F1-REC-001`, and there is no rename.** The prototype's
+bracket template and its keyboard editor are gone; the File name row shows the next
+name and is not selectable. Takes go to `~/Recordings`.
+
+**Lengths come from the files' own headers** (WAV data size, OGG last granule,
+LAME's Xing frame count), not from `soxi -D` per row.
+
+**Playback is a stream the app feeds**, so pause corks it and a seek moves the
+decoder and flushes the server's buffer, where the prototype killed and respawned
+`play` at an offset. The position is the server's read offset, what has actually
+come out. At the end Ok plays the take again from the start. A WAV seeks directly; MP3 and OGG decode forward to the time, from the
+start again for a seek backwards. A seek is 10s per press; the prototype's hold-to-accelerate is not
+ported. The player's Up and Down move the speaker's volume, as in the prototype.
+
+**The Files page is flipctl's own menu**, five rows under the status bar, without the
+prototype's title bar and breadcrumb (apps have no breadcrumbs). Its soft keys are
+Close, Record, Edit and Play; the prototype's Home is Close here, on both pages, as in
+the radio. The Edit box has Delete and Sort; the sort popover is replaced by Left
+and Right cycling the chip and Ok applying it.
+
+**Output device replaces the Folder row on the recorder page,** under Input device.
+The prototype's Folder row was a stub that never opened anything, and the folder is
+fixed here, so the page has a row for where a take plays instead: the speaker,
+HDMI, DP or any other sink plugged in. It is the app's own choice, not the system
+default. The recording panel still names the folder.
+
+**Background recording needs nothing of the app.** Back never reaches it, so a take
+keeps running while the app is in the background. The prototype's status-bar dot
+for a background take is not ported. Close stops a running take and finishes the
+file rather than leaving it running.
+
 ## The browser, ported 2026-09-28
 
 `js/apps/browser.js` (cf09c8c, "fake browser concept"), transcribed into
