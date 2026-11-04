@@ -30,8 +30,16 @@ from eth0 to eth1 is checked end to end: every pair from both sides, then frames
 counted in both directions, with no address or route involved. While one port is
 tested the other is powered down: left up, it renegotiates the moment its link
 drops, and its link pulses read as a busy line or a false open. A single port gets
-the same when a probe frame shows the other port is what it is cabled to, and
-otherwise the other port is left alone, since it may well be the uplink.
+the same when the other port turns out to be what it is cabled to, and otherwise
+the other port is left alone, since it may well be the uplink.
+
+Frames arriving prove nothing on their own: two cables into one switch carry them
+just as well, since the switch learns both addresses. What does is the link. With
+one port powered down, a port cabled to it loses its link and a port cabled to a
+switch keeps it (measured: kept for the whole two seconds watched). So the frames
+are only sent once that says the ports are looped, and a port is only tested once
+its own link is back: tested while it was still renegotiating with a switch, it
+read open at the port on every pair, which is the result for no cable at all.
 
 The registers are reached through the MII ioctls, which is the one way in from
 userspace and the one thing here that is not safe: the kernel polls the PHY once a
@@ -96,6 +104,10 @@ SO_TIMESTAMPNS = 35
 FRAMES = 5000
 BUSY_TRIES = 3
 QUIET_S = 0.5
+# Autonegotiation takes about three seconds; a switch can take longer.
+RELINK_S = 8
+# How long a port is watched for its link with the other port down.
+LOOP_S = 1.0
 MAGIC = b"FLIPETH"
 WARM_MAGIC = b"FLIPWRM"
 WARM_FRAMES = 1000
@@ -158,6 +170,22 @@ class Phy:
         restart = 0x0200 if self.bmcr & 0x1000 else 0
         self.paged(0, lambda: self.write(0, (self.bmcr & ~0x0800) | restart))
 
+    # The link as the PHY has it now. sysfs is the kernel's copy, polled once a
+    # second, which is too slow to see a link drop. BMSR latches a drop until it
+    # is read, so the second read is the current state.
+    def link(self):
+        self.paged(0, lambda: self.read(1))
+        return bool(self.paged(0, lambda: self.read(1)) & 0x04)
+
+    # Wait for the link to come back, for as long as autonegotiation can take.
+    def relink(self):
+        began = time.monotonic()
+        while not self.link() and not stopping:
+            if time.monotonic() - began > RELINK_S:
+                return False
+            time.sleep(0.1)
+        return True
+
     def sram(self, at):
         return self.paged(0xA43, lambda: (self.write(27, at), self.read(28))[1])
 
@@ -191,8 +219,31 @@ def carrier(port):
         return False
 
 
-# The other port, when this one is cabled straight to it: a few small frames sent
-# here and listened for there. None when either has no link or nothing arrives.
+# Whether `port` is cabled to `other`: both have a link, and powering `other` down
+# takes `port`'s away. A port to a switch keeps its link through it. `other` is
+# powered up again and waited for before this returns.
+def looped(port, other):
+    me, them = Phy(port), Phy(other)
+    if not (me.link() and them.link()):
+        return False
+    them.quiet()
+    try:
+        began = time.monotonic()
+        while time.monotonic() - began < LOOP_S:
+            if not me.link():
+                return True
+            time.sleep(0.1)
+        return False
+    finally:
+        them.wake()
+        Phy(port).relink()
+        them.relink()
+
+
+# The other port, when this one is cabled straight to it. A few small frames sent
+# here and listened for there come first, since they disturb nothing: when none
+# arrive the ports are not connected at all. When they do, the link says whether
+# the ports are cabled to each other or both to a switch.
 def peer(port):
     other = next((p for p in PEERS if p != port), None)
     if other is None or not (carrier(port) and carrier(other)):
@@ -215,11 +266,13 @@ def peer(port):
             except socket.timeout:
                 continue
             if where[2] != PACKET_OUTGOING and got[6:12] == src:
-                return other
+                break
+        else:
+            return None
     finally:
         inbox.close()
         outbox.close()
-    return None
+    return other if looped(port, other) else None
 
 
 # The fastest cluster's cores, by cpufreq. Empty when cpufreq says nothing. The
@@ -353,12 +406,17 @@ def traffic(tx, rx):
 
 def main():
     ports = [a for a in sys.argv[1:] if not a.startswith("-")]
+    had = {p: Phy(p).link() for p in ports}
     for port in ports:
         if stopping:
             return
         say(step="cable", port=port)
         near = [p for p in ports if p != port] or [peer(port)]
         others = [Phy(p) for p in near if p]
+        # A port that had a link is tested once it has it back, from the last
+        # port's test or from being the one powered down for it.
+        if had[port]:
+            Phy(port).relink()
         try:
             for other in others:
                 other.quiet()
@@ -380,6 +438,14 @@ def main():
             say(error="no link")
             return
         time.sleep(0.1)
+    # Two ports both linked to something else are not a loop, and the frames would
+    # only measure the switch between them. Asked once both links are up, whatever
+    # state the ports were in when the run began.
+    say(step="loop")
+    direct = looped(*ports)
+    say(direct=direct)
+    if not direct or stopping:
+        return
     for tx, rx in (ports, ports[::-1]):
         if stopping:
             return
@@ -471,6 +537,7 @@ class Tester:
         self.capacities: dict[str, int | None] = {}
         self.line_busy = False
         self.traffic: dict[str, dict] = {}
+        self.direct: bool | None = None
         self.state = "-"
         self.since = 0.0
         self.heard = False
@@ -498,6 +565,7 @@ class Tester:
         self.capacities = {}
         self.line_busy = False
         self.traffic = {}
+        self.direct = None
         self.heard = self.failed = False
         self.state = "starting"
         args = ["sudo", "-n", "python3", "-", *self.ports]
@@ -553,6 +621,10 @@ class Tester:
             self.line_busy |= any(busy(status) for status, _ in said["pairs"])
         elif "traffic" in said:
             self.traffic[said["traffic"]] = said
+        elif "direct" in said:
+            self.direct = said["direct"]
+        elif said.get("step") == "loop":
+            self.state = "checking loop"
         elif said.get("step") == "cable":
             self.state = f"testing {NAMES[said['port']]}"
         elif said.get("step") == "link":
@@ -570,7 +642,9 @@ class Tester:
             self.state = f"helper exit {code}" if self.heard else "sudo refused"
             return
         known = [c for c in self.capacities.values() if c is not None]
-        if not self.capacities:
+        if self.direct is False:
+            self.state = "done, ports not looped"
+        elif not self.capacities:
             self.state = "done"
         elif self.line_busy:
             self.state = "done, line busy"
@@ -608,7 +682,8 @@ class Tester:
             for tx, rx in (PORTS, PORTS[::-1]):
                 got = self.traffic.get(tx)
                 if got is None:
-                    rows.append(flipctl.pair(f"{NAMES[tx]} > {NAMES[rx]}", "-"))
+                    shown = "not looped" if self.direct is False else "-"
+                    rows.append(flipctl.pair(f"{NAMES[tx]} > {NAMES[rx]}", shown))
                     continue
                 # Frames the socket dropped because this app read too slowly arrived
                 # fine, so they are not the cable's loss.
