@@ -24,6 +24,8 @@ pub mod keyboard;
 pub mod kms;
 pub mod layout;
 pub mod log;
+pub mod mm;
+pub mod modem;
 pub mod net;
 pub mod netlink;
 pub mod nl80211;
@@ -37,6 +39,7 @@ pub mod remote;
 pub mod route_watch;
 pub mod scale;
 pub mod script;
+pub mod simsel;
 #[cfg(feature = "slint")]
 pub mod slint_render;
 pub mod status;

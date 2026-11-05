@@ -450,6 +450,14 @@ gauge_h             = 7
 # label's width decides a position.
 gauge_col           = 30
 gauge_label_gap     = 4
+# The 5G Modem screen's signal block: six bars on a 6px pitch, rising by two pixels
+# each from 2 to 12, sharing the row's bottom edge so the tallest is the row. A lit
+# bar is solid ink, an unlit one its 1px outline, so the six read as six whatever
+# the signal. 6 * 4 + 5 * 2 = 34px.
+modem_bar_w         = 4
+modem_bar_gap       = 2
+modem_bar_min_h     = 2
+modem_bar_step      = 2
 
 # Horizontal geometry from the Figma export `soft_button_bar`: 5 * 48 + 4 * 4 =
 # 256 exactly, so the slots tile evenly and both outer edges land flush. canvas.js
@@ -528,6 +536,8 @@ detail_visible_rows = 8
 # The same screen with no breadcrumb starts at detail_container_y (15), which
 # makes room for one more row: 15 + 9 * 12 = 123.
 detail_visible_rows_bare = 9
+# Bars in the 5G Modem screen's signal block.
+modem_bars = 6
 msgbox_max_chars  = 25   # MessageBox.js maxLineLength
 # Rows the visible-networks modal keeps room for while it is still scanning, or
 # once it knows there is nothing in range: the spinner and the placeholder both

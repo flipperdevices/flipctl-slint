@@ -43,13 +43,20 @@ device so it can be tried before the image carries it; the image is where they b
   `fusermount3`. Without it flipctl still runs bundles, unpacking each into `/tmp`
   per launch, and says so in the log (`no fusermount3, extracting instead`).
 - `70-flipctl-devices.rules` in `/etc/udev/rules.d/`: GPIO and SPI nodes to the
-  `gpio` group, USB devices to `plugdev`.
-- `flipctl.sysusers.conf` as `/etc/sysusers.d/flipctl.conf`: the `gpio` group. The
-  unit names it in `SupplementaryGroups`, and a unit naming a missing group does not
-  start.
+  `gpio` group, USB devices to `plugdev`, `/dev/rfkill` to `rfkill`.
+- `flipctl.sysusers.conf` as `/etc/sysusers.d/flipctl.conf`: the `gpio` and `rfkill`
+  groups. The unit names both in `SupplementaryGroups`, and a unit naming a missing
+  group does not start.
 - `flipctl-devices.conf` in `/etc/modules-load.d/`: `usbserial`, `cdc-acm`, `spidev`,
   loaded at boot because `DeviceAllow=char-<name>` is resolved against `/proc/devices`
   when the unit starts and a class nobody has registered is silently dropped.
+- `flipctl-modemmanager.conf` in `/usr/share/dbus-1/system.d/` (`/etc/dbus-1/system.d/`
+  on a deploy): lets the unit's user ask ModemManager for `GetCellInfo`, which its
+  own policy leaves to root. Without it the 5G Modem page's band reads `--`.
+- `modemmanager-debug.conf` as `ModemManager.service.d/50-flipctl-debug.conf` under
+  `/usr/lib/systemd/system/` (`/etc/systemd/system/` on a deploy): ModemManager in
+  debug mode, for the Signal page's per-antenna readings. The file says what that
+  opens.
 - The unit's own `SupplementaryGroups` and `DeviceAllow` lines, as in this directory.
 
 `Conflicts=cog-seat1.service` because the panel has one owner at a time, and the

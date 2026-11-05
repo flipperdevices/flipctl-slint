@@ -59,6 +59,10 @@ bundle = ["dep:backhand"]
 # so an image needs no ncurses and no terminfo, and nothing here is linked unless
 # a consumer asks for it.
 tui = ["dep:cursive"]
+# ModemManager over D-Bus, for the 5G Modem pages and the status bar's badge. Off
+# by default: the boot menu and the installer draw no modem, and recovery has no
+# ModemManager to ask.
+modem = ["dep:zbus"]
 
 [dependencies]
 # getifaddrs, for the idle screen's IPv4 addresses. procfs exposes IPv6 as text
@@ -80,6 +84,9 @@ wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", features = ["client"], optional = true }
 wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
 wayland-protocols-misc = { version = "0.3", features = ["client"], optional = true }
+# The system bus, for ModemManager. Pure Rust; the blocking API on zbus's own
+# executor thread, since nothing else here is async. See mm.rs.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"], optional = true }
 
 # Not used directly. Present only to switch fontique's fontconfig binding to
 # dlopen, which the `slint` facade does not re-export. Cargo unifies features

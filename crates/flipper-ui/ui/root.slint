@@ -13,18 +13,19 @@ import { Modal } from "modal.slint";
 import { DetailBody, DetailRow } from "detail.slint";
 import { EthernetBody, EthLink, EthDetailRow } from "ethernet.slint";
 import { WifiBody, WifiRow, WifiNetRow, WifiDetailRow } from "wifi.slint";
+import { ModemBody, ModemRun, ModemItem } from "modem.slint";
 import { BootBody, BootRow, BootPopupRow } from "boot.slint";
 import { TextInputBody, KbCell } from "keyboard.slint";
 import { SwitcherBody, SwitchCard } from "switcher.slint";
 import { CardsBody, CardItem } from "card.slint";
 
-export { ListItem, IdleLine, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetRow, WifiDetailRow, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem }
+export { ListItem, IdleLine, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetRow, WifiDetailRow, ModemRun, ModemItem, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem }
 
 // Idle is the root. The menu opens over it and the app list over that. There are no
 // screens for an app to be shown on: an app draws its own, and what flipctl puts up
 // while one is running is the app's own frame. `app_log` is ours, the log of an
 // install.
-export enum Screen { idle, menu, detail, ethernet, wifi, boot, apps, app_log, text_input, switcher, manager, manager_info }
+export enum Screen { idle, menu, detail, ethernet, wifi, modem, boot, apps, app_log, text_input, switcher, manager, manager_info }
 
 export component Root inherits Window {
     width: FlipperTheme.panel_w;
@@ -123,6 +124,25 @@ export component Root inherits Window {
     in property <length> eth_detail_content_h;
 
     // The Wi-Fi page, and whichever of its modals is open.
+    // A detail screen's action row, when it has one, and its press.
+    in property <int> detail_selected: -1;
+    in property <bool> detail_row_pressed;
+
+    // The 5G Modem app's main screen, laid out by flipper_ui::modem::main_view.
+    in property <[ModemRun]> modem_runs;
+    in property <[ModemItem]> modem_items;
+    in property <[length]> modem_dividers;
+    in property <int> modem_selected;
+    in property <bool> modem_pressed;
+    in property <bool> modem_bars_show;
+    in property <length> modem_bars_x;
+    in property <length> modem_bars_y;
+    in property <int> modem_bars_lit;
+    in property <int> modem_bars_item;
+    in property <string> modem_message;
+    in property <[string]> modem_buttons;
+    in property <int> modem_pressed_slot: -1;
+
     in property <[WifiRow]> wifi_rows;
     in property <int> wifi_selected;
     // 0 none, 1 a list of networks, 2 one network's settings.
@@ -306,6 +326,8 @@ export component Root inherits Window {
         at_end: root.detail_at_end;
         buttons: root.detail_buttons;
         pressed_slot: root.detail_pressed_slot;
+        selected: root.screen == Screen.detail ? root.detail_selected : -1;
+        row_pressed: root.detail_row_pressed;
     }
 
     // The whole panel, status bar and soft keys included: every row of height is
@@ -392,6 +414,32 @@ export component Root inherits Window {
         modal_bar_total: root.wifi_modal_bar_total;
         modal_bar_visible: root.wifi_modal_bar_visible;
         modal_bar_offset: root.wifi_modal_bar_offset;
+    }
+
+    if root.screen == Screen.modem: ModemBody {
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+        runs: root.modem_runs;
+        items: root.modem_items;
+        dividers: root.modem_dividers;
+        selected: root.modem_selected;
+        pressed: root.modem_pressed;
+        bars_show: root.modem_bars_show;
+        bars_x: root.modem_bars_x;
+        bars_y: root.modem_bars_y;
+        bars_lit: root.modem_bars_lit;
+        bars_item: root.modem_bars_item;
+        message: root.modem_message;
+        breadcrumb: root.breadcrumb;
+        buttons: root.modem_buttons;
+        pressed_slot: root.modem_pressed_slot;
     }
 
     if root.screen == Screen.text_input: TextInputBody {

@@ -7,7 +7,8 @@ description = "Walks every flipper-ui component on the panel, a serial console o
 
 [features]
 default = []
-device = ["flipper-ui/device"]
+# The panel, its buttons, and the modem: only a real device has a ModemManager.
+device = ["flipper-ui/device", "flipper-ui/modem"]
 remote = ["flipper-ui/remote"]
 slint = ["flipper-ui/screens", "dep:png", "dep:slint", "dep:qrcodegen"]
 # Present through a compositor rather than to the card, and take its keys.

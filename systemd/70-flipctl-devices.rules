@@ -4,3 +4,7 @@
 SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", GROUP="gpio", MODE="0660"
 SUBSYSTEM=="spidev", KERNEL=="spidev*", GROUP="gpio", MODE="0660"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", GROUP="plugdev", MODE="0664"
+# The radio switches, for the 5G Modem app's ON/OFF (the M.2 slot's W_DISABLE1#).
+# A group rather than moving the node to seat1: the desktop on seat0 keeps the
+# uaccess ACL it gets for its own radio switches.
+SUBSYSTEM=="misc", KERNEL=="rfkill", GROUP="rfkill", MODE="0664"
