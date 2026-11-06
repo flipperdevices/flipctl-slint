@@ -1305,7 +1305,7 @@ mod detail {
                     // The channel is a soft key rather than a second chevron row: a
                     // detail screen has no cursor, so two adjustable rows would have
                     // no way to say which one left and right are for.
-                    let update = if u.chosen().is_some() { "Install" } else { "" };
+                    let update = if u.chosen().is_some() { "Run" } else { "" };
                     ["Back", "Channel", "", "", update]
                 }
                 // Nothing while it runs: leaving would hide a run that cannot be
