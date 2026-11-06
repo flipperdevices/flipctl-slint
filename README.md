@@ -78,6 +78,9 @@ build tree is where the build happens and nothing more. From the host:
     ./build_deploy.sh              # browser only, leaving the panel alone
     ./build_deploy.sh --cross      # build here for aarch64 in docker, not on the device
     ./build_deploy.sh --apps       # also push target/appimage/*.AppImage to ~/Apps
+    ./build_deploy.sh --app NAME   # push that one app and nothing else
+
+`FLIPPER_HOST` is required: the device's address changes with the booted profile.
 
 The build happens on the device by default, because that is where the toolchain for
 it is: about 25s once its target directory is warm. `--cross` builds here instead,

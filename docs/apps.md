@@ -130,13 +130,12 @@ Build it once on the host to make `Cargo.lock`, which the bundler builds against
     (cd apps/hello && cargo build --release)
     scripts/gen-third-party-licenses.sh
     tools/appimage/build.sh apps/hello
-    FLIPPER_HOST=<device> ./build_deploy.sh --apps
+    FLIPPER_HOST=<device> ./build_deploy.sh --app hello
 
-`--apps` on its own copies `target/appimage/*.AppImage` to `~/Apps` and builds nothing
-else. That is every bundle there, however old, over what the device has; to send one,
-copy it over yourself:
-
-    scp target/appimage/hello-aarch64.fap.AppImage user@<device>:Apps/
+`--app` sends the one app it names, a bundle by its directory under `apps/` or a script
+by its path there (`--app "Test Tools/ping.fap.py"`), into its folder in `~/Apps`, and
+builds nothing else. It can be given more than once. `--apps` sends every bundle in
+`target/appimage`, however old, and every script, over what the device has.
 
 Hello World is then in the Apps list, with the bundler's own icon until the app has
 one. Commit `Cargo.lock` and `THIRD-PARTY-LICENSES.md` with the app.
