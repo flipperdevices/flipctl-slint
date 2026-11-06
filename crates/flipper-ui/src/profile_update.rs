@@ -58,9 +58,11 @@ pub struct Listing {
 impl Listing {
     /// The profiles that move to `offer`, the way the tool decides it: an updatable
     /// state and an older build, or with `force` any of them its build has a stock for.
-    pub fn going(&self, offer: &Offer, force: bool) -> Vec<&Profile> {
+    /// `only` narrows it to that one profile.
+    pub fn going(&self, offer: &Offer, force: bool, only: Option<&str>) -> Vec<&Profile> {
         self.profiles
             .iter()
+            .filter(|p| only.is_none_or(|o| p.name == o))
             .filter(|p| offer.kinds.contains(&p.kind))
             .filter(|p| force || (updatable(&p.state) && p.build < offer.number))
             .collect()
@@ -160,30 +162,41 @@ pub fn list(all: bool) -> Result<Listing, String> {
     parse_list(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// Update every profile to `build`, reporting on `tx` until it ends with `Done` or
-/// `Failed`. `force` updates a profile whose packages or system files changed too,
-/// dropping those changes, and takes a build that is not newer; the rest carries as ever.
-/// Blocks for the whole update: call it from a thread.
-pub fn update(build: u32, force: bool, tx: &Sender<Step>) {
+/// Update every profile to `build`, or with `only` that one, reporting on `tx` until
+/// it ends with `Done` or `Failed`. `force` updates a profile whose packages or system
+/// files changed too, dropping those changes, and takes a build that is not newer; the
+/// rest carries as ever. Blocks for the whole update: call it from a thread.
+pub fn update(build: u32, force: bool, only: Option<&Profile>, tx: &Sender<Step>) {
     let number = build.to_string();
-    let mut args = vec!["update-profile", "--progress", "--every"];
+    let mut args = vec!["update-profile", "--progress"];
+    if only.is_none() {
+        args.push("--every");
+    }
     if force {
         args.push("--force");
     }
     args.push(&number);
-    run(&args, tx);
+    // The tool says what became of a profile only with --every; for one, its
+    // success says it.
+    let done =
+        only.map(|p| format!("{} {} to {build}", crate::boot::display_name(&p.name), p.build));
+    if let Some(p) = only {
+        args.push(&p.name);
+    }
+    run(&args, done, tx);
 }
 
 /// Put back the version the booted profile's last update kept, reporting on `tx`.
 pub fn rollback(tx: &Sender<Step>) {
     let _ = tx.send(Step::Working(0, "Rolling back".into()));
-    run(&["update-profile", "--rollback"], tx);
+    run(&["update-profile", "--rollback"], None, tx);
 }
 
 /// Run the tool, turning its progress lines into steps, each named after the profile
-/// under way, and ending with what became of each profile. A run that failed on some
-/// profile and not others is done all the same, the failure being one of its lines.
-fn run(args: &[&str], tx: &Sender<Step>) {
+/// under way, and ending with what became of each profile, or `done` when it said
+/// nothing of them. A run that failed on some profile and not others is done all the
+/// same, the failure being one of its lines.
+fn run(args: &[&str], done: Option<String>, tx: &Sender<Step>) {
     let mut profile = String::new();
     let mut results = Vec::new();
     let result = crate::app::run_logged(&mut crate::boot::tool(args), &mut |line: String| {
@@ -198,6 +211,7 @@ fn run(args: &[&str], tx: &Sender<Step>) {
     });
     let _ = tx.send(match result {
         Err(e) if results.is_empty() => Step::Failed(e),
+        Ok(()) if results.is_empty() => Step::Done(done.into_iter().collect()),
         _ => Step::Done(results),
     });
 }
@@ -247,11 +261,13 @@ mod tests {
              build 1235 dev 1 Desktop,Router,Minimal\n",
         )
         .unwrap();
-        let names = |force| -> Vec<String> {
-            l.going(&l.offers[0], force).iter().map(|p| p.name.clone()).collect()
+        let names = |force, only| -> Vec<String> {
+            l.going(&l.offers[0], force, only).iter().map(|p| p.name.clone()).collect()
         };
-        assert_eq!(names(false), ["@Desktop"]);
-        assert_eq!(names(true), ["@Desktop", "@Router", "@Minimal"]);
+        assert_eq!(names(false, None), ["@Desktop"]);
+        assert_eq!(names(true, None), ["@Desktop", "@Router", "@Minimal"]);
+        assert_eq!(names(true, Some("@Router")), ["@Router"]);
+        assert!(names(false, Some("@Router")).is_empty());
     }
 
     #[test]

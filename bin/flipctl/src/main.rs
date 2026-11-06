@@ -530,7 +530,7 @@ mod detail {
     use std::time::Duration;
 
     use flipper_ui::boot;
-    use flipper_ui::profile_update::{self, Listing, Offer, Step};
+    use flipper_ui::profile_update::{self, Listing, Offer, Profile, Step};
     use flipper_ui::sysinfo::{self, Battery, Disk, Modem, Route, System};
     use flipper_ui::ui::DetailRow;
     use flipper_ui::update::{self, Channel, Image};
@@ -933,6 +933,8 @@ mod detail {
         running: std::cell::RefCell<Option<std::sync::mpsc::Receiver<Step>>>,
         /// Modified profiles, unlocked for a forced update by five PTT taps.
         force: std::cell::Cell<bool>,
+        /// Unlocked, the one profile the update is narrowed to; `None` is every one.
+        only: Option<String>,
         /// PTT taps so far, and when the first of them was.
         taps: std::cell::Cell<(u8, Option<std::time::Instant>)>,
         dirty: std::cell::Cell<bool>,
@@ -969,6 +971,7 @@ mod detail {
                 goal: std::cell::RefCell::new(String::new()),
                 running: std::cell::RefCell::new(None),
                 force: std::cell::Cell::new(false),
+                only: None,
                 taps: std::cell::Cell::new((0, None)),
                 dirty: std::cell::Cell::new(true),
             }
@@ -1039,30 +1042,64 @@ mod detail {
                 .is_some_and(|l| l.profiles.iter().any(|p| profile_update::updatable(&p.state)))
         }
 
-        /// Some profile is changed beyond what an update carries.
+        /// Some profile the update covers is changed beyond what an update carries.
         pub fn modified(&self) -> bool {
-            self.listing()
-                .is_some_and(|l| l.profiles.iter().any(|p| !profile_update::updatable(&p.state)))
+            self.listing().is_some_and(|l| {
+                l.profiles
+                    .iter()
+                    .filter(|p| self.only.as_ref().is_none_or(|o| &p.name == o))
+                    .any(|p| !profile_update::updatable(&p.state))
+            })
         }
 
         fn listing(&self) -> Option<Listing> {
             self.listing.borrow().as_ref().and_then(|l| l.as_ref().ok()).cloned()
         }
 
-        /// The builds on the channel showing, newest first; when forced, every one.
+        /// The builds on the channel showing, newest first; when forced, every one
+        /// the profile it is narrowed to has a stock in.
         fn offers(&self) -> Vec<Offer> {
             let branch = self.channel.branch();
             let forced = self.forced();
+            let only = self.only_profile();
             self.listing().map_or_else(Vec::new, |l| {
-                l.offers.into_iter().filter(|o| forced || o.branch == branch).collect()
+                l.offers
+                    .into_iter()
+                    .filter(|o| forced || o.branch == branch)
+                    .filter(|o| only.as_ref().is_none_or(|p| o.kinds.contains(&p.kind)))
+                    .collect()
             })
+        }
+
+        /// The one profile the update is narrowed to, if it is.
+        fn only_profile(&self) -> Option<Profile> {
+            let name = self.only.as_ref()?;
+            self.listing()?.profiles.into_iter().find(|p| &p.name == name)
+        }
+
+        /// The profiles the chosen build would update.
+        fn going(&self, listing: &Listing, offer: &Offer) -> usize {
+            listing.going(offer, self.forced(), self.only.as_deref()).len()
+        }
+
+        /// Unlocked, the next of: every profile, then each one alone.
+        pub fn step_only(&mut self) {
+            let Some(listing) = self.listing() else { return };
+            let names: Vec<String> = listing.profiles.into_iter().map(|p| p.name).collect();
+            let next = self
+                .only
+                .as_ref()
+                .map_or(0, |n| names.iter().position(|x| x == n).map_or(names.len(), |i| i + 1));
+            self.only = names.get(next).cloned();
+            self.at = 0;
+            self.dirty.set(true);
         }
 
         /// The build the screen is offering, when some profile would move to it.
         fn chosen(&self) -> Option<Offer> {
             let listing = self.listing()?;
             let offer = self.offers().get(self.at).cloned()?;
-            (!listing.going(&offer, self.forced()).is_empty()).then_some(offer)
+            (self.going(&listing, &offer) > 0).then_some(offer)
         }
 
         /// The number of the build Update would start.
@@ -1147,13 +1184,14 @@ mod detail {
             }
         }
 
-        /// Update every profile that goes to the chosen build. Nothing happens while a
-        /// run is under way.
+        /// Update every profile that goes to the chosen build, or the one it is
+        /// narrowed to. Nothing happens while a run is under way.
         pub fn start_update(&self) -> bool {
             let Some(offer) = self.chosen().filter(|_| !self.busy()) else { return false };
             self.goal.borrow_mut().clear();
             let force = self.forced();
-            self.spawn(move |tx| profile_update::update(offer.number, force, tx));
+            let only = self.only_profile();
+            self.spawn(move |tx| profile_update::update(offer.number, force, only.as_ref(), tx));
             true
         }
 
@@ -1317,7 +1355,12 @@ mod detail {
                     ["Back", "", "", "", reboot]
                 }
                 Live::Profile(p) if !p.loading() => {
-                    let channel = if p.updatable() && !p.forced() { "Channel" } else { "" };
+                    let channel = match (p.forced(), &p.only) {
+                        (true, None) => "All",
+                        (true, Some(_)) => "Profile",
+                        (false, _) if p.updatable() => "Channel",
+                        _ => "",
+                    };
                     let rollback = if p.kept().is_some() { "Rollback" } else { "" };
                     let update = if p.chosen().is_some() { "Update" } else { "" };
                     ["Back", channel, "", rollback, update]
@@ -1384,7 +1427,13 @@ mod detail {
         pub fn step_channel(&mut self) -> bool {
             match self {
                 Live::Update(u) => u.step_channel(),
-                Live::Profile(p) if !p.busy() && p.finished().is_none() => p.step_channel(),
+                Live::Profile(p) if !p.busy() && p.finished().is_none() => {
+                    if p.forced() {
+                        p.step_only()
+                    } else {
+                        p.step_channel()
+                    }
+                }
                 _ => return false,
             }
             true
@@ -2157,27 +2206,34 @@ mod detail {
                 out.extend(wrapped(&e));
             }
             None if free.is_empty() && !p.forced() => {}
-            None => match p.offers().get(p.at) {
-                Some(offer) => {
-                    out.push(chevron("Version", &offer.number.to_string()));
-                    let channel = if p.forced() { offer.branch.as_str() } else { p.channel.name() };
-                    out.push(row("Channel", channel));
-                    out.push(row("Download", &update::megabytes(offer.bytes)));
-                    let going = listing.going(offer, p.forced()).len();
-                    let of = listing.profiles.len();
-                    out.push(text(&format!("Updates {going} of {of} profiles")));
-                    if p.forced() && p.modified() {
-                        out.push(text("Package and system changes are dropped"));
-                        out.push(text("These keep a copy to go back to"));
+            None => {
+                if p.forced() {
+                    let only = p.only_profile().map(|o| boot::display_name(&o.name));
+                    out.push(row("Profiles", only.as_deref().unwrap_or("All")));
+                }
+                match p.offers().get(p.at) {
+                    Some(offer) => {
+                        out.push(chevron("Version", &offer.number.to_string()));
+                        let channel =
+                            if p.forced() { offer.branch.as_str() } else { p.channel.name() };
+                        out.push(row("Channel", channel));
+                        out.push(row("Download", &update::megabytes(offer.bytes)));
+                        let going = p.going(&listing, offer);
+                        let of = listing.profiles.len();
+                        out.push(text(&format!("Updates {going} of {of} profiles")));
+                        if p.forced() && p.modified() {
+                            out.push(text("Package and system changes are dropped"));
+                            out.push(text("These keep a copy to go back to"));
+                        }
+                    }
+                    None if p.forced() => out.push(text("no build for these profiles")),
+                    None => {
+                        out.push(row("Channel", p.channel.name()));
+                        let none = format!("no newer {} build", p.channel.name());
+                        out.push(text(&none));
                     }
                 }
-                None if p.forced() => out.push(text("no build for these profiles")),
-                None => {
-                    out.push(row("Channel", p.channel.name()));
-                    let none = format!("no newer {} build", p.channel.name());
-                    out.push(text(&none));
-                }
-            },
+            }
         }
         out
     }
