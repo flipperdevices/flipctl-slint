@@ -1,0 +1,10 @@
+# Disk benchmark: how fast a disk reads and writes, measured the way CrystalDiskMark
+# measures it, on any disk the Flipper has: the UFS, an SD card, USB or M.2.
+#
+# Every test runs on a test file in the disk's filesystem, never on the device
+# node, so nothing on the disk is touched but that file. The I/O is io_uring with
+# O_DIRECT, done by this binary; only mount, umount and making a folder on a
+# filesystem root owns go through sudo.
+name = "Disk Benchmark"
+wayland = "./target/release/disk-benchmark-app"
+folder = "Test Tools"
