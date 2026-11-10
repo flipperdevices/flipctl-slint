@@ -16,6 +16,7 @@ mod birria;
 #[allow(dead_code)]
 mod channels;
 mod chip;
+mod lag;
 #[allow(dead_code)]
 mod dsp;
 #[allow(dead_code)]
@@ -37,16 +38,17 @@ use std::time::{Duration, Instant};
 
 use birria::{Gain, ANTENNA_AUTO};
 use channels::Channel;
+#[cfg(test)]
 use dsp::video::{HEIGHT, WIDTH};
 use flipctl_app::paint::Surface;
 use flipctl_app::theme::PANEL_W;
-use flipctl_app::{item, pair, rule, text, App, Key, Page, Row, Text, Ui};
+use flipctl_app::{heading, item, pair, rule, text, App, Key, Page, Row, Text, Ui};
 use picture::{Fit, Levels, Tone};
 use radio::{Command, Radio, Shared, NOT_VIEWING};
 
-/// The picture at most this often: a field arrives every 20ms, and the panel shows 25
-/// pictures a second without the window falling behind.
-const FRAME_MS: u64 = 40;
+/// The picture at most this often. Fields arrive about every 20ms, with jitter, so a
+/// limit of 20 skipped every field that came a little early.
+const FRAME_MS: u64 = 12;
 /// The channel shown at start, rather than a scan: Raceband 1, where the drones this was
 /// built with sit. Scan is a key away.
 const FIRST: &str = "R1";
@@ -85,6 +87,8 @@ struct Fpv {
     /// Whether the picture is on screen, which is when the radio's fields draw.
     live: Arc<AtomicBool>,
     meter: RateMeter,
+    /// Ticks seen, which step the waiting dots.
+    ticks: usize,
 }
 
 impl Fpv {
@@ -113,6 +117,7 @@ impl Fpv {
             hidden: false,
             live,
             meter: RateMeter { at: Instant::now(), count: 0, rate: 0.0 },
+            ticks: 0,
         }
     }
 
@@ -157,7 +162,19 @@ impl Fpv {
         let post = s.post.load(Relaxed);
         let frame = if post { s.post_frame.lock().unwrap() } else { s.frame.lock().unwrap() };
         let osd = Osd::of(s, &self.channels, self.error.as_deref());
-        video_page((frame.serial > 0).then_some(&frame.pixels[..]), &osd, self.fit, self.tone, self.levels, readout)
+        // The decoder's lumas, unless they were made for the other shape
+        let mine;
+        let lumas = if frame.serial == 0 {
+            None
+        } else if frame.fill == (self.fit == Fit::Fill) && !frame.lumas.is_empty() {
+            Some(&frame.lumas[..])
+        } else {
+            mine = picture::lumas_for(&frame.pixels, self.fit);
+            Some(&mine[..])
+        };
+        let page = video_page(lumas, &osd, self.fit, self.tone, self.levels, readout);
+        lag::drawn(frame.t);
+        page
     }
 
     fn channel_list(&self, s: &Shared) -> Page {
@@ -196,6 +213,7 @@ impl Fpv {
             pair("Input", format!("{:.1} of {:.0} Msps", self.meter.rate / 1e6, s.rate.load(Relaxed) as f64 / 1e6)),
             pair("Gain", format!("{}/{}/{}{}", g.lna, g.lpf, g.digital, if s.auto_gain.load(Relaxed) { " auto" } else { "" })),
             pair("Antenna", if antenna == ANTENNA_AUTO { format!("Auto ({used})") } else { used.to_string() }),
+            pair("Lag", lag::summary()),
             pair("Lost", format!("{} usb, {} dec, {} gaps", short(s.lost_usb.load(Relaxed)), short(s.lost_video.load(Relaxed)), s.gaps.load(Relaxed))),
         ];
         if let Some(e) = &self.error {
@@ -257,7 +275,6 @@ impl Fpv {
             Setting::Lpf => g.lpf as usize,
             Setting::Digital => g.digital as usize,
             Setting::CleanUp => s.post.load(Relaxed) as usize,
-            Setting::Invert => s.invert.load(Relaxed) as usize,
             Setting::AutoTune => s.afc.load(Relaxed) as usize,
             Setting::Strongest => s.to_strongest.load(Relaxed) as usize,
             Setting::Picture => self.tone as usize,
@@ -302,12 +319,14 @@ impl Fpv {
                 self.send(Command::Gain(self.gain));
             }
             Setting::CleanUp => s.post.store(at == 1, Relaxed),
-            Setting::Invert => s.invert.store(at == 1, Relaxed),
             Setting::AutoTune => s.afc.store(at == 1, Relaxed),
             Setting::Strongest => s.to_strongest.store(at == 1, Relaxed),
             Setting::Picture => self.tone = [Tone::Tones, Tone::Bits, Tone::Grey][at],
             Setting::Tune => {}
-            Setting::Fit => self.fit = [Fit::Box, Fit::Fill][at],
+            Setting::Fit => {
+                self.fit = [Fit::Box, Fit::Fill][at];
+                s.fill.store(self.fit == Fit::Fill, Relaxed);
+            }
         }
     }
 
@@ -337,9 +356,10 @@ impl App for Fpv {
     fn page(&self) -> Page {
         match &self.state {
             State::Starting(_) => Page::detail(vec![
-                text("Taking the Wi-Fi chip for the radio."),
-                text("Wi-Fi and Bluetooth stay off"),
-                text("until FPV closes."),
+                heading("Configuring", ""),
+                text(""),
+                text("Configuring the Wi-Fi device."),
+                text(format!("Please wait{}", &"..."[..self.ticks % 4])),
             ])
             .id("starting"),
             State::Failed(e) => Page::detail(wrap(e).into_iter().map(text).collect::<Vec<Row>>()).id("failed"),
@@ -414,6 +434,7 @@ impl App for Fpv {
     }
 
     fn tick(&mut self, _: &mut Ui) {
+        self.ticks += 1;
         if let State::Starting(rx) = &self.state {
             match rx.try_recv() {
                 Ok(Ok(r)) => self.state = State::Running(r),
@@ -449,11 +470,12 @@ fn start(live: Arc<AtomicBool>) -> Receiver<Result<Radio, String>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let opened = (|| {
+            lag::event(format_args!("claiming"));
             birria::load()?;
             chip::claim()?;
-            let radio = Radio::start(GAIN, throttled(live))?;
+            lag::event(format_args!("claimed"));
             // The panel is grey: colour decoding would cost most of a slow core for nothing
-            radio.shared.colour.store(false, Relaxed);
+            let radio = Radio::start(GAIN, false, throttled(live))?;
             let first = channels::all().iter().position(|c| c.name() == FIRST).unwrap_or(0);
             radio.send(Command::View(first));
             Ok(radio)
@@ -530,10 +552,10 @@ impl Osd {
 /// With the 4:3 box it goes in the bars beside the picture; stretched across, it goes
 /// in a black strip over the top only while there is something to say. Either way below
 /// flipctl's status strip, which the panel draws over the app's top rows.
-fn video_page(frame: Option<&[u8]>, osd: &Osd, fit: Fit, tone: Tone, levels: Levels, readout: Option<String>) -> Page {
+fn video_page(lumas: Option<&[u8]>, osd: &Osd, fit: Fit, tone: Tone, levels: Levels, readout: Option<String>) -> Page {
     let mut surface = Surface::panel();
-    match frame {
-        Some(rgb) => picture::paint(&mut surface, rgb, WIDTH, HEIGHT, fit, tone, levels),
+    match lumas {
+        Some(lumas) => picture::paint(&mut surface, lumas, fit, tone, levels),
         None => surface.rect(0, 0, i32::from(PANEL_W), picture::VIDEO_Y + picture::VIDEO_H, flipctl_app::theme::color::BLACK),
     }
     let label = |x: i32, y: i32, line: String, font: i32, align: i32| Text { x: x as f32, y: y as f32, text: line, font, align, white: true };
@@ -597,7 +619,6 @@ enum Setting {
     Lpf,
     Digital,
     CleanUp,
-    Invert,
     AutoTune,
     Strongest,
     Picture,
@@ -605,7 +626,7 @@ enum Setting {
     Fit,
 }
 
-const SETTINGS: [Setting; 14] = [
+const SETTINGS: [Setting; 13] = [
     Setting::Fit,
     Setting::Picture,
     Setting::Tune,
@@ -617,7 +638,6 @@ const SETTINGS: [Setting; 14] = [
     Setting::Lpf,
     Setting::Digital,
     Setting::CleanUp,
-    Setting::Invert,
     Setting::AutoTune,
     Setting::Strongest,
 ];
@@ -635,7 +655,6 @@ impl Setting {
             Setting::Lpf => "Filter gain",
             Setting::Digital => "Digital gain",
             Setting::CleanUp => "Clean up",
-            Setting::Invert => "Invert",
             Setting::AutoTune => "Auto-tune",
             Setting::Strongest => "Best after scan",
             Setting::Picture => "Picture",
@@ -727,7 +746,7 @@ mod tests {
     /// The frame as the panel gets it, left in target/render when `FPV_RENDER=1` asks.
     fn shot(name: &str, fit: Fit, tone: Tone, locked: bool) -> Vec<u8> {
         let rgb = card();
-        let frame = flipctl_pages::shot(Still(Box::new(move || video_page(Some(&rgb), &osd(locked), fit, tone, Levels::DEFAULT, None))), Status::default());
+        let frame = flipctl_pages::shot(Still(Box::new(move || video_page(Some(&picture::lumas_for(&rgb, fit)), &osd(locked), fit, tone, Levels { contrast: 100, brightness: 0 }, None))), Status::default());
         if std::env::var_os("FPV_RENDER").is_some() {
             let path = std::path::Path::new("target/render").join(format!("{name}.png"));
             flipctl_app::render::save(&path, &frame);

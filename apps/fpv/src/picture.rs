@@ -61,7 +61,8 @@ pub struct Levels {
 }
 
 impl Levels {
-    pub const DEFAULT: Levels = Levels { contrast: 100, brightness: 0 };
+    /// 200%: the decoder's greys are flat on this panel.
+    pub const DEFAULT: Levels = Levels { contrast: 200, brightness: 0 };
     /// Least, most and one step of each.
     pub const CONTRAST: (i32, i32, i32) = (20, 400, 10);
     pub const BRIGHTNESS: (i32, i32, i32) = (-128, 128, 8);
@@ -143,16 +144,28 @@ pub fn dither(v: u8, x: i32, y: i32, tone: Tone) -> Gray8 {
     }
 }
 
-/// Paint the frame into its area on `surface`, black around it.
-pub fn paint(surface: &mut Surface, rgb: &[u8], src_w: usize, src_h: usize, fit: Fit, tone: Tone, levels: Levels) {
+/// A decoded frame's lumas at the size `fit` draws it. The decoder does this once per
+/// field on a fast core, where it costs the window nothing.
+pub fn lumas_for(rgb: &[u8], fit: Fit) -> Vec<u8> {
+    let started = crate::lag::now();
+    let (_, _, w, h) = area(fit);
+    let lumas = shrink(rgb, crate::dsp::video::WIDTH, crate::dsp::video::HEIGHT, w as usize, h as usize);
+    crate::lag::cost(0, started);
+    lumas
+}
+
+/// Paint `lumas`, made by [`lumas_for`] for the same `fit`, into its area on `surface`,
+/// black around it.
+pub fn paint(surface: &mut Surface, lumas: &[u8], fit: Fit, tone: Tone, levels: Levels) {
     surface.rect(0, 0, i32::from(PANEL_W), VIDEO_Y + VIDEO_H, color::BLACK);
-    let (x, y, w, h) = area(fit);
-    let lumas = shrink(rgb, src_w, src_h, w as usize, h as usize);
+    let (x, y, w, _) = area(fit);
+    let started = crate::lag::now();
     let table = levels.table();
     for (i, &v) in lumas.iter().map(|v| &table[usize::from(*v)]).enumerate() {
         let (px, py) = (x + (i % w as usize) as i32, y + (i / w as usize) as i32);
         surface.pixel(px, py, dither(v, px, py, tone));
     }
+    crate::lag::cost(1, started);
 }
 
 #[cfg(test)]
@@ -185,8 +198,8 @@ mod tests {
 
     #[test]
     fn levels_stretch_about_mid_grey_then_add() {
-        let t = Levels::DEFAULT.table();
-        assert!(t.iter().enumerate().all(|(i, &v)| v as usize == i), "the default changes nothing");
+        let t = Levels { contrast: 100, brightness: 0 }.table();
+        assert!(t.iter().enumerate().all(|(i, &v)| v as usize == i), "100% changes nothing");
         let t = Levels { contrast: 200, brightness: 0 }.table();
         assert_eq!((t[0], t[64], t[128], t[192], t[255]), (0, 0, 128, 255, 255));
         let t = Levels { contrast: 100, brightness: -8 }.table();

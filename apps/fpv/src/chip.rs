@@ -78,6 +78,7 @@ fn burst() {
         eprintln!("fpv: APPDIR is not set: no burst patch, 80 MSps will overrun");
         return;
     };
+    let before = address();
     match Command::new(&bin).status() {
         Ok(s) if s.success() => {}
         other => {
@@ -85,21 +86,27 @@ fn burst() {
             return;
         }
     }
-    // The port reset drops the chip and it returns with a new address
-    std::thread::sleep(Duration::from_secs(3));
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // The port reset drops the chip, and it returns at a new address, whose node the
+    // claim's udev rule makes ours a moment after it appears
+    let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if node_is_ours() {
+        let now = address();
+        if now.is_some() && now != before && node_is_ours(now) {
             return;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(50));
     }
     eprintln!("fpv: the chip did not come back after the burst patch");
 }
 
-fn node_is_ours() -> bool {
+/// The chip's bus and device number.
+fn address() -> Option<(u32, u32)> {
     let read = |f: &str| std::fs::read_to_string(format!("{DEV}/{f}")).ok().and_then(|s| s.trim().parse::<u32>().ok());
-    let (Some(bus), Some(dev)) = (read("busnum"), read("devnum")) else { return false };
+    Some((read("busnum")?, read("devnum")?))
+}
+
+fn node_is_ours(at: Option<(u32, u32)>) -> bool {
+    let Some((bus, dev)) = at else { return false };
     std::fs::metadata(format!("/dev/bus/usb/{bus:03}/{dev:03}")).is_ok_and(|m| m.uid() == unsafe { libc::getuid() })
 }
 

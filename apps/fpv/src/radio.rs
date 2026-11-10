@@ -25,7 +25,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-const IQ_BLOCKS: usize = 256;
+/// USB blocks waiting for the front, about 26 ms at 20 Msps. Short on purpose: when the
+/// front stalls, as it does retuning, the oldest are dropped, so it resumes on fresh
+/// samples instead of working through a backlog that the picture would trail by.
+const IQ_BLOCKS: usize = 32;
 const VIDEO_BLOCKS: usize = 64;
 pub const NOT_VIEWING: usize = usize::MAX;
 
@@ -41,6 +44,11 @@ pub struct Frame {
     /// RGB, WIDTH x HEIGHT.
     pub pixels: Vec<u8>,
     pub serial: u64,
+    /// The stamp of the block that completed it.
+    pub t: u64,
+    /// Its lumas for the panel, made for the shape in Shared::fill.
+    pub lumas: Vec<u8>,
+    pub fill: bool,
 }
 
 pub struct Shared {
@@ -49,6 +57,8 @@ pub struct Shared {
     frame_ready: Condvar,
     pub post_frame: Mutex<Frame>,
     pub post: AtomicBool,
+    /// Whether the picture is stretched across, which sets the size its lumas are made at.
+    pub fill: AtomicBool,
     /// Per channel, dB above the median of the last sweep.
     pub powers: Mutex<Vec<Option<f32>>>,
     /// Per channel, whether the last scan found video on it; None where it did not look.
@@ -119,6 +129,8 @@ impl Shared {
 /// A block of interleaved I,Q and the rate it was captured at.
 struct Block {
     rate: u32,
+    /// When the library handed it over, in lag::now()'s terms.
+    t: u64,
     iq: Vec<i16>,
 }
 
@@ -165,7 +177,9 @@ impl<T> Pool<T> {
 }
 
 impl Radio {
-    pub fn start(gain: Gain, repaint: impl Fn() + Send + Sync + 'static) -> Result<Radio, String> {
+    /// Without `colour` there is no colour thread at all: the front hands its blocks
+    /// straight to the back, a queue and a thread fewer between a field and the panel.
+    pub fn start(gain: Gain, colour: bool, repaint: impl Fn() + Send + Sync + 'static) -> Result<Radio, String> {
         // BirriaSDR reads these on open: the endpoint burst birria_burst patched in, and
         // the fast cores its USB threads keep to, apart from the decoder's.
         for (k, v) in [("BIRRIA_BURST", "3"), ("BIRRIA_CPUS", "6-7")] {
@@ -173,18 +187,21 @@ impl Radio {
                 std::env::set_var(k, v);
             }
         }
+        debug_log(format_args!("radio start"));
         if Device::count() <= 0 {
             return Err("The Wi-Fi chip was not found.".into());
         }
         let device = Arc::new(Device::open(0).map_err(|e| format!("Could not open the Wi-Fi chip: {e}. Is another SDR app running?"))?);
+        debug_log(format_args!("opened"));
         device.set_gain(gain).map_err(|e| e.to_string())?;
         let all = channels::all();
         device.set_center_freq((all[0].hz() - view_offset(VIEW_RATE)) as u64).map_err(|e| e.to_string())?;
 
         let shared = Arc::new(Shared {
-            frame: Mutex::new(Frame { pixels: vec![0; WIDTH * HEIGHT * 3], serial: 0 }),
+            frame: Mutex::new(Frame { pixels: vec![0; WIDTH * HEIGHT * 3], serial: 0, t: 0, lumas: Vec::new(), fill: false }),
             frame_ready: Condvar::new(),
-            post_frame: Mutex::new(Frame { pixels: vec![0; WIDTH * HEIGHT * 3], serial: 0 }),
+            post_frame: Mutex::new(Frame { pixels: vec![0; WIDTH * HEIGHT * 3], serial: 0, t: 0, lumas: Vec::new(), fill: false }),
+            fill: AtomicBool::new(false),
             post: AtomicBool::new(false),
             powers: Mutex::new(vec![None; all.len()]),
             video: Mutex::new(vec![None; all.len()]),
@@ -201,7 +218,7 @@ impl Radio {
             field_lines: AtomicI32::new(0),
             good_fields: AtomicU32::new(0),
             ntsc: AtomicBool::new(false),
-            colour: AtomicBool::new(true),
+            colour: AtomicBool::new(colour),
             has_colour: AtomicBool::new(false),
             signal_hz: AtomicI64::new(0),
             standard: AtomicU8::new(0),
@@ -220,9 +237,11 @@ impl Radio {
 
         shared.set_gain(gain);
         let (iq_tx, iq_rx) = bounded::<Block>(IQ_BLOCKS);
-        let iq_pool = Pool::new(IQ_BLOCKS, || Block { rate: 0, iq: Vec::with_capacity(2 * 16384) });
+        let iq_old = iq_rx.clone();
+        // The queue full, and one more in each of the reader's and the front's hands
+        let iq_pool = Pool::new(IQ_BLOCKS + 2, || Block { rate: 0, t: 0, iq: Vec::with_capacity(2 * 16384) });
         let (video_tx, colour_rx) = bounded::<VideoBlock>(VIDEO_BLOCKS);
-        let (colour_tx, video_rx) = bounded::<VideoBlock>(VIDEO_BLOCKS);
+        let (colour_tx, video_rx) = if colour { bounded::<VideoBlock>(VIDEO_BLOCKS) } else { (video_tx.clone(), colour_rx.clone()) };
         let video_pool = Pool::new(VIDEO_BLOCKS, VideoBlock::default);
         let (cmd_tx, cmd_rx) = bounded::<Command>(64);
         let [front_cpu, back_cpu, colour_cpu] = decoder_cpus();
@@ -231,7 +250,7 @@ impl Radio {
 
         {
             let (device, shared, pool) = (device.clone(), shared.clone(), iq_pool.clone());
-            threads.push(std::thread::Builder::new().name("fpv-usb".into()).spawn(move || reader(&device, &shared, &pool, &iq_tx)).unwrap());
+            threads.push(std::thread::Builder::new().name("fpv-usb".into()).spawn(move || reader(&device, &shared, &pool, &iq_tx, &iq_old)).unwrap());
         }
         {
             let (device, shared, repaint, video_pool) = (device.clone(), shared.clone(), repaint.clone(), video_pool.clone());
@@ -242,7 +261,7 @@ impl Radio {
                 front_loop(&device, &shared, &all, iq_rx, iq_pool, cmd_rx, video_tx, video_pool, &*repaint);
             }).unwrap());
         }
-        {
+        if colour {
             let (shared, video_pool) = (shared.clone(), video_pool.clone());
             threads.push(std::thread::Builder::new().name("fpv-colour".into()).spawn(move || {
                 if let Some(cpu) = colour_cpu {
@@ -291,7 +310,7 @@ impl Drop for Radio {
 
 /// Stream at shared.rate until told to quit; a cancel without quit restarts at the new rate
 /// and antenna.
-fn reader(device: &Device, shared: &Shared, pool: &Pool<Block>, iq_tx: &Sender<Block>) {
+fn reader(device: &Device, shared: &Shared, pool: &Pool<Block>, iq_tx: &Sender<Block>, iq_old: &Receiver<Block>) {
     while !shared.quit.load(Relaxed) {
         let rate = shared.rate.load(Relaxed);
         if let Err(e) = device.set_sample_rate(rate) {
@@ -301,9 +320,14 @@ fn reader(device: &Device, shared: &Shared, pool: &Pool<Block>, iq_tx: &Sender<B
         if let Err(e) = device.set_antenna(shared.antenna.load(Relaxed)) {
             shared.fail(format!("Antenna: {e}"));
         }
+        debug_log(format_args!("stream at {} Msps", rate / 1_000_000));
+        let first = std::sync::atomic::AtomicBool::new(true);
         let result = device.read(
             |iq| {
                 let n = (iq.len() / 2) as u64;
+                if first.swap(false, Relaxed) {
+                    debug_log(format_args!("first samples"));
+                }
                 shared.input.fetch_add(n, Relaxed);
                 // A scan stops reading while it retunes and skips what it loses
                 let lost = || {
@@ -316,11 +340,18 @@ fn reader(device: &Device, shared: &Shared, pool: &Pool<Block>, iq_tx: &Sender<B
                     return;
                 };
                 block.rate = rate;
+                block.t = crate::lag::now();
                 block.iq.clear();
                 block.iq.extend_from_slice(iq);
+                // Full: the oldest goes, not this one
                 if let Err(TrySendError::Full(block)) = iq_tx.try_send(block) {
                     lost();
-                    pool.put(block);
+                    if let Ok(old) = iq_old.try_recv() {
+                        pool.put(old);
+                    }
+                    if let Err(TrySendError::Full(block)) = iq_tx.try_send(block) {
+                        pool.put(block);
+                    }
                 }
             },
             |_| {
@@ -376,6 +407,7 @@ static DEBUG_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 /// A line of the FPV_DUMP log.
 fn debug_log(what: std::fmt::Arguments) {
+    crate::lag::event(what);
     if std::env::var_os("FPV_DUMP").is_some() {
         let t = DEBUG_START.get_or_init(Instant::now).elapsed().as_secs_f64();
         eprintln!("{t:8.3} {what}");
@@ -447,11 +479,15 @@ fn front_loop(
     // While the stream starts or restarts, the device answers BUSY: try again for up to 3 s
     let tune = |hz: f64| {
         debug_log(format_args!("tune {:.3} MHz", hz / 1e6));
-        for _ in 0..150 {
+        let started = Instant::now();
+        for busy in 0..150 {
             match device.set_center_freq(hz as u64) {
                 Err(e) if e.code == crate::birria::BUSY => std::thread::sleep(Duration::from_millis(20)),
                 Err(e) => return shared.fail(format!("Tuning to {:.1} MHz: {e}", hz / 1e6)),
-                Ok(()) => return,
+                Ok(()) => {
+                    debug_log(format_args!("tuned in {:.0} ms, {busy} busy", started.elapsed().as_secs_f64() * 1e3));
+                    return;
+                }
             }
         }
         shared.fail(format!("Tuning to {:.1} MHz: the device stayed busy", hz / 1e6));
@@ -526,6 +562,7 @@ fn front_loop(
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => return,
         };
+        crate::lag::depth(0, iq_rx.len());
         // Blocks from before a rate change belong to the previous mode. A cancel that came
         // before the stream had started is lost, so ask again after a while.
         let wanted = shared.rate.load(Relaxed);
@@ -597,6 +634,7 @@ fn front_loop(
                 match video_pool.rx.try_recv() {
                     Ok(mut video) => {
                         video.clear();
+                        video.t = block.t;
                         front.process(&block.iq, &mut video);
                         if let Err(TrySendError::Full(video)) = video_tx.try_send(video) {
                             shared.lost_video.fetch_add(n_video, Relaxed);
@@ -676,6 +714,7 @@ fn post_loop(shared: &Shared, repaint: &(dyn Fn() + Send + Sync)) {
     let mut pixels = vec![0u8; WIDTH * HEIGHT * 3];
     let mut out = vec![0u8; WIDTH * HEIGHT * 3];
     let mut seen = 0u64;
+    let mut t: u64;
     while !shared.quit.load(Relaxed) {
         {
             let mut f = shared.frame.lock().unwrap();
@@ -687,12 +726,18 @@ fn post_loop(shared: &Shared, repaint: &(dyn Fn() + Send + Sync)) {
                 continue;
             }
             pixels.copy_from_slice(&f.pixels);
+            t = f.t;
         }
         post.process(&pixels, &mut out);
+        let fill = shared.fill.load(Relaxed);
+        let lumas = crate::picture::lumas_for(&out, if fill { crate::picture::Fit::Fill } else { crate::picture::Fit::Box });
         {
             let mut p = shared.post_frame.lock().unwrap();
             p.pixels.copy_from_slice(&out);
             p.serial += 1;
+            p.t = t;
+            p.lumas = lumas;
+            p.fill = fill;
         }
         repaint();
     }
@@ -702,6 +747,7 @@ fn post_loop(shared: &Shared, repaint: &(dyn Fn() + Send + Sync)) {
 fn colour_loop(shared: &Shared, rx: Receiver<VideoBlock>, tx: Sender<VideoBlock>, pool: Pool<VideoBlock>) {
     let mut colour = Colour::new();
     for mut block in rx.iter() {
+        crate::lag::depth(1, rx.len());
         if shared.colour.load(Relaxed) {
             colour.process(&mut block, shared.ntsc.load(Relaxed));
         }
@@ -731,14 +777,25 @@ fn back_loop(shared: &Shared, video_rx: Receiver<VideoBlock>, video_pool: Pool<V
         back.video.invert = shared.invert.load(Relaxed);
         back.video.colour = shared.colour.load(Relaxed);
         back.video.offset = (back.video.offset + shared.take_nudge()).clamp(-1.0, 1.0);
+        crate::lag::depth(2, video_rx.len());
+        let t = video.t;
         back.process(&video, &mut |v, locked| {
             weave.process(&v.pixels, v.active_lines(), v.field_lowered, &mut woven);
+            let fill = shared.fill.load(Relaxed);
+            let lumas = crate::picture::lumas_for(&woven, if fill { crate::picture::Fit::Fill } else { crate::picture::Fit::Box });
             {
                 let mut f = shared.frame.lock().unwrap();
                 f.pixels.copy_from_slice(&woven);
                 f.serial += 1;
+                f.t = t;
+                f.lumas = lumas;
+                f.fill = fill;
             }
+            crate::lag::published(t);
             shared.frame_ready.notify_all();
+            if t > 0 && shared.good_fields.load(Relaxed) == 0 && v.good_fields > 0 {
+                debug_log(format_args!("first good field"));
+            }
             shared.hlock.store(locked, Relaxed);
             shared.vlock.store(v.vlock, Relaxed);
             shared.field_lines.store(v.field_lines, Relaxed);

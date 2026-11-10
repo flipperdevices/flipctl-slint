@@ -34,6 +34,8 @@ pub const HLOCKED: i32 = 750;
 /// The 20 Msps demodulated video, and the colour carrier from it at complex baseband, 10 Msps.
 #[derive(Default)]
 pub struct VideoBlock {
+    /// The stamp of the USB block it came from.
+    pub t: u64,
     pub video20: Vec<f32>,
     pub cr: Vec<f32>,
     pub ci: Vec<f32>,
