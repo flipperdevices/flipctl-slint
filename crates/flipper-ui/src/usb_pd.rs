@@ -10,7 +10,8 @@
 //!
 //! The port prefers to be a sink, so a phone plugged in starts out charging the
 //! Flipper. Choosing a set therefore also asks for the source role, except from a
-//! charger, which is the one partner a person never wants to power.
+//! charger, which is the one partner a person never wants to power. A mains-powered
+//! source counts as one even when it could take power: a monitor or a dock.
 
 use std::path::Path;
 #[cfg(test)]
@@ -70,6 +71,8 @@ pub struct Partner {
     /// Whether its own source capabilities say it can also sink. None when it
     /// sent none, which is a partner that is not offering us power.
     pub dual_role: Option<bool>,
+    /// Whether those capabilities say it has power from outside, the mains.
+    pub mains: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,10 +91,12 @@ impl Port {
         read_at(Path::new(PORT), Path::new(PARTNER), Path::new(SETS))
     }
 
-    /// The Flipper is being charged by something that only supplies power: a
-    /// wall charger, or a plain Type-C source with no PD at all.
+    /// The Flipper is being charged by something that only supplies power or
+    /// runs off the mains: a wall charger, a monitor, a dock, or a plain Type-C
+    /// source with no PD at all.
     pub fn charger(&self) -> bool {
-        self.role == Role::Sink && self.partner.as_ref().is_some_and(|p| p.dual_role != Some(true))
+        self.role == Role::Sink
+            && self.partner.as_ref().is_some_and(|p| p.dual_role != Some(true) || p.mains)
     }
 
     /// Whether to ask which set to offer: a PD partner that is not a charger.
@@ -154,11 +159,10 @@ fn read_partner(partner: &Path) -> Option<Partner> {
         return None;
     }
     let pd = read(&partner.join("supports_usb_power_delivery")).is_some_and(|v| v == "yes");
-    let dual_role = read(
-        &partner.join("usb_power_delivery/source-capabilities/1:fixed_supply/dual_role_power"),
-    )
-    .map(|v| v == "1");
-    Some(Partner { pd, dual_role })
+    let pdo = partner.join("usb_power_delivery/source-capabilities/1:fixed_supply");
+    let dual_role = read(&pdo.join("dual_role_power")).map(|v| v == "1");
+    let mains = read(&pdo.join("unconstrained_power")).is_some_and(|v| v == "1");
+    Some(Partner { pd, dual_role, mains })
 }
 
 /// `read`, against any three directories, so the tests can build a port of
@@ -422,7 +426,8 @@ mod tests {
     }
 
     /// A phone starts out charging the Flipper, since the port tries to be a
-    /// sink, and is still worth asking about. A charger is not.
+    /// sink, and is still worth asking about. A charger is not, and neither is a
+    /// mains-powered monitor that could also take power.
     #[test]
     fn a_phone_is_asked_about_and_a_charger_is_not() {
         let root = scratch("partners");
@@ -434,6 +439,13 @@ mod tests {
         put(&drp, "1");
         let phone = read_at(&port, &partner, &sets).unwrap();
         assert!(!phone.charger() && phone.worth_asking());
+
+        let mains = partner
+            .join("usb_power_delivery/source-capabilities/1:fixed_supply/unconstrained_power");
+        put(&mains, "1");
+        let monitor = read_at(&port, &partner, &sets).unwrap();
+        assert!(monitor.charger() && !monitor.worth_asking());
+        std::fs::remove_file(&mains).unwrap();
 
         put(&drp, "0");
         let charger = read_at(&port, &partner, &sets).unwrap();

@@ -4841,6 +4841,8 @@ fn panel(
     // have arrived.
     let usb_watch = flipper_ui::usb_pd::Watch::spawn();
     const USB_SETTLE: Duration = Duration::from_millis(500);
+    // Off for now: the question is only asked from the Settings row.
+    const USB_ASK_ON_PLUG: bool = false;
     // Read at startup too: a reboot puts the port back on the 5V set, so whatever
     // is plugged in at boot is asked about again.
     let mut usb_settle: Option<Instant> = Some(Instant::now());
@@ -5257,7 +5259,8 @@ fn panel(
                             wl_fresh = true;
                         }
                     }
-                } else if port.worth_asking()
+                } else if USB_ASK_ON_PLUG
+                    && port.worth_asking()
                     && !usb_asked
                     && usb_ask.is_none()
                     && usb_applying.is_none()
