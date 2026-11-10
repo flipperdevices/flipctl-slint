@@ -4129,7 +4129,10 @@ fn panel(
     // The socket a desktop hands a bundle to. Not fatal without it: the panel is the
     // product and the hand-off a convenience.
     let mut ipc = match flipper_ui::ipc::Listener::bind() {
-        Ok(listener) => Some(listener),
+        Ok(listener) => {
+            flipper_ui::claim::recover();
+            Some(listener)
+        }
         Err(e) => {
             eprintln!("ipc            not listening: {e}");
             None

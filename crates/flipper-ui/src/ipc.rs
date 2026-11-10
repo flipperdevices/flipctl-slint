@@ -7,6 +7,8 @@
 //! the socket sits in that user's 0700 runtime directory, which is the whole of the
 //! access control.
 //!
+//! An HTTP request on the same socket is an app asking for hardware; see `claim`.
+//!
 //! Not the browser view's HTTP port: that is an optional feature bound on every
 //! interface with no authentication, and a request that runs a file is not something
 //! to hang off it.
@@ -125,7 +127,14 @@ fn accept_loop(listener: UnixListener, tx: Sender<Pending>) {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
         let Ok(reading) = stream.try_clone() else { continue };
         let mut line = String::new();
-        if BufReader::new(reading.take(MAX_LINE as u64 + 1)).read_line(&mut line).is_err() {
+        let mut reader = BufReader::new(reading.take(MAX_LINE as u64 + 1));
+        if reader.read_line(&mut line).is_err() {
+            continue;
+        }
+        if crate::claim::is_http(&line) {
+            // The reader may hold the headers already, so they go along with the line
+            let rest = reader.buffer().to_vec();
+            crate::claim::serve(line, rest, stream);
             continue;
         }
         match parse(&line) {
@@ -195,6 +204,20 @@ mod tests {
         assert!(parse("").is_err());
         assert!(parse("launch /x").is_err());
         assert!(parse(&format!("open /{}", "a".repeat(MAX_LINE))).is_err());
+    }
+
+    /// An HTTP request is answered on the socket itself, headers and all arriving in
+    /// one write, as a client sends them.
+    #[test]
+    fn an_http_request_is_answered_on_the_socket() {
+        let path = std::env::temp_dir().join(format!("flipctl-ipc-http-{}.sock", std::process::id()));
+        let _listener = Listener::bind_at(path.clone()).expect("bind");
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream.write_all(b"POST /claim/hackrf HTTP/1.1\r\nHost: flipctl\r\nContent-Length: 0\r\n\r\n").unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 404 "), "{answer}");
     }
 
     /// A ping goes in, the loop answers, the client reads it back.

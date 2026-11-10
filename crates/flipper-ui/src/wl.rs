@@ -650,6 +650,8 @@ impl Session {
             // Hosted, as opposed to started from a desktop: a bundle's AppRun runs
             // its program when this is set and hands the file to flipctl when not.
             .env("FLIPCTL_HOSTED", "1")
+            // The runtime dir above is the app's own, so flipctl's socket is named here
+            .env("FLIPCTL_SOCKET", crate::ipc::socket_path())
             .env_remove("SWAYSOCK")
             .env_remove("WAYLAND_SOCKET")
             .stdin(Stdio::null());

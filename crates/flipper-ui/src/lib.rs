@@ -8,6 +8,7 @@ pub mod boot;
 pub mod boot_menu;
 pub mod bundle;
 pub mod catalogue;
+pub mod claim;
 pub mod dropdown;
 #[cfg(feature = "device")]
 pub mod evdev;
