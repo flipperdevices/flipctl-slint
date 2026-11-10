@@ -1,0 +1,12 @@
+# BirriaSDR, from the Flipper One release of flipperdevices/BirriaSDR, pinned by
+# checksum: where each file goes in the bundle, its url, and its sha256. Unpacked by
+# tools/appimage/fetch-release.sh; a tarball gives up the member named like the
+# destination.
+#
+# The library is the versioned file, not the .so.0 link to it, which tar cannot hand
+# over by name; src/birria.rs opens it by that name.
+usr/lib/aarch64-linux-gnu/libbirriasdr.so.0.1.0 https://github.com/flipperdevices/BirriaSDR/releases/download/v0.1.0-flipperone.3/flipperone-wifi-sdr-arm64.tar.gz 460a6107db3ff3f741e7c3045311babeb86460bbddf8a61ddd5a2cd5ce86680c
+usr/bin/birria_burst https://github.com/flipperdevices/BirriaSDR/releases/download/v0.1.0-flipperone.3/flipperone-wifi-sdr-arm64.tar.gz 460a6107db3ff3f741e7c3045311babeb86460bbddf8a61ddd5a2cd5ce86680c
+usr/share/doc/birriasdr/LICENSE https://github.com/flipperdevices/BirriaSDR/releases/download/v0.1.0-flipperone.3/flipperone-wifi-sdr-arm64.tar.gz 460a6107db3ff3f741e7c3045311babeb86460bbddf8a61ddd5a2cd5ce86680c
+usr/share/doc/birriasdr/BSD-3-Clause-Clear.txt https://github.com/flipperdevices/BirriaSDR/releases/download/v0.1.0-flipperone.3/flipperone-wifi-sdr-arm64.tar.gz 460a6107db3ff3f741e7c3045311babeb86460bbddf8a61ddd5a2cd5ce86680c
+usr/share/doc/birriasdr/NOTICE https://github.com/flipperdevices/BirriaSDR/releases/download/v0.1.0-flipperone.3/flipperone-wifi-sdr-arm64.tar.gz 460a6107db3ff3f741e7c3045311babeb86460bbddf8a61ddd5a2cd5ce86680c

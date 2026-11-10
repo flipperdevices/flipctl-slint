@@ -1,0 +1,37 @@
+# Its own workspace, so this crate is independent of whatever it happens to sit
+# inside. Without it cargo refuses to build: a crate under a workspace directory
+# is assumed to be a member of it.
+[workspace]
+
+[package]
+name = "fpv-app"
+version = "0.1.0"
+edition = "2021"
+# The source. The binary is a combined work: it links flipctl-app, and so Slint,
+# which makes the built app GPL-3.0-only like flipctl itself.
+license = "MIT"
+publish = false
+
+# The receiver's own three: the channels between its threads, the CPU pinning and
+# dlopen, and the FFT its scan measures the band with. libbirriasdr itself is opened
+# at run time (src/birria.rs), so the binary links nothing the bundler refuses.
+[dependencies]
+flipctl-app = { path = "../../crates/flipctl-app" }
+slint = { version = "1.17", default-features = false, features = ["compat-1-2", "backend-winit-wayland", "renderer-software", "std"] }
+crossbeam-channel = "0.5"
+libc = "0.2"
+rustfft = "6.4"
+
+[dev-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["render"] }
+
+[build-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
+
+# Speed, not size, unlike the other apps: the decoder runs on three cores at 20 to 80
+# million samples a second, and the receiver measured its budget at opt-level 3.
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+strip = true

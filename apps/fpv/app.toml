@@ -1,0 +1,13 @@
+# Analog FPV video from a drone, on the panel.
+#
+# The Wi-Fi chip is the radio: BirriaSDR turns the MT7921 into a receiver, and the
+# decoder is the FPV receiver's (FlipperOne-WiFi-SDR-FPV-receiver). Both come from
+# outside this repository. The decoder is copied into src/, changed where its files
+# say; the library and the burst patch are flipperdevices/BirriaSDR's release,
+# carried in the bundle from release.lock, and libusb for the library from deb.lock.
+#
+# Wi-Fi and Bluetooth are off while it runs: it claims the chip from flipctl on start,
+# and flipctl gives it back when the app ends, however it ends.
+name = "FPV Receiver"
+wayland = "./target/release/fpv-app"
+folder = "SDR"

@@ -1,0 +1,5 @@
+# The Debian packages this bundle carries, pinned by checksum: libusb, which
+# libbirriasdr loads. Columns: url, sha256, size. From the trixie archive the image is
+# built from; libudev1, its one dependency past glibc, is the device's own systemd.
+# Regenerate when the image's Debian release moves.
+http://deb.debian.org/debian/pool/main/libu/libusb-1.0/libusb-1.0-0_1.0.28-1_arm64.deb 1eed4dc72f3e6fe22dc8c20aba32f0c0c596a51d3e1c1e4c401937005e78ef11 56108
