@@ -257,6 +257,7 @@ mod demo {
                 Act::Boot => flipper_ui::boot::available(),
                 Act::Apps | Act::Manager => can_host_apps(),
                 Act::Flipctl2 => flipper_ui::old_flipctl_loader::available(),
+                Act::UsbPower => usb_power_offered(),
                 _ => true,
             })
             .collect()
@@ -330,6 +331,8 @@ mod demo {
         /// The Wi-Fi page: the radio, the network in use, and the lists a person
         /// joins one from.
         Wifi,
+        /// Ask which capability set the USB-C port offers a device it powers.
+        UsbPower,
         /// Hand the panel to the flipctl2 prototype: stop this build, start the
         /// browser that draws that one. There is no way back from the panel,
         /// which is what makes it a testing row rather than a menu entry.
@@ -390,6 +393,8 @@ mod demo {
         Wifi,
         /// "Airplane mode" while that is what blocks the row.
         ModemBlocked,
+        /// The capability set the USB-C port is offering.
+        UsbPower,
     }
 
     pub struct Row {
@@ -450,6 +455,7 @@ mod demo {
         rows: &[
             Row { label: "System info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::System) },
             Row { label: "Battery info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Battery) },
+            Row { label: "USB-C1 power out", icon: 0, frames: 1, stat: Stat::UsbPower, act: Act::UsbPower },
             Row { label: "Disk info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
             Row { label: "App Manager", icon: 0, frames: 1, stat: Stat::None, act: Act::Manager },
             Row { label: "OS Profiles", icon: 0, frames: 1, stat: Stat::None, act: Act::Boot },
@@ -507,7 +513,17 @@ mod demo {
                 }
             }
             Stat::ModemBlocked => if net.airplane { "Airplane mode" } else { "" }.into(),
+            Stat::UsbPower => flipper_ui::usb_pd::Port::read()
+                .and_then(|p| p.sets.get(p.selected).map(|s| s.short()))
+                .unwrap_or_default(),
         }
+    }
+
+    /// Whether there is a choice to make: capability sets to choose between, and
+    /// something plugged in that negotiated PD and is not a charger. Read live,
+    /// since the row comes and goes with what is plugged in.
+    pub fn usb_power_offered() -> bool {
+        flipper_ui::usb_pd::Port::read().is_some_and(|p| p.sets.len() > 1 && p.worth_asking())
     }
 
     /// Bottom-bar labels, one per physical soft key, in silkscreen order.
@@ -2926,6 +2942,71 @@ fn paint_status(
     }
 }
 
+/// A greyscale frame as an image Slint can draw.
+#[cfg(feature = "slint")]
+fn grey_image(grey: &[u8], w: u16, h: u16) -> slint::Image {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(u32::from(w), u32::from(h));
+    for (px, v) in buffer.make_mut_slice().iter_mut().zip(grey.iter()) {
+        *px = slint::Rgb8Pixel { r: *v, g: *v, b: *v };
+    }
+    slint::Image::from_rgb8(buffer)
+}
+
+/// Put a choice popup's layout on the window.
+#[cfg(feature = "slint")]
+fn apply_choice(screen: &flipper_ui::ui::Root, choice: &flipper_ui::popup::Choice) {
+    let v = flipper_ui::popup::view(choice);
+    let lines = |lines: &[flipper_ui::popup::Line]| {
+        slint::ModelRc::new(slint::VecModel::from(
+            lines
+                .iter()
+                .map(|l| flipper_ui::ui::ChoiceLine {
+                    x: l.x as f32,
+                    y: l.y as f32,
+                    text: l.text.as_str().into(),
+                })
+                .collect::<Vec<_>>(),
+        ))
+    };
+    screen.set_choice_view(flipper_ui::ui::ChoiceView {
+        x: v.x as f32,
+        y: v.y as f32,
+        w: v.w as f32,
+        h: v.h as f32,
+        title: v.title.text.as_str().into(),
+        title_x: v.title.x as f32,
+        title_y: v.title.y as f32,
+        row_x: v.row_x as f32,
+        row_w: v.row_w as f32,
+        sel_y: v.sel_y as f32,
+    });
+    screen.set_choice_hints(lines(&v.hints));
+    screen.set_choice_rows(slint::ModelRc::new(slint::VecModel::from(
+        v.rows
+            .iter()
+            .map(|r| flipper_ui::ui::ChoiceRow {
+                y: r.y as f32,
+                text: r.text.as_str().into(),
+                note: r.note.as_str().into(),
+                note_x: r.note_x as f32,
+                rule: r.rule,
+            })
+            .collect::<Vec<_>>(),
+    )));
+}
+
+/// The question the USB-C port asks, about the port as it was read.
+#[cfg(feature = "slint")]
+fn usb_power_choice(port: &flipper_ui::usb_pd::Port) -> flipper_ui::popup::Choice {
+    flipper_ui::popup::Choice {
+        title: "Select USB-C1 output power".into(),
+        options: port.sets.iter().map(|s| s.label()).collect(),
+        notes: port.sets.iter().map(|s| s.mode().to_string()).collect(),
+        hints: port.sets.iter().map(|s| s.hint().into_iter().map(String::from).collect()).collect(),
+        selected: port.selected,
+    }
+}
+
 /// One card, with its picture converted once and kept.
 ///
 /// The cache holds the snapshot itself rather than its address. It used to key on
@@ -2949,14 +3030,7 @@ fn card_of(
             {
                 image.clone()
             } else {
-                let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(
-                    u32::from(PANEL_W),
-                    u32::from(PANEL_H),
-                );
-                for (px, v) in buffer.make_mut_slice().iter_mut().zip(grey.iter()) {
-                    *px = slint::Rgb8Pixel { r: *v, g: *v, b: *v };
-                }
-                let image = slint::Image::from_rgb8(buffer);
+                let image = grey_image(grey, PANEL_W, PANEL_H);
                 // A couple of cards' worth is all that is ever live; anything
                 // older belongs to a snapshot nothing points at any more.
                 if cache.len() >= 8 {
@@ -4757,6 +4831,44 @@ fn panel(
     #[cfg(feature = "wayland")]
     let mut wl_fresh = false;
 
+    // The USB-C power question: asked once for each thing plugged in that speaks PD
+    // and is not a charger, and from the Settings row whenever someone wants it.
+    // The kernel's events are only a signal. The port is read once they settle,
+    // which is after the contract is in place and the partner's own capabilities
+    // have arrived.
+    let usb_watch = flipper_ui::usb_pd::Watch::spawn();
+    const USB_SETTLE: Duration = Duration::from_millis(500);
+    // Read at startup too: a reboot puts the port back on the 5V set, so whatever
+    // is plugged in at boot is asked about again.
+    let mut usb_settle: Option<Instant> = Some(Instant::now());
+    let mut usb_asked = false;
+    let mut usb_ask: Option<(flipper_ui::popup::Choice, flipper_ui::usb_pd::Port)> = None;
+    let mut usb_dirty = false;
+    let mut usb_applying: Option<std::sync::mpsc::Receiver<Result<(), String>>> = None;
+
+    // Put the question up, over whatever is on the panel. Over an app, the app's
+    // last frame goes under the wash and the panel is ours until it is answered.
+    macro_rules! ask_usb_power {
+        ($port:expr) => {{
+            let port: flipper_ui::usb_pd::Port = $port;
+            #[cfg(feature = "wayland")]
+            {
+                let backdrop = wl_front
+                    .as_ref()
+                    .filter(|_| wl_drawn)
+                    .and_then(|front| wl_apps.iter_mut().find(|a| &a.name == front))
+                    .and_then(|a| a.session.latest());
+                screen.set_choice_has_backdrop(backdrop.is_some());
+                if let Some(grey) = backdrop {
+                    screen.set_choice_backdrop(grey_image(&grey, PANEL_W, PANEL_H));
+                }
+            }
+            press.cancel();
+            usb_ask = Some((usb_power_choice(&port), port));
+            usb_dirty = true;
+        }};
+    }
+
     let report = |frames: u64,
                   started: &Instant,
                   render_total: Duration,
@@ -5123,6 +5235,65 @@ fn panel(
             }
         }
 
+        // The USB-C port, whoever owns the panel: a phone plugged in is news over
+        // an app as much as over the menu.
+        if usb_watch.take_dirty() {
+            usb_settle = Some(Instant::now() + USB_SETTLE);
+        }
+        if usb_settle.is_some_and(|at| Instant::now() >= at) {
+            usb_settle = None;
+            if let Some(port) = flipper_ui::usb_pd::Port::read() {
+                if port.partner.is_none() {
+                    usb_asked = false;
+                    // Unplugged mid-question: nothing is left to answer it about.
+                    if usb_ask.take().is_some() {
+                        press.cancel();
+                        usb_dirty = true;
+                        #[cfg(feature = "wayland")]
+                        {
+                            wl_fresh = true;
+                        }
+                    }
+                } else if port.worth_asking()
+                    && !usb_asked
+                    && usb_ask.is_none()
+                    && usb_applying.is_none()
+                {
+                    usb_asked = true;
+                    eprintln!("usb power      something to power is plugged in, asking");
+                    ask_usb_power!(port);
+                }
+                // The Settings row comes and goes with what is plugged in, and shows
+                // the set on offer. A row leaving can leave the cursor past the end.
+                if screen.get_screen() == Screen::Menu {
+                    let menu = stack.last().unwrap().0;
+                    demo::apply_menu(&screen, menu, &net_now);
+                    let last = demo::rows(menu).len() as i32 - 1;
+                    selected = selected.min(last).max(0);
+                    scroll = scroll.min(selected);
+                }
+            }
+        }
+        if let Some(rx) = usb_applying.as_ref() {
+            match rx.try_recv() {
+                Ok(result) => {
+                    usb_applying = None;
+                    usb_settle = Some(Instant::now());
+                    if let Err(e) = result {
+                        eprintln!("usb power      not changed: {e}");
+                        dialog = Some(Dialog {
+                            lines: vec!["Could not change".into(), "USB-C1 power output".into()],
+                            left: "Back",
+                            right: "",
+                            act: DialogAct::None,
+                        });
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => usb_applying = None,
+            }
+        }
+
         match deps.take() {
             Some(Deps::Checking(idx, rx)) => match rx.try_recv() {
                 Ok(m) if m.is_empty() => {
@@ -5434,8 +5605,9 @@ fn panel(
         // buttons, so every press is forwarded, physical and simulated alike. That is
         // the whole of the forwarding policy now, with no allowlist, no held-key rule
         // and nothing to decide about what the kernel may already have delivered.
+        // Not while the USB-C question is up: it has the panel and the keys.
         #[cfg(feature = "wayland")]
-        if let Some(front) = wl_front.clone() {
+        if let Some(front) = wl_front.clone().filter(|_| usb_ask.is_none()) {
             let mut leave = None;
             for event in pending_input.drain(..).chain(pending_remote.drain(..)) {
                 if keylog {
@@ -5731,6 +5903,33 @@ fn panel(
                     }
                 );
             }
+            // The USB-C question owns every key while it is up, over anything at all.
+            // The key that answers it has its release swallowed too, so the screen
+            // underneath never sees half a press.
+            if usb_ask.is_some() {
+                if !event.down {
+                    if swallow_release == Some(event.key) {
+                        swallow_release = None;
+                    }
+                    continue;
+                }
+                match event.key {
+                    FlipperKey::Up => usb_ask.as_mut().unwrap().0.up(),
+                    FlipperKey::Down => usb_ask.as_mut().unwrap().0.down(),
+                    FlipperKey::Escape | FlipperKey::Back => {
+                        swallow_release = Some(event.key);
+                        press.button(FlipperKey::Escape, 0, Instant::now() + flash);
+                    }
+                    FlipperKey::Ok | FlipperKey::Run => {
+                        swallow_release = Some(event.key);
+                        press.button(FlipperKey::Run, 4, Instant::now() + flash);
+                    }
+                    _ => {}
+                }
+                usb_dirty = true;
+                continue;
+            }
+
             // The keyboard is the one screen that cares when a key is let go: a
             // held OK on the shift key latches caps lock.
             if !event.down {
@@ -6762,7 +6961,25 @@ fn panel(
                 // an app or the switcher in front it is covered, not asked, and a
                 // soft key pressed over there is not an answer to it.
                 let covered = switcher.is_some();
-                if let Some(d) = dialog.take().filter(|_| !covered) {
+                if let Some((choice, port)) = usb_ask.take() {
+                    usb_dirty = true;
+                    // The app underneath, if any, takes the panel back with its
+                    // current frame rather than waiting for its next one.
+                    #[cfg(feature = "wayland")]
+                    {
+                        wl_fresh = true;
+                    }
+                    if slot == Some(4) {
+                        if let Some(set) = port.sets.get(choice.selected).map(|s| s.name.clone()) {
+                            eprintln!("usb power      offering {set}");
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(flipper_ui::usb_pd::apply(&port, &set));
+                            });
+                            usb_applying = Some(rx);
+                        }
+                    }
+                } else if let Some(d) = dialog.take().filter(|_| !covered) {
                     if d.act == DialogAct::InstallDeps {
                         match (slot, deps.take()) {
                             // Install: run it, streaming output to the log.
@@ -7542,6 +7759,11 @@ fn panel(
                                 act: DialogAct::None,
                             });
                         }
+                        demo::Act::UsbPower => {
+                            if let Some(port) = flipper_ui::usb_pd::Port::read() {
+                                ask_usb_power!(port);
+                            }
+                        }
                         // No factory in the prototype either.
                         demo::Act::Nothing | demo::Act::Airplane => {}
                     }
@@ -8215,7 +8437,22 @@ fn panel(
             screen.set_modal_left(dialog.as_ref().map_or("", |d| d.left).into());
             screen.set_modal_right(dialog.as_ref().map_or("", |d| d.right).into());
         }
-        screen.set_modal_pressed_slot(press.dialog_slot());
+        // The USB-C question sits over any dialog, and the flash is its own.
+        screen.set_modal_pressed_slot(if usb_ask.is_some() { -1 } else { press.dialog_slot() });
+        screen.set_choice_pressed_slot(if usb_ask.is_some() { press.dialog_slot() } else { -1 });
+        if usb_dirty {
+            usb_dirty = false;
+            match usb_ask.as_ref() {
+                Some((choice, _)) => {
+                    apply_choice(&screen, choice);
+                    screen.set_choice_open(true);
+                }
+                None => {
+                    screen.set_choice_open(false);
+                    screen.set_choice_has_backdrop(false);
+                }
+            }
+        }
         screen.set_detail_pressed_slot(if screen.get_screen() == Screen::Detail {
             press.soft_slot()
         } else {
@@ -8272,7 +8509,7 @@ fn panel(
         // is damage, which would put the Apps list on top of a running game for a
         // frame every second.
         #[cfg(feature = "wayland")]
-        let app_owns_panel = wl_front.is_some() && wl_drawn;
+        let app_owns_panel = wl_front.is_some() && wl_drawn && usb_ask.is_none();
         #[cfg(not(feature = "wayland"))]
         let app_owns_panel = false;
 

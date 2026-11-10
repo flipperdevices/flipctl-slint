@@ -31,6 +31,7 @@ pub mod old_flipctl_loader;
 pub mod paint;
 pub mod pixel;
 pub mod platform;
+pub mod popup;
 pub mod profile_update;
 #[cfg(feature = "remote")]
 pub mod remote;
@@ -48,6 +49,7 @@ pub mod system;
 #[cfg(feature = "tui")]
 pub mod tui;
 pub mod update;
+pub mod usb_pd;
 pub mod watch;
 pub mod wifi;
 #[cfg(feature = "wayland")]

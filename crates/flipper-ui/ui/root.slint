@@ -17,8 +17,9 @@ import { BootBody, BootRow, BootPopupRow } from "boot.slint";
 import { TextInputBody, KbCell } from "keyboard.slint";
 import { SwitcherBody, SwitchCard } from "switcher.slint";
 import { CardsBody, CardItem } from "card.slint";
+import { ChoicePopup, ChoiceView, ChoiceRow, ChoiceLine } from "choice.slint";
 
-export { ListItem, IdleLine, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetRow, WifiDetailRow, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem }
+export { ListItem, IdleLine, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetRow, WifiDetailRow, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem, ChoiceView, ChoiceRow, ChoiceLine }
 
 // Idle is the root. The menu opens over it and the app list over that. There are no
 // screens for an app to be shown on: an app draws its own, and what flipctl puts up
@@ -217,6 +218,16 @@ export component Root inherits Window {
     in property <string> modal_left;
     in property <string> modal_right;
     in property <int> modal_pressed_slot: -1;
+
+    // A question asked of whoever is holding the device, over anything at all: the
+    // switcher, a dialog, a hosted app. `choice_backdrop` is that app's last frame.
+    in property <bool> choice_open;
+    in property <ChoiceView> choice_view;
+    in property <[ChoiceRow]> choice_rows;
+    in property <[ChoiceLine]> choice_hints;
+    in property <image> choice_backdrop;
+    in property <bool> choice_has_backdrop;
+    in property <int> choice_pressed_slot: -1;
 
     idle := IdleBody {
         visible: root.screen == Screen.idle;
@@ -514,5 +525,15 @@ export component Root inherits Window {
         source-clip-y: root.app_spin * (FlipperTheme.spin_h / 1px);
         source-clip-width: FlipperTheme.spin_w / 1px;
         source-clip-height: FlipperTheme.spin_h / 1px;
+    }
+
+    // Last, so nothing draws over it, the app-start spinner included.
+    if root.choice_open: ChoicePopup {
+        view: root.choice_view;
+        rows: root.choice_rows;
+        hints: root.choice_hints;
+        backdrop: root.choice_backdrop;
+        has_backdrop: root.choice_has_backdrop;
+        pressed_slot: root.choice_pressed_slot;
     }
 }

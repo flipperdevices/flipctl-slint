@@ -1,0 +1,153 @@
+// A dialog that asks for one of a few options, over anything on the panel.
+//
+// The modal's wash and frame around a centred title in the heavy face, the options on the dropdown
+// picker's pitch with its rules and selector, each with a note in a second column, and lines under them about the
+// option the selector is on. Cancel and Apply sit in the outer soft slots, so esc
+// and run mean what they mean everywhere else.
+//
+// Every number arrives worked out by `flipper_ui::popup`, which is also where the
+// strings were cut to fit: the title and the hint are centred, and Slint cannot
+// measure a string it is about to draw.
+//
+// Over a hosted app the panel is ours again while this is open, and `backdrop` is
+// the app's last frame, so the dialog reads as sitting on the app it interrupted.
+import { FlipperTheme } from "@theme";
+import { SelectorFrame, SoftBar } from "frame.slint";
+
+export struct ChoiceView {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    title: string,
+    title_x: length,
+    title_y: length,
+    row_x: length,
+    row_w: length,
+    sel_y: length,
+}
+
+// A centred line under the list, placed in Rust.
+export struct ChoiceLine {
+    x: length,
+    y: length,
+    text: string,
+}
+
+export struct ChoiceRow {
+    y: length,
+    text: string,
+    note: string,
+    // From the option's left edge: the column every note starts in.
+    note_x: length,
+    rule: bool,
+}
+
+export component ChoicePopup inherits Rectangle {
+    in property <ChoiceView> view;
+    in property <[ChoiceRow]> rows;
+    in property <[ChoiceLine]> hints;
+    in property <image> backdrop;
+    in property <bool> has_backdrop;
+    // 0 none, 1 left, 4 right: the soft slot flashing after a key press.
+    in property <int> pressed_slot: -1;
+
+    width: 100%;
+    height: 100%;
+
+    if root.has_backdrop: Image {
+        x: 0;
+        y: 0;
+        width: FlipperTheme.panel_w;
+        height: FlipperTheme.panel_h;
+        source: root.backdrop;
+        image-rendering: pixelated;
+    }
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: FlipperTheme.white.with-alpha(FlipperTheme.overlay_alpha);
+    }
+
+    SelectorFrame {
+        x: root.view.x;
+        y: root.view.y;
+        frame_w: root.view.w;
+        frame_h: root.view.h;
+        filled: true;
+        stroke: true;
+        shadow: false;
+        fill_color: FlipperTheme.white;
+        stroke_color: FlipperTheme.black;
+        radius: FlipperTheme.box;
+    }
+
+    Text {
+        x: root.view.title_x;
+        y: root.view.title_y;
+        text: root.view.title;
+        font-size: 16px;
+        font-family: "Born2bSportyV2";
+        color: FlipperTheme.black;
+    }
+
+    for row in root.rows: Rectangle {
+        x: root.view.row_x;
+        y: row.y;
+        width: root.view.row_w;
+        height: FlipperTheme.drop_pick_item_h;
+        background: transparent;
+
+        Text {
+            x: FlipperTheme.choice_text_x;
+            y: FlipperTheme.drop_pick_text_dy;
+            text: row.text;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.black;
+        }
+
+        if row.note != "": Text {
+            x: row.note_x;
+            y: FlipperTheme.drop_pick_text_dy;
+            text: row.note;
+            font-size: 16px;
+            font-family: "HaxrCorp 4090";
+            color: FlipperTheme.black;
+        }
+
+        // In the pixel between this option and the next, inset like the picker's.
+        if row.rule: Rectangle {
+            x: FlipperTheme.drop_pick_pad;
+            y: FlipperTheme.drop_pick_item_h;
+            width: root.view.row_w - FlipperTheme.drop_pick_pad * 2;
+            height: FlipperTheme.drop_pick_gap;
+            background: FlipperTheme.pick_rule;
+        }
+    }
+
+    SelectorFrame {
+        x: root.view.row_x;
+        y: root.view.sel_y;
+        frame_w: root.view.row_w - FlipperTheme.drop_pick_sel_inset;
+        frame_h: FlipperTheme.drop_pick_sel_h;
+        filled: false;
+        stroke: true;
+        shadow: true;
+    }
+
+    for line in root.hints: Text {
+        x: line.x;
+        y: line.y;
+        text: line.text;
+        font-size: 16px;
+        font-family: "HaxrCorp 4090";
+        color: FlipperTheme.black;
+    }
+
+    SoftBar {
+        buttons: ["Cancel", "", "", "", "Apply"];
+        pressed_slot: root.pressed_slot;
+    }
+}

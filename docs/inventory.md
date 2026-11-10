@@ -537,6 +537,24 @@ takes too as Changes dropped. Only a profile forced past its own changes keeps i
 version as `-obsolete-<build>`; any other is deleted, or set aside as `_old_` and
 reaped at the next boot when it is the one running. Rollback is the booted profile's.
 
+## USB-C power output, added 2026-11-10
+
+The prototype's Power Management page has a Power Delivery row that opens nothing.
+The port puts USB-C1 power out under Settings, after Battery info, showing the set on
+offer (5V, 18W, 27W), and only while something that negotiated PD and is not a
+charger is plugged in. It opens a choice popup, `ui/choice.slint`, which is new: the
+modal's wash and frame around a centred title, the options on the dropdown picker's
+pitch with its rules and selector, each with its mode in a second column, hint lines
+for the picked option, and Cancel and
+Apply. The frame is sized to its widest line and to the most hint lines any option
+has. It draws over everything, the switcher and a hosted app included. Over an app,
+flipctl takes the panel back and puts the app's last frame under the wash.
+
+The same popup opens by itself when such a partner is plugged in, and at startup if
+one already is, since a reboot puts the port back on the 5V set. The options come
+from the device tree's capability sets in sysfs, and Apply takes the source role
+first.
+
 ## The idle screen's addresses, revisited 2026-10-01
 
 `drawEthCard` gives each interface a two-line card, one IPv4 and one IPv6, and the

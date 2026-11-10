@@ -330,6 +330,20 @@ modal_y             = 40
 modal_w             = 224
 modal_h             = 60
 modal_line_h        = 11
+# A dialog that asks for one of a few options, over anything on the panel: the
+# modal's frame and width, its height grown to the list. A centred title, the
+# options on the dropdown picker's pitch with its rules and selector, and one line
+# under them saying what the picked option means.
+choice_pad          = 4     # frame to title, and hint to frame
+choice_inset        = 4     # frame's side to the options' rules and selector
+choice_text_x       = 4     # an option's text, in from the selector's left edge
+choice_title_gap    = 5     # title line to the first option's selector
+# The title is in the heavy face, whose ink sits 3px lower in its line than the
+# regular face's. Raised by that much so it is as far from the frame's top as from
+# the first option.
+choice_title_dy     = -3
+choice_hint_gap     = 2     # last option's selector to the hint line
+choice_col_gap      = 8     # an option's text to its note, in the column after it
 
 # The boot menu, which has its own denser geometry: a header instead of a status
 # bar, 16px rows instead of 20, and six of them instead of five.
