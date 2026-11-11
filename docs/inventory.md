@@ -541,9 +541,9 @@ reaped at the next boot when it is the one running. Rollback is the booted profi
 
 The prototype's Power Management page has a Power Delivery row that opens nothing.
 The port puts USB-C1 power out under Settings, after Battery info, showing the set on
-offer (5V, 18W, 27W), and only while something that negotiated PD and is not a
-charger is plugged in. A charger is a source that cannot take power or says it runs
-off the mains, so a monitor or dock feeding the Flipper counts as one. It opens a choice popup, `ui/choice.slint`, which is new: the
+offer (5V, 18W, 27W), always, whatever is plugged in and whatever sets the kernel
+has. A partner that offers power is taken power from, and the
+role is never swapped. It opens a choice popup, `ui/choice.slint`, which is new: the
 modal's wash and frame around a centred title, the options on the dropdown picker's
 pitch with its rules and selector, each with its mode in a second column, hint lines
 for the picked option, and Cancel and
@@ -554,8 +554,7 @@ flipctl takes the panel back and puts the app's last frame under the wash.
 The same popup can open by itself when such a partner is plugged in, and at startup
 if one already is, since a reboot puts the port back on the 5V set. That is off for
 now, behind `USB_ASK_ON_PLUG` in the binary. The options come
-from the device tree's capability sets in sysfs, and Apply takes the source role
-first.
+from the device tree's capability sets in sysfs.
 
 ## The idle screen's addresses, revisited 2026-10-01
 

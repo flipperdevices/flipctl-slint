@@ -257,7 +257,6 @@ mod demo {
                 Act::Boot => flipper_ui::boot::available(),
                 Act::Apps | Act::Manager => can_host_apps(),
                 Act::Flipctl2 => flipper_ui::old_flipctl_loader::available(),
-                Act::UsbPower => usb_power_offered(),
                 _ => true,
             })
             .collect()
@@ -517,13 +516,6 @@ mod demo {
                 .and_then(|p| p.sets.get(p.selected).map(|s| s.short()))
                 .unwrap_or_default(),
         }
-    }
-
-    /// Whether there is a choice to make: capability sets to choose between, and
-    /// something plugged in that negotiated PD and is not a charger. Read live,
-    /// since the row comes and goes with what is plugged in.
-    pub fn usb_power_offered() -> bool {
-        flipper_ui::usb_pd::Port::read().is_some_and(|p| p.sets.len() > 1 && p.worth_asking())
     }
 
     /// Bottom-bar labels, one per physical soft key, in silkscreen order.
@@ -4835,10 +4827,9 @@ fn panel(
     let mut wl_fresh = false;
 
     // The USB-C power question: asked once for each thing plugged in that speaks PD
-    // and is not a charger, and from the Settings row whenever someone wants it.
-    // The kernel's events are only a signal. The port is read once they settle,
-    // which is after the contract is in place and the partner's own capabilities
-    // have arrived.
+    // and takes power from the Flipper, and from the Settings row whenever someone
+    // wants it. The kernel's events are only a signal. The port is read once they
+    // settle, which is after the contract is in place.
     let usb_watch = flipper_ui::usb_pd::Watch::spawn();
     const USB_SETTLE: Duration = Duration::from_millis(500);
     // Off for now: the question is only asked from the Settings row.
@@ -5269,14 +5260,9 @@ fn panel(
                     eprintln!("usb power      something to power is plugged in, asking");
                     ask_usb_power!(port);
                 }
-                // The Settings row comes and goes with what is plugged in, and shows
-                // the set on offer. A row leaving can leave the cursor past the end.
+                // The Settings row shows the set on offer.
                 if screen.get_screen() == Screen::Menu {
-                    let menu = stack.last().unwrap().0;
-                    demo::apply_menu(&screen, menu, &net_now);
-                    let last = demo::rows(menu).len() as i32 - 1;
-                    selected = selected.min(last).max(0);
-                    scroll = scroll.min(selected);
+                    demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
                 }
             }
         }
@@ -6980,7 +6966,7 @@ fn panel(
                             eprintln!("usb power      offering {set}");
                             let (tx, rx) = std::sync::mpsc::channel();
                             std::thread::spawn(move || {
-                                let _ = tx.send(flipper_ui::usb_pd::apply(&port, &set));
+                                let _ = tx.send(flipper_ui::usb_pd::apply(&set));
                             });
                             usb_applying = Some(rx);
                         }
