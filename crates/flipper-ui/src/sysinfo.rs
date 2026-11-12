@@ -905,6 +905,8 @@ pub struct System {
     pub mem_total: u64,
     pub os: String,
     pub profile: String,
+    /// The build the running profile was made from, `BUILD_ID` in its os-release.
+    pub build: String,
     /// When the running profile was made, from its root's birth time.
     pub installed: String,
     pub kernel: String,
@@ -1043,6 +1045,7 @@ pub fn system() -> System {
             })
             .unwrap_or_default(),
         profile: crate::status::booted_profile(),
+        build: os_release_value(&release, "BUILD_ID").unwrap_or_default(),
         installed: birth("/").map(date).unwrap_or_default(),
         kernel: read_str("/proc/sys/kernel/osrelease").unwrap_or_default(),
         ufs: ufs(),

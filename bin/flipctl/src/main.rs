@@ -1559,16 +1559,18 @@ mod detail {
     }
 
     /// How the machine was installed, under Installed: a bundle by its number, or a
-    /// custom install followed by the number of each build in it. The dates are on
-    /// Software Revisions.
-    fn install_rows(install: &sysinfo::Install) -> Vec<DetailRow> {
+    /// custom install followed by the number of each build in it. `current`, the
+    /// running profile and its build, goes after the install type, before the builds.
+    /// The dates are on Software Revisions.
+    fn install_rows(install: &sysinfo::Install, current: Vec<DetailRow>) -> Vec<DetailRow> {
         let number = |b: &sysinfo::Installed| b.number.map(|n| format!("#{n}")).unwrap_or_default();
         match &install.bundle {
-            Some(b) => {
-                vec![row("Install type", &format!("Bundle {}", number(b)).trim().to_string())]
-            }
-            None if install.parts.is_empty() => Vec::new(),
+            Some(b) => std::iter::once(row("Install type", format!("Bundle {}", number(b)).trim()))
+                .chain(current)
+                .collect(),
+            None if install.parts.is_empty() => current,
             None => std::iter::once(row("Install type", "Custom"))
+                .chain(current)
                 .chain(install.parts.iter().map(|p| row(part_label(&p.name), &number(p))))
                 .collect(),
         }
@@ -1646,7 +1648,9 @@ mod detail {
         for (label, value) in [("Profile", s.profile.as_str()), ("Installed", &s.installed)] {
             out.extend(long(label, value));
         }
-        out.extend(install_rows(&s.install));
+        let build = if s.build.is_empty() { String::new() } else { format!("#{}", s.build) };
+        let current = long("Current Profile", format!("{} {build}", s.profile).trim());
+        out.extend(install_rows(&s.install, current));
         out.extend(long("Kernel", &s.kernel));
         sections.push(("Software", std::mem::take(&mut out)));
         if let Some(u) = &s.ufs {
