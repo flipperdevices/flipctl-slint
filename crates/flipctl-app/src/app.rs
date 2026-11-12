@@ -546,6 +546,9 @@ where
             slint::Timer::single_shot(flash, move || {
                 if let Some(driver) = later.upgrade() {
                     driver.borrow_mut().release(key);
+                    if driver.borrow().closed() {
+                        let _ = slint::quit_event_loop();
+                    }
                 }
             });
         }
