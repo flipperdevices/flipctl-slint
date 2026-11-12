@@ -156,7 +156,7 @@ usage: flipctl [--panel [--kms-device PATH]] [--png PATH]
                  shows by default
   --assets DIR   where device.png lives (default: crates/flipper-ui/assets/remote)
   --png PATH     render one frame headlessly and write an 8-bit greyscale PNG
-  --screen NAME  with --png, render a menu level: main, network or settings;
+  --screen NAME  with --png, render a menu level: main, network, settings or leds;
                  a detail screen by name (system, ethernet, routing, disk,
                  battery, modem, update); or manager and manager-info
   --select N     with --screen, which row is selected
@@ -171,6 +171,7 @@ Switches read from the environment, all off unless set:
 
 #[cfg(feature = "slint")]
 mod demo {
+    use flipper_ui::leds::Group;
     use flipper_ui::ui::{ListItem, Root};
 
     pub fn labels(list: &[&str]) -> slint::ModelRc<slint::SharedString> {
@@ -257,6 +258,7 @@ mod demo {
                 Act::Boot => flipper_ui::boot::available(),
                 Act::Apps | Act::Manager => can_host_apps(),
                 Act::Flipctl2 => flipper_ui::old_flipctl_loader::available(),
+                Act::Sub(m) if std::ptr::eq(m, &LEDS) => flipper_ui::leds::available(),
                 _ => true,
             })
             .collect()
@@ -268,6 +270,7 @@ mod demo {
             .map(|r| {
                 let status = row_status(&r.stat, net);
                 let (chevrons, value) = chevrons_of(&status);
+                let (at_start, at_end) = row_ends(&r.stat);
                 ListItem {
                     label: r.label.into(),
                     // A menu row is a place, not an app: nothing runs it.
@@ -278,8 +281,8 @@ mod demo {
                     frames: r.frames,
                     chevrons,
                     value: value.as_str().into(),
-                    at_start: false,
-                    at_end: false,
+                    at_start,
+                    at_end,
                     dim: false,
                 }
             })
@@ -332,6 +335,8 @@ mod demo {
         Wifi,
         /// Ask which capability set the USB-C port offers a device it powers.
         UsbPower,
+        /// One LED group's brightness, which left and right step.
+        Led(Group),
         /// Hand the panel to the flipctl2 prototype: stop this build, start the
         /// browser that draws that one. There is no way back from the panel,
         /// which is what makes it a testing row rather than a menu entry.
@@ -394,6 +399,8 @@ mod demo {
         ModemBlocked,
         /// The capability set the USB-C port is offering.
         UsbPower,
+        /// An LED group's brightness, between chevrons.
+        Led(Group),
     }
 
     pub struct Row {
@@ -455,6 +462,7 @@ mod demo {
             Row { label: "System info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::System) },
             Row { label: "Battery info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Battery) },
             Row { label: "USB-C1 power out", icon: 0, frames: 1, stat: Stat::UsbPower, act: Act::UsbPower },
+            Row { label: "LED Brightness", icon: 0, frames: 1, stat: Stat::None, act: Act::Sub(&LEDS) },
             Row { label: "Disk info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
             Row { label: "App Manager", icon: 0, frames: 1, stat: Stat::None, act: Act::Manager },
             Row { label: "OS Profiles", icon: 0, frames: 1, stat: Stat::None, act: Act::Boot },
@@ -462,6 +470,17 @@ mod demo {
             Row { label: "Reinstall FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
             Row { label: "Reboot", icon: 0, frames: 1, stat: Stat::None, act: Act::Reboot },
             Row { label: "Shutdown", icon: 0, frames: 1, stat: Stat::None, act: Act::Shutdown },
+        ],
+    };
+
+    /// The brightness of each LED group the MCU drives. The prototype has none.
+    #[rustfmt::skip]
+    pub static LEDS: Menu = Menu {
+        title: "LED Brightness",
+        rows: &[
+            Row { label: "Link", icon: 0, frames: 1, stat: Stat::Led(Group::Link), act: Act::Led(Group::Link) },
+            Row { label: "Power", icon: 0, frames: 1, stat: Stat::Led(Group::Power), act: Act::Led(Group::Power) },
+            Row { label: "Wattmeter", icon: 0, frames: 1, stat: Stat::Led(Group::Wattmeter), act: Act::Led(Group::Wattmeter) },
         ],
     };
 
@@ -515,6 +534,21 @@ mod demo {
             Stat::UsbPower => flipper_ui::usb_pd::Port::read()
                 .and_then(|p| p.sets.get(p.selected).map(|s| s.short()))
                 .unwrap_or_default(),
+            Stat::Led(group) => flipper_ui::leds::read(*group)
+                .map(|v| format!("< {} >", flipper_ui::leds::label(v)))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Whether a row's value is at the start or the end of its range, where the
+    /// chevron pointing past it goes out.
+    fn row_ends(stat: &Stat) -> (bool, bool) {
+        match stat {
+            Stat::Led(group) => match flipper_ui::leds::read(*group) {
+                Some(v) => (v == 0, v == u8::MAX),
+                None => (false, false),
+            },
+            _ => (false, false),
         }
     }
 
@@ -3806,6 +3840,7 @@ fn png(
         let menu = match name {
             "network" => &demo::NETWORK,
             "settings" => &demo::SETTINGS,
+            "leds" => &demo::LEDS,
             _ => &demo::MAIN,
         };
         demo::apply_menu(&screen, menu, &net);
@@ -6888,6 +6923,10 @@ fn panel(
                 continue;
             };
             let is_toggle = matches!(row.act, demo::Act::Airplane);
+            let led = match row.act {
+                demo::Act::Led(group) => Some(group),
+                _ => None,
+            };
 
             match (on_menu_now, event.key) {
                 // Back leaves the menu rather than the program: the menu is not
@@ -6926,6 +6965,25 @@ fn panel(
                         Instant::now() + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
                     ));
                 }
+                // An LED group steps through leds::STEPS. The chevron flashes only when the
+                // value moved: at an end that chevron is not drawn.
+                (true, FlipperKey::Left) | (true, FlipperKey::Right) if led.is_some() => {
+                    let group = led.unwrap();
+                    let up = event.key == FlipperKey::Right;
+                    if let Some(now) = flipper_ui::leds::read(group) {
+                        let next = flipper_ui::leds::step(now, up);
+                        if next != now {
+                            flipper_ui::leds::set(group, next);
+                            arrow = Some((
+                                if up { 2 } else { 1 },
+                                Instant::now()
+                                    + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
+                            ));
+                            demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
+                        }
+                    }
+                }
+                (true, FlipperKey::Ok) | (true, FlipperKey::Run) if led.is_some() => {}
                 // A toggle flips on ok too, with no press flash and no scene
                 // change, matching the onToggle branch in submenu.js.
                 (true, FlipperKey::Ok) | (true, FlipperKey::Run) if is_toggle => {
@@ -7761,7 +7819,7 @@ fn panel(
                             }
                         }
                         // No factory in the prototype either.
-                        demo::Act::Nothing | demo::Act::Airplane => {}
+                        demo::Act::Nothing | demo::Act::Airplane | demo::Act::Led(_) => {}
                     }
                 }
             }

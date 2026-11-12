@@ -556,6 +556,16 @@ if one already is, since a reboot puts the port back on the 5V set. That is off 
 now, behind `USB_ASK_ON_PLUG` in the binary. The options come
 from the device tree's capability sets in sysfs.
 
+## LED brightness, added 2026-11-12
+
+The prototype has no LED settings. LED Brightness under Settings, after USB-C1 power
+out, opens a menu level with one row per MCU LED group: Link, Power and Wattmeter.
+Each shows its group setting between chevrons, and left and right step it through
+Off, 5% and then tenths to 100%. A press is written at once, off the render loop,
+through sudo, since the nodes are root's. The MCU keeps the setting in flash and its
+own menu can change it, so a row reads the MCU's value back rather than caching it.
+The level is hidden on a kernel without the driver's group attributes.
+
 ## The idle screen's addresses, revisited 2026-10-01
 
 `drawEthCard` gives each interface a two-line card, one IPv4 and one IPv6, and the

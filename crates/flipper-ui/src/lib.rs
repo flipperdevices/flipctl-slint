@@ -24,6 +24,7 @@ pub mod keyboard;
 #[cfg(feature = "device")]
 pub mod kms;
 pub mod layout;
+pub mod leds;
 pub mod log;
 pub mod net;
 pub mod netlink;

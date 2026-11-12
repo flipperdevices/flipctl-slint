@@ -14,7 +14,6 @@
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -233,21 +232,7 @@ impl Set {
 /// Offer `set`. Blocks until the partner has the new capabilities, so it belongs
 /// on a thread of its own.
 pub fn apply(set: &str) -> Result<(), String> {
-    write(&Path::new(PORT).join("select_usb_power_delivery"), set)
-}
-
-/// One sysfs write, through sudo: the nodes are root's and flipctl runs as user.
-fn write(path: &Path, value: &str) -> Result<(), String> {
-    let path = path.to_string_lossy();
-    let out = crate::boot::tool(&["sh", "-c", "echo \"$1\" > \"$2\"", "sh", value, &path])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("{path}: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(format!("{path}: {}", String::from_utf8_lossy(&out.stderr).trim()))
-    }
+    crate::system::write_sysfs(&Path::new(PORT).join("select_usb_power_delivery"), set)
 }
 
 /// `NETLINK_KOBJECT_UEVENT`, and its one group: the kernel's own broadcast.

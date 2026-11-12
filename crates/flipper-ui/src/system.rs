@@ -8,6 +8,7 @@
 //! and a reboot is not a network operation. What they had in common was only the
 //! helper that spawns them.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -98,4 +99,18 @@ pub fn reboot() -> Receiver<String> {
 /// Turn the machine off, the same way and with the same answer.
 pub fn shutdown() -> Receiver<String> {
     spawn_transient("systemctl poweroff")
+}
+
+/// One sysfs write, through sudo: the nodes are root's and flipctl runs as user.
+pub fn write_sysfs(path: &Path, value: &str) -> Result<(), String> {
+    let path = path.to_string_lossy();
+    let out = crate::boot::tool(&["sh", "-c", "echo \"$1\" > \"$2\"", "sh", value, &path])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{path}: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!("{path}: {}", String::from_utf8_lossy(&out.stderr).trim()))
+    }
 }
