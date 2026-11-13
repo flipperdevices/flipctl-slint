@@ -3,7 +3,9 @@
 //! The onboard MT7921 is Wi-Fi and Bluetooth in one chip, and an SDR app needs it with
 //! neither driver on it. An app asks for it on flipctl's socket:
 //!
-//!     POST /claim/mt7921 HTTP/1.1
+//! ```text
+//! POST /claim/mt7921 HTTP/1.1
+//! ```
 //!
 //! and gets `200` with `{"claimed":"mt7921"}` once the chip is driverless and its USB
 //! node is the app's user's, or `409` or `500` with `{"error":"..."}`. The `200` has no
@@ -182,7 +184,7 @@ fn handle(first: &str, rest: &[u8], mut stream: UnixStream) -> std::io::Result<(
         stream.flush()?;
         // Held until the app closes its end, or dies and the kernel closes it
         stream.set_read_timeout(None)?;
-        let mut sink = [0u8; 256];
+        let mut sink = [0u8; 256]; // not-a-panel-dimension
         while stream.read(&mut sink)? > 0 {}
         Ok::<(), std::io::Error>(())
     })();

@@ -210,11 +210,14 @@ mod tests {
     /// one write, as a client sends them.
     #[test]
     fn an_http_request_is_answered_on_the_socket() {
-        let path = std::env::temp_dir().join(format!("flipctl-ipc-http-{}.sock", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("flipctl-ipc-http-{}.sock", std::process::id()));
         let _listener = Listener::bind_at(path.clone()).expect("bind");
         let mut stream = UnixStream::connect(&path).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        stream.write_all(b"POST /claim/hackrf HTTP/1.1\r\nHost: flipctl\r\nContent-Length: 0\r\n\r\n").unwrap();
+        stream
+            .write_all(b"POST /claim/hackrf HTTP/1.1\r\nHost: flipctl\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
         let mut answer = String::new();
         stream.read_to_string(&mut answer).unwrap();
         assert!(answer.starts_with("HTTP/1.1 404 "), "{answer}");
