@@ -56,14 +56,20 @@ fn apply(screen: &Root, choice: &Choice) {
 
 fn usb_power(selected: usize) -> Choice {
     Choice {
-        title: "Select USB-C1 output power".into(),
-        options: vec!["5V 3A (15W)".into(), "5-20V (18W)".into(), "5-20V (27W)".into()],
-        notes: vec![
-            "Compatibility mode".into(),
-            "Normal mode".into(),
-            "Burst-only high power mode".into(),
+        title: "USB-C1 power".into(),
+        options: vec![
+            "Charge the Flipper".into(),
+            "Power out 5V 3A (15W)".into(),
+            "Power out 5-20V (18W)".into(),
+            "Power out 5-20V (27W)".into(),
         ],
-        hints: vec![vec![], vec![], vec!["CAUTION: the device will overheat quickly".into()]],
+        notes: vec!["".into(), "Compatibility".into(), "Normal".into(), "Burst only".into()],
+        hints: vec![
+            vec![],
+            vec![],
+            vec![],
+            vec!["CAUTION: the device will overheat quickly".into()],
+        ],
         selected,
     }
 }
@@ -118,8 +124,8 @@ fn the_choice_popup_holds_its_geometry() {
 
     for (name, selected, pressed) in [
         ("choice-usb-power", 0, -1),
-        ("choice-usb-power-18w", 1, -1),
-        ("choice-usb-power-27w-apply", 2, 4),
+        ("choice-usb-power-18w", 2, -1),
+        ("choice-usb-power-27w-apply", 3, 4),
     ] {
         apply(&screen, &usb_power(selected));
         screen.set_choice_pressed_slot(pressed);

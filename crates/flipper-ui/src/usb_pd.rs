@@ -8,8 +8,9 @@
 //! and their PDOs are read from sysfs rather than written down here, so a device
 //! tree that changes them changes the labels with it.
 //!
-//! Only a partner the Flipper is already powering is asked about. One that offers
-//! power is taken power from, so the role is never swapped here.
+//! The popup asks which way power flows and, out, with which set. Out swaps the
+//! Flipper to the source role and back in to the sink role, so it holds only while
+//! the partner stays plugged in: the next one starts out charging the Flipper.
 
 use std::path::Path;
 #[cfg(test)]
@@ -19,6 +20,7 @@ use std::sync::Arc;
 use std::thread;
 
 use crate::netlink::{Socket, Stop, Stopper, Wake};
+use crate::popup::Choice;
 
 /// The port, as the typec class names it.
 pub const PORT: &str = "/sys/class/typec/port0";
@@ -87,6 +89,45 @@ impl Port {
     pub fn worth_asking(&self) -> bool {
         self.role == Role::Source && self.partner.as_ref().is_some_and(|p| p.pd)
     }
+
+    /// The Flipper is powering whatever is plugged in.
+    pub fn powering(&self) -> bool {
+        self.role == Role::Source && self.partner.is_some()
+    }
+
+    /// Charging the Flipper, then giving power with each set.
+    pub fn choice(&self) -> Choice {
+        let sets = &self.sets;
+        Choice {
+            title: "USB-C1 power".into(),
+            options: std::iter::once("Charge the Flipper".into())
+                .chain(sets.iter().map(|s| format!("Power out {}", s.label())))
+                .collect(),
+            notes: std::iter::once(String::new())
+                .chain(sets.iter().map(|s| s.mode().into()))
+                .collect(),
+            hints: std::iter::once(Vec::new())
+                .chain(sets.iter().map(|s| s.hint().into_iter().map(String::from).collect()))
+                .collect(),
+            selected: if self.powering() { 1 + self.selected } else { 0 },
+        }
+    }
+
+    /// What option `at` of `choice()` asks for.
+    pub fn pick(&self, at: usize) -> Option<Pick> {
+        match at {
+            0 => Some(Pick::Charge),
+            _ => self.sets.get(at - 1).map(|s| Pick::Out(s.name.clone())),
+        }
+    }
+}
+
+/// An answer to `Port::choice`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pick {
+    Charge,
+    /// Give power, offering the set of this name.
+    Out(String),
 }
 
 /// `[pd0] pd1 pd2` as the names and the index of the bracketed one.
@@ -211,9 +252,9 @@ impl Set {
     pub fn mode(&self) -> &'static str {
         match self.best() {
             None => "",
-            Some(_) if self.five_volt_only() => "Compatibility mode",
-            Some(best) if best.mw() > SUSTAINED_MW => "Burst-only high power mode",
-            Some(_) => "Normal mode",
+            Some(_) if self.five_volt_only() => "Compatibility",
+            Some(best) if best.mw() > SUSTAINED_MW => "Burst only",
+            Some(_) => "Normal",
         }
     }
 
@@ -229,10 +270,23 @@ impl Set {
     }
 }
 
-/// Offer `set`. Blocks until the partner has the new capabilities, so it belongs
-/// on a thread of its own.
-pub fn apply(set: &str) -> Result<(), String> {
-    crate::system::write_sysfs(&Path::new(PORT).join("select_usb_power_delivery"), set)
+/// Carry out `pick` on `port` as it was read. The set is selected before the swap,
+/// so the partner is offered it in the swap's own negotiation. Blocks for as long
+/// as a power role swap takes, up to about a second, so it belongs on a thread of
+/// its own.
+pub fn apply(port: &Port, pick: &Pick) -> Result<(), String> {
+    let role = |to: &str| crate::system::write_sysfs(&Path::new(PORT).join("power_role"), to);
+    match pick {
+        Pick::Charge if port.powering() => role("sink"),
+        Pick::Charge => Ok(()),
+        Pick::Out(set) => {
+            crate::system::write_sysfs(&Path::new(PORT).join("select_usb_power_delivery"), set)?;
+            if port.role == Role::Sink && port.partner.is_some() {
+                role("source")?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// `NETLINK_KOBJECT_UEVENT`, and its one group: the kernel's own broadcast.
@@ -382,7 +436,7 @@ mod tests {
         let short: Vec<String> = read.sets.iter().map(Set::short).collect();
         assert_eq!(short, ["5V", "18W", "27W"]);
         let modes: Vec<&str> = read.sets.iter().map(Set::mode).collect();
-        assert_eq!(modes, ["Compatibility mode", "Normal mode", "Burst-only high power mode"]);
+        assert_eq!(modes, ["Compatibility", "Normal", "Burst only"]);
         let hints: Vec<Vec<&str>> = read.sets.iter().map(Set::hint).collect();
         assert_eq!(hints, [vec![], vec![], vec!["CAUTION: the device will overheat quickly"]]);
         assert_eq!((read.selected, read.role, read.partner), (0, Role::Sink, None));
@@ -403,6 +457,34 @@ mod tests {
         // And one that never spoke PD, which only ever sees 5V anyway.
         put(&partner.join("supports_usb_power_delivery"), "no");
         assert!(!read_at(&port, &partner, &sets).unwrap().worth_asking());
+    }
+
+    /// Charging comes first, and the selector starts on what the port is doing.
+    #[test]
+    fn the_choice_is_charging_or_a_set() {
+        let root = scratch("choice");
+        let (port, partner, sets) = flipper(&root, "source [sink]");
+        let read = read_at(&port, &partner, &sets).unwrap();
+        let c = read.choice();
+        assert_eq!(
+            c.options,
+            [
+                "Charge the Flipper",
+                "Power out 5V 3A (15W)",
+                "Power out 5-20V (18W)",
+                "Power out 5-20V (27W)"
+            ]
+        );
+        assert_eq!(c.notes, ["", "Compatibility", "Normal", "Burst only"]);
+        assert_eq!(c.hints[3], ["CAUTION: the device will overheat quickly"]);
+        assert_eq!(c.selected, 0);
+        assert_eq!(read.pick(0), Some(Pick::Charge));
+        assert_eq!(read.pick(2), Some(Pick::Out("pd1".into())));
+        assert_eq!(read.pick(4), None);
+
+        put(&partner.join("supports_usb_power_delivery"), "yes");
+        put(&port.join("power_role"), "[source] sink");
+        assert_eq!(read_at(&port, &partner, &sets).unwrap().choice().selected, 1);
     }
 
     #[test]

@@ -532,6 +532,7 @@ mod demo {
             }
             Stat::ModemBlocked => if net.airplane { "Airplane mode" } else { "" }.into(),
             Stat::UsbPower => flipper_ui::usb_pd::Port::read()
+                .filter(|p| p.powering())
                 .and_then(|p| p.sets.get(p.selected).map(|s| s.short()))
                 .unwrap_or_default(),
             Stat::Led(group) => flipper_ui::leds::read(*group)
@@ -3027,16 +3028,6 @@ fn apply_choice(screen: &flipper_ui::ui::Root, choice: &flipper_ui::popup::Choic
 
 /// The question the USB-C port asks, about the port as it was read.
 #[cfg(feature = "slint")]
-fn usb_power_choice(port: &flipper_ui::usb_pd::Port) -> flipper_ui::popup::Choice {
-    flipper_ui::popup::Choice {
-        title: "Select USB-C1 output power".into(),
-        options: port.sets.iter().map(|s| s.label()).collect(),
-        notes: port.sets.iter().map(|s| s.mode().to_string()).collect(),
-        hints: port.sets.iter().map(|s| s.hint().into_iter().map(String::from).collect()).collect(),
-        selected: port.selected,
-    }
-}
-
 /// One card, with its picture converted once and kept.
 ///
 /// The cache holds the snapshot itself rather than its address. It used to key on
@@ -4899,7 +4890,7 @@ fn panel(
                 }
             }
             press.cancel();
-            usb_ask = Some((usb_power_choice(&port), port));
+            usb_ask = Some((port.choice(), port));
             usb_dirty = true;
         }};
     }
@@ -7024,11 +7015,11 @@ fn panel(
                         wl_fresh = true;
                     }
                     if slot == Some(4) {
-                        if let Some(set) = port.sets.get(choice.selected).map(|s| s.name.clone()) {
-                            eprintln!("usb power      offering {set}");
+                        if let Some(pick) = port.pick(choice.selected) {
+                            eprintln!("usb power      {pick:?}");
                             let (tx, rx) = std::sync::mpsc::channel();
                             std::thread::spawn(move || {
-                                let _ = tx.send(flipper_ui::usb_pd::apply(&set));
+                                let _ = tx.send(flipper_ui::usb_pd::apply(&port, &pick));
                             });
                             usb_applying = Some(rx);
                         }

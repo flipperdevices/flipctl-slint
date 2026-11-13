@@ -541,9 +541,11 @@ reaped at the next boot when it is the one running. Rollback is the booted profi
 
 The prototype's Power Management page has a Power Delivery row that opens nothing.
 The port puts USB-C1 power out under Settings, after Battery info, showing the set on
-offer (5V, 18W, 27W), always, whatever is plugged in and whatever sets the kernel
-has. A partner that offers power is taken power from, and the
-role is never swapped. It opens a choice popup, `ui/choice.slint`, which is new: the
+offer (5V, 18W, 27W) while the Flipper powers what is plugged in, always,
+whatever is plugged in and whatever sets the kernel has. The popup lists Charge the
+Flipper and a Power out row per set. Apply selects the set and swaps the power role
+to match while a partner is plugged in, so it holds until the partner is
+unplugged: the next one starts out charging the Flipper. It opens a choice popup, `ui/choice.slint`, which is new: the
 modal's wash and frame around a centred title, the options on the dropdown picker's
 pitch with its rules and selector, each with its mode in a second column, hint lines
 for the picked option, and Cancel and
