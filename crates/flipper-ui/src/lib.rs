@@ -4,6 +4,7 @@
 //! flipper-boot-menu (Falcon initramfs) and flipctl, the system launcher.
 
 pub mod app;
+pub mod battery;
 pub mod boot;
 pub mod boot_menu;
 pub mod bundle;

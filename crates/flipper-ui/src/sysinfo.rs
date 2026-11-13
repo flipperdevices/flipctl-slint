@@ -275,17 +275,19 @@ pub struct Battery {
     pub temp: Option<i64>,
 }
 
+/// As the gauge last announced it: see `crate::battery`.
 pub fn battery() -> Battery {
-    let Some(p) = crate::status::battery_dir() else {
+    let Some(p) = crate::battery::latest() else {
         return Battery::default();
     };
-    let micro = |name: &str| read_i64(p.join(name)).map(|v| v as f32 / 1_000_000.0);
+    let num = |name: &str| p.get(name)?.parse::<i64>().ok();
+    let micro = |name: &str| num(name).map(|v| v as f32 / 1_000_000.0);
     let v = micro("voltage_now");
     let i = micro("current_now");
     Battery {
         available: true,
-        status: read_str(p.join("status")).unwrap_or_else(|| "Unknown".into()),
-        capacity: read_i64(p.join("capacity")).map(|v| v as i32),
+        status: p.get("status").cloned().unwrap_or_else(|| "Unknown".into()),
+        capacity: num("capacity").map(|v| v as i32),
         voltage: v,
         current: i,
         // power_now if the gauge reports it, else V*I, which is what the
@@ -296,9 +298,9 @@ pub fn battery() -> Battery {
         }),
         charge_now: micro("charge_now"),
         charge_full: micro("charge_full"),
-        time_to_empty: read_i64(p.join("time_to_empty_now")),
-        time_to_full: read_i64(p.join("time_to_full_now")),
-        temp: read_i64(p.join("temp")),
+        time_to_empty: num("time_to_empty_now"),
+        time_to_full: num("time_to_full_now"),
+        temp: num("temp"),
     }
 }
 
@@ -1671,19 +1673,14 @@ pub struct Pack {
     pub health: String,
 }
 
-/// The pack, by type rather than by name: its driver has been called both bq28z610
-/// and bq28z620.
+/// As the gauge last announced it: see `crate::battery`.
 fn pack() -> Option<Pack> {
-    let dir = fs::read_dir("/sys/class/power_supply")
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| read_str(p.join("type")).as_deref() == Some("Battery"))?;
-    let text = |f: &str| read_str(dir.join(f)).unwrap_or_default();
-    let num = |f: &str| read_u64(dir.join(f));
+    let p = crate::battery::latest()?;
+    let text = |f: &str| p.get(f).cloned().unwrap_or_default();
+    let num = |f: &str| p.get(f)?.parse::<u64>().ok();
     Some(Pack {
         technology: text("technology"),
-        capacity: read_str(dir.join("capacity")).and_then(|c| c.parse().ok()),
+        capacity: p.get("capacity").and_then(|c| c.parse().ok()),
         status: text("status"),
         full: num("charge_full"),
         design: num("charge_full_design"),

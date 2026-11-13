@@ -110,33 +110,21 @@ fn read_status() -> Status {
     }
 }
 
-/// The pack, as opposed to the charger or the USB-C source.
-///
-/// `type` is the discriminator: this board exposes three supplies
-/// (`bq257xx-charger`, `bq28z610-0`, `tcpm-source-psy-2-0022`) and only the fuel
-/// gauge calls itself a Battery. One rule, used by everything that needs the pack.
-pub fn battery_dir() -> Option<std::path::PathBuf> {
-    std::fs::read_dir("/sys/class/power_supply")
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .find(|dir| read(dir.join("type")).as_deref() == Some("Battery"))
-}
-
 /// Charge level and whether it is charging.
 ///
 /// `status` is the authority on charging: this device reports `Not charging` when
 /// a charger is attached but the pack is full enough to stop, which is not the
 /// same as `Charging`.
 fn read_battery() -> (i32, bool) {
-    let Some(dir) = battery_dir() else {
+    let Some(pack) = crate::battery::latest() else {
         return (-1, false);
     };
-    let level = read(dir.join("capacity"))
+    let level = pack
+        .get("capacity")
         .and_then(|s| s.parse::<i32>().ok())
         .map(|v| v.clamp(0, 100))
         .unwrap_or(-1);
-    let charging = matches!(read(dir.join("status")).as_deref(), Some("Charging") | Some("Full"));
+    let charging = matches!(pack.get("status").map(String::as_str), Some("Charging" | "Full"));
     (level, charging)
 }
 
@@ -416,20 +404,11 @@ fn zone_temp(name: &str) -> Option<i32> {
     None
 }
 
-/// The pack's temperature, in tenths of a degree.
-///
-/// Read from the thermal zone the fuel gauge registers, whose `type` is the
-/// power-supply's own name (`bq28z610-0` here), which is how the prototype finds
-/// it. `power_supply/*/temp` reports the same sensor but already quantised to
-/// tenths, so going through the zone keeps the rounding identical to the CPU's.
+/// The pack's temperature, in tenths of a degree, as the gauge last announced it.
+/// Not through the thermal zone the gauge registers, as the prototype does: reading
+/// that asks the chip.
 fn battery_temp() -> Option<i32> {
-    let dir = battery_dir()?;
-    let name = dir.file_name()?.to_string_lossy().to_string();
-    if let Some(t) = zone_temp(&name) {
-        return Some(t);
-    }
-    // No matching zone: fall back to the gauge's own tenths.
-    read(dir.join("temp"))?.parse().ok()
+    crate::battery::num("temp").map(|t| t as i32)
 }
 
 /// SoC package temperature, in tenths of a degree.
@@ -461,25 +440,15 @@ fn cpu_temp() -> Option<i32> {
 /// exposes no `power_now`, so that is only a middle fallback.
 ///
 /// Negative means the pack is discharging, matching the prototype's convention
-/// that positive flows into the battery.
+/// that positive flows into the battery. As the gauge last announced it.
 fn power_mw() -> Option<i32> {
-    let entries = std::fs::read_dir("/sys/class/power_supply").ok()?;
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if read(dir.join("type")).as_deref() != Some("Battery") {
-            continue;
-        }
-        for field in ["power_avg", "power_now"] {
-            if let Some(uw) = read(dir.join(field)).and_then(|s| s.parse::<i64>().ok()) {
-                return Some((uw / 1000) as i32);
-            }
-        }
-        let ua = read(dir.join("current_now"))?.parse::<i64>().ok()?;
-        let uv = read(dir.join("voltage_now"))?.parse::<i64>().ok()?;
-        // uA * uV = pW; /1_000_000_000 gives mW.
-        return Some(((ua * uv) / 1_000_000_000) as i32);
+    let pack = crate::battery::latest()?;
+    let num = |field: &str| pack.get(field)?.parse::<i64>().ok();
+    if let Some(uw) = num("power_avg").or_else(|| num("power_now")) {
+        return Some((uw / 1000) as i32);
     }
-    None
+    // uA * uV = pW; /1_000_000_000 gives mW.
+    Some(((num("current_now")? * num("voltage_now")?) / 1_000_000_000) as i32)
 }
 
 /// The running profile: the subvolume `/` is mounted from, named the way the boot menu

@@ -568,6 +568,19 @@ through sudo, since the nodes are root's. The MCU keeps the setting in flash and
 own menu can change it, so a row reads the MCU's value back rather than caching it.
 The level is hidden on a kernel without the driver's group attributes.
 
+## The battery, from uevents, 2026-11-13
+
+The prototype reads the gauge's sysfs on a timer, and the port did too: capacity and
+status for the status bar every second, temperature (through the gauge's thermal
+zone) and `power_avg` for the idle screen every second, and the Battery info and
+System pages every two. The bq27xxx driver caches only capacity and flags, so each
+of those was an I2C transaction, about 70 in 15 s, on the bus the Type-C controller
+needs during an attach. The port now keeps the `POWER_SUPPLY_*` snapshot from each
+of the gauge's uevents, `src/battery.rs`, and reads the gauge once at startup
+through its `uevent` file. The gauge announces a change in capacity, flags or
+charging state, on its own 360 s poll or half a second after the charger reports
+one, so temperature and power stand still between those.
+
 ## The idle screen's addresses, revisited 2026-10-01
 
 `drawEthCard` gives each interface a two-line card, one IPv4 and one IPv6, and the
