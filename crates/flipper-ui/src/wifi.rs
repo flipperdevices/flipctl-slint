@@ -367,11 +367,27 @@ fn run(args: &[&str]) -> Result<(), String> {
 /// passphrase: `nmcli device wifi connect` takes the stored secret when it is not
 /// given one, which is what lets the visible-networks list connect to a network it
 /// already knows without asking again.
+///
+/// A new password for a saved profile goes into that profile, which is then
+/// brought up. `device wifi connect` with a password would rewrite it instead, and
+/// nmcli before 1.58 drops its key-mgmt doing so (NetworkManager MR 2323).
 pub fn connect(ssid: &str, password: &str) -> Result<(), String> {
     if password.is_empty() {
-        run(&["nmcli", "device", "wifi", "connect", ssid])
-    } else {
-        run(&["nmcli", "device", "wifi", "connect", ssid, "password", password])
+        return run(&["nmcli", "device", "wifi", "connect", ssid]);
+    }
+    match saved_match(&saved(), ssid) {
+        Some(name) => {
+            run(&[
+                "nmcli",
+                "connection",
+                "modify",
+                &name,
+                "802-11-wireless-security.psk",
+                password,
+            ])?;
+            run(&["nmcli", "connection", "up", &name])
+        }
+        None => run(&["nmcli", "device", "wifi", "connect", ssid, "password", password]),
     }
 }
 
