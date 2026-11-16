@@ -2296,9 +2296,9 @@ mod detail {
 mod wifi {
     pub use flipper_ui::wifi::{
         detail_layout, detail_rows, ensure_visible, fit_password, keep_row_visible,
-        next_selectable, one_line, page_rows, reason, saved_content_h, saved_layout, saved_match,
-        saved_names, saved_rows, selectable, visible_layout, visible_rows, whole, Act, DetailAct,
-        DetailView, Layout, SAVED_TAB, VISIBLE_TAB,
+        next_selectable, one_line, page_rows, passphrase_warning, reason, saved_content_h,
+        saved_layout, saved_match, saved_names, saved_rows, selectable, visible_layout,
+        visible_rows, whole, Act, DetailAct, DetailView, Layout, SAVED_TAB, VISIBLE_TAB,
     };
     use flipper_ui::wifi::{DetailRow, Details, NetRow, Row, Saved};
 
@@ -3966,7 +3966,8 @@ fn png(
         }
     }
     // The passphrase keyboard as a failed join brings it back, with nmcli's reason.
-    // `passphrase-long` is one too long for it, read first in a dialog over it.
+    // `passphrase-long` is one too long for it, read first in a dialog over it, and
+    // `passphrase-new` the keyboard as it opens, before anything is typed.
     if let Some(name) = which.as_deref().filter(|n| n.starts_with("passphrase")) {
         let input = flipper_ui::keyboard::TextInput::new("Password for cybercats", "");
         let stderr = if name == "passphrase-long" {
@@ -3976,7 +3977,11 @@ fn png(
         } else {
             "Error: 802-11-wireless-security.key-mgmt: property is missing.\n"
         };
-        apply_text_input(&screen, &input, &wifi::reason(stderr), true);
+        let warning = match name {
+            "passphrase-new" => wifi::passphrase_warning("").to_string(),
+            _ => wifi::reason(stderr),
+        };
+        apply_text_input(&screen, &input, &warning, true);
         if name == "passphrase-long" {
             let lines =
                 flipper_ui::font::wrap(&wifi::whole(stderr), DIALOG_TEXT_W, DIALOG_MAX_LINES);
@@ -4620,7 +4625,8 @@ fn panel(
                     let existing = boot.as_ref().map(|m| m.profiles()).unwrap_or(&[]);
                     flipper_ui::boot::rename_warning(&$input.text, &being, existing)
                 }
-                KbFor::Passphrase { error, .. } => error.clone(),
+                KbFor::Passphrase { error, .. } if !error.is_empty() => error.clone(),
+                KbFor::Passphrase { .. } => wifi::passphrase_warning(&$input.text).into(),
             }
         };
     }
@@ -6855,12 +6861,16 @@ fn panel(
                         _ => {}
                     }
                     let warning = kb_warning!(input);
-                    // A passphrase is accepted whatever it says: only the AP can
-                    // refuse it. Typing clears whatever it refused last time.
-                    let typed = match input.key(
-                        event.key,
-                        matches!(kb_for, KbFor::Passphrase { .. }) || warning.is_empty(),
-                    ) {
+                    // A passphrase of a length WPA takes is sent even under the
+                    // AP's last refusal, which typing clears: only the AP can say
+                    // it is wrong.
+                    let saveable = match &kb_for {
+                        KbFor::Passphrase { .. } => {
+                            wifi::passphrase_warning(&input.text).is_empty()
+                        }
+                        KbFor::Profile(_) => warning.is_empty(),
+                    };
+                    let typed = match input.key(event.key, saveable) {
                         Some(flipper_ui::keyboard::Exit::Save(text)) => Some(Some(text)),
                         Some(flipper_ui::keyboard::Exit::Cancel) => Some(None),
                         None => None,

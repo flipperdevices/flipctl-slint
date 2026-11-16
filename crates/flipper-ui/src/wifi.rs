@@ -620,6 +620,16 @@ pub fn reason(stderr: &str) -> String {
     lines.find(|l| l.starts_with("Error:")).unwrap_or(first).to_string()
 }
 
+/// Why a passphrase cannot be sent yet, or nothing. WPA takes 8 to 63 characters,
+/// and an empty one has nmcli wait two minutes on a secret agent before failing.
+pub fn passphrase_warning(text: &str) -> &'static str {
+    if (8..=63).contains(&text.chars().count()) {
+        ""
+    } else {
+        "8 to 63 characters"
+    }
+}
+
 /// Everything nmcli said, as one paragraph.
 pub fn whole(stderr: &str) -> String {
     stderr.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
@@ -1450,5 +1460,14 @@ mod tests {
         assert_eq!(whole(stderr), "Warning: password not given. Error: Secrets were required.");
         assert_eq!(reason("\nNo network found\n"), "No network found");
         assert_eq!(reason(""), "");
+    }
+
+    #[test]
+    fn a_passphrase_is_8_to_63_characters() {
+        assert!(!passphrase_warning("").is_empty());
+        assert!(!passphrase_warning("1234567").is_empty());
+        assert!(passphrase_warning("12345678").is_empty());
+        assert!(passphrase_warning(&"x".repeat(63)).is_empty());
+        assert!(!passphrase_warning(&"x".repeat(64)).is_empty());
     }
 }
