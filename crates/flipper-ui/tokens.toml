@@ -392,6 +392,8 @@ kb_input_max_w      = 238   # INPUT_MAX_W
 kb_input_h          = 14
 kb_input_gap        = 14    # inputY = titleY + 14
 kb_warning_gap      = 3     # warning sits 3px under the field
+kb_warning_line_h   = 11    # a wrapped warning's second line
+kb_warning_lift     = 8     # everything above the keyboard moves up for it
 kb_text_ink_h       = 11    # font cap height, for centring text in the field
 # The two tabs under the keyboard: 123 on the left, backspace on the right.
 kb_tab_w            = 48

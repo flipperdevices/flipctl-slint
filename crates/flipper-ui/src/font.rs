@@ -220,6 +220,50 @@ pub fn fit(text: &str, budget: i32) -> String {
     out
 }
 
+/// Break `text` at spaces into at most `max` lines of `budget`, the last one cut
+/// with ".." when the rest does not fit. A word wider than a line is split.
+pub fn wrap(text: &str, budget: i32, max: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut words = text.split_whitespace().peekable();
+    while lines.len() + 1 < max {
+        let Some(&first) = words.peek() else { break };
+        let mut line = String::new();
+        if tw(first) > budget {
+            for c in first.chars() {
+                let mut probe = line.clone();
+                probe.push(c);
+                if tw(&probe) > budget && !line.is_empty() {
+                    break;
+                }
+                line = probe;
+            }
+            let rest = &first[line.len()..];
+            words.next();
+            lines.push(line);
+            if !rest.is_empty() {
+                let rest: Vec<&str> = std::iter::once(rest).chain(words).collect();
+                lines.extend(wrap(&rest.join(" "), budget, max - lines.len()));
+                return lines;
+            }
+            continue;
+        }
+        while let Some(&word) = words.peek() {
+            let probe = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if tw(&probe) > budget {
+                break;
+            }
+            line = probe;
+            words.next();
+        }
+        lines.push(line);
+    }
+    let rest: Vec<&str> = words.collect();
+    if !rest.is_empty() {
+        lines.push(fit(&rest.join(" "), budget));
+    }
+    lines
+}
+
 include!("font/title.rs");
 include!("font/row.rs");
 include!("font/row_active.rs");
@@ -238,5 +282,29 @@ mod tests {
         assert_eq!(LATIN_1.len(), 0xff - 0xc0 + 1, "Latin-1 Supplement");
         assert_eq!(LATIN_A.len(), 0x17f - 0x100 + 1, "Latin Extended-A");
         assert_eq!(CYRILLIC.len(), 0x45f - 0x430 + 1, "Cyrillic");
+    }
+
+    #[test]
+    fn wrap_breaks_at_spaces_and_cuts_the_last_line() {
+        let text = "Error: 802-11-wireless-security.key-mgmt: property is missing.";
+        assert_eq!(wrap(text, 1000, 2), vec![text]);
+        let two = wrap(text, 200, 2);
+        assert_eq!(two.len(), 2);
+        assert!(two.iter().all(|l| tw(l) <= 200));
+        assert_eq!(two.join(" "), text);
+        let cut = wrap(text, 80, 2);
+        assert_eq!(cut.len(), 2);
+        assert!(cut[1].ends_with(".."));
+        assert!(cut.iter().all(|l| tw(l) <= 80));
+        assert!(wrap("", 80, 2).is_empty());
+    }
+
+    #[test]
+    fn wrap_splits_a_word_wider_than_a_line() {
+        let long = "abcdefghijklmnopqrstuvwxyz";
+        let lines = wrap(long, 60, 3);
+        assert!(lines.iter().all(|l| tw(l) <= 60));
+        assert!(lines[0].len() > 1);
+        assert!(lines[1].starts_with(&long[lines[0].len()..lines[0].len() + 1]));
     }
 }

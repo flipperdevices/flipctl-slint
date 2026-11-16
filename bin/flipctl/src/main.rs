@@ -3162,7 +3162,7 @@ fn apply_text_input(
     cursor_on: bool,
 ) {
     use flipper_ui::keyboard::{self, Focus};
-    use flipper_ui::theme::metric::KB_INPUT_PAD;
+    use flipper_ui::theme::metric::{KB_INPUT_PAD, MARGIN_H};
     let field_w = keyboard::field_w(i32::from(flipper_ui::font::TITLE.text_width(&input.text)));
     let fitted = keyboard::fit_input(&input.text, input.cursor, field_w - 2 * KB_INPUT_PAD);
     let cells: Vec<flipper_ui::ui::KbCell> = input
@@ -3189,7 +3189,11 @@ fn apply_text_input(
     screen.set_kb_cursor_dx(fitted.cursor_dx as f32);
     screen.set_kb_cursor_on(cursor_on);
     screen.set_kb_field_focused(input.focus == Focus::Field);
-    screen.set_kb_warning(warning.into());
+    let mut warning =
+        flipper_ui::font::wrap(warning, i32::from(flipper_ui::PANEL_W) - 2 * MARGIN_H, 2)
+            .into_iter();
+    screen.set_kb_warning(warning.next().unwrap_or_default().into());
+    screen.set_kb_warning2(warning.next().unwrap_or_default().into());
     screen.set_kb_cells(slint::ModelRc::new(slint::VecModel::from(cells)));
     screen.set_kb_chrome_x(cx as f32);
     screen.set_kb_chrome_y(cy as f32);
@@ -3951,6 +3955,13 @@ fn png(
                 screen.set_screen(Screen::Detail);
             }
         }
+    }
+    // The passphrase keyboard as a failed join brings it back, with nmcli's reason.
+    if which.as_deref() == Some("passphrase") {
+        let input = flipper_ui::keyboard::TextInput::new("Password for cybercats", "");
+        let error = "Error: 802-11-wireless-security.key-mgmt: property is missing.";
+        apply_text_input(&screen, &input, error, true);
+        screen.set_screen(Screen::TextInput);
     }
     if modal {
         screen.set_modal_lines(slint::ModelRc::new(slint::VecModel::from(vec![
@@ -8311,11 +8322,7 @@ fn panel(
                                 ));
                                 kb_for = KbFor::Passphrase {
                                     ssid: ssid.clone(),
-                                    error: wifi::one_line(
-                                        &e,
-                                        i32::from(flipper_ui::PANEL_W)
-                                            - 2 * flipper_ui::theme::metric::MARGIN_H,
-                                    ),
+                                    error: e.lines().next().unwrap_or_default().trim().into(),
                                 };
                                 kb_dirty = true;
                                 screen.set_screen(Screen::TextInput);

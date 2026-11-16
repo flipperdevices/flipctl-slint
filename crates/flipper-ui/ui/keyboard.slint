@@ -294,6 +294,8 @@ export component TextInputBody inherits Rectangle {
     in property <bool> field_focused;
     // Non-empty refuses the commit and shows why.
     in property <string> warning;
+    // The rest of a warning too long for one line.
+    in property <string> warning2;
 
     in property <[KbCell]> cells;
     in property <length> chrome_x;
@@ -315,7 +317,11 @@ export component TextInputBody inherits Rectangle {
     background: FlipperTheme.white;
 
     property <length> field_x: Math.round((root.width - root.field_w) / 2 / 1px) * 1px;
-    property <length> field_y: FlipperTheme.kb_title_y + FlipperTheme.kb_input_gap;
+    // A second warning line has no room above the keyboard, so the rest moves up.
+    property <length> title_y:
+        FlipperTheme.kb_title_y - (root.warning2 != "" ? FlipperTheme.kb_warning_lift : 0);
+    property <length> field_y: root.title_y + FlipperTheme.kb_input_gap;
+    property <length> warning_y: root.field_y + FlipperTheme.kb_input_h + FlipperTheme.kb_warning_gap;
     property <length> container_x:
         Math.floor((root.width - FlipperTheme.kb_container_w) / 2 / 1px) * 1px;
     property <length> tab_y:
@@ -339,7 +345,7 @@ export component TextInputBody inherits Rectangle {
 
     if root.title != "": Text {
         x: Math.round((root.width - (self.width - 1px)) / 2 / 1px) * 1px;
-        y: FlipperTheme.kb_title_y;
+        y: root.title_y;
         text: root.title;
         font-size: 16px;
         color: FlipperTheme.black;
@@ -397,8 +403,15 @@ export component TextInputBody inherits Rectangle {
 
     if root.warning != "": Text {
         x: Math.round((root.width - (self.width - 1px)) / 2 / 1px) * 1px;
-        y: root.field_y + FlipperTheme.kb_input_h + FlipperTheme.kb_warning_gap;
+        y: root.warning_y;
         text: root.warning;
+        font-size: 16px;
+        color: FlipperTheme.black;
+    }
+    if root.warning2 != "": Text {
+        x: Math.round((root.width - (self.width - 1px)) / 2 / 1px) * 1px;
+        y: root.warning_y + FlipperTheme.kb_warning_line_h;
+        text: root.warning2;
         font-size: 16px;
         color: FlipperTheme.black;
     }
