@@ -613,6 +613,18 @@ pub fn one_line(text: &str, budget: i32) -> String {
     fit(text.lines().next().unwrap_or_default().trim(), budget)
 }
 
+/// nmcli's reason for a failure: its `Error:` line, which can follow warnings.
+pub fn reason(stderr: &str) -> String {
+    let mut lines = stderr.lines().map(str::trim).filter(|l| !l.is_empty());
+    let first = lines.clone().next().unwrap_or_default();
+    lines.find(|l| l.starts_with("Error:")).unwrap_or(first).to_string()
+}
+
+/// Everything nmcli said, as one paragraph.
+pub fn whole(stderr: &str) -> String {
+    stderr.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
 /// Scroll so a row at `y` of height `h` is inside the viewport.
 pub fn ensure_visible(y: i32, h: i32, inner_h: i32, content_h: i32, scroll: i32) -> i32 {
     let mut at = scroll;
@@ -1429,5 +1441,14 @@ mod tests {
         assert!(is_internal("wifi-router-5g"));
         assert!(is_internal("flipper-gadget"));
         assert!(!is_internal("Home WiFi"));
+    }
+
+    #[test]
+    fn the_reason_is_the_error_line_after_any_warning() {
+        let stderr = "Warning: password not given.\nError: Secrets were required.\n";
+        assert_eq!(reason(stderr), "Error: Secrets were required.");
+        assert_eq!(whole(stderr), "Warning: password not given. Error: Secrets were required.");
+        assert_eq!(reason("\nNo network found\n"), "No network found");
+        assert_eq!(reason(""), "");
     }
 }

@@ -2296,8 +2296,8 @@ mod detail {
 mod wifi {
     pub use flipper_ui::wifi::{
         detail_layout, detail_rows, ensure_visible, fit_password, keep_row_visible,
-        next_selectable, one_line, page_rows, saved_content_h, saved_layout, saved_match,
-        saved_names, saved_rows, selectable, visible_layout, visible_rows, Act, DetailAct,
+        next_selectable, one_line, page_rows, reason, saved_content_h, saved_layout, saved_match,
+        saved_names, saved_rows, selectable, visible_layout, visible_rows, whole, Act, DetailAct,
         DetailView, Layout, SAVED_TAB, VISIBLE_TAB,
     };
     use flipper_ui::wifi::{DetailRow, Details, NetRow, Row, Saved};
@@ -3153,6 +3153,18 @@ fn apply_boot(screen: &flipper_ui::ui::Root, menu: &flipper_ui::boot_menu::BootM
     screen.set_boot_popup_hint(view.popup_button.as_str().into());
 }
 
+/// The width a keyboard warning wraps at.
+#[cfg(feature = "slint")]
+const KB_WARNING_W: i32 = flipper_ui::PANEL_W as i32 - 2 * flipper_ui::theme::metric::MARGIN_H;
+
+/// The width of a dialog's text, and how many of its lines fit the frame.
+#[cfg(feature = "slint")]
+const DIALOG_TEXT_W: i32 =
+    flipper_ui::theme::metric::MODAL_W - 2 * flipper_ui::theme::metric::PAD_LEFT;
+#[cfg(feature = "slint")]
+const DIALOG_MAX_LINES: usize =
+    (flipper_ui::theme::metric::MODAL_H / flipper_ui::theme::metric::MODAL_LINE_H) as usize;
+
 /// Hand the placed keyboard and the field to Slint.
 #[cfg(feature = "slint")]
 fn apply_text_input(
@@ -3162,7 +3174,7 @@ fn apply_text_input(
     cursor_on: bool,
 ) {
     use flipper_ui::keyboard::{self, Focus};
-    use flipper_ui::theme::metric::{KB_INPUT_PAD, MARGIN_H};
+    use flipper_ui::theme::metric::KB_INPUT_PAD;
     let field_w = keyboard::field_w(i32::from(flipper_ui::font::TITLE.text_width(&input.text)));
     let fitted = keyboard::fit_input(&input.text, input.cursor, field_w - 2 * KB_INPUT_PAD);
     let cells: Vec<flipper_ui::ui::KbCell> = input
@@ -3189,9 +3201,7 @@ fn apply_text_input(
     screen.set_kb_cursor_dx(fitted.cursor_dx as f32);
     screen.set_kb_cursor_on(cursor_on);
     screen.set_kb_field_focused(input.focus == Focus::Field);
-    let mut warning =
-        flipper_ui::font::wrap(warning, i32::from(flipper_ui::PANEL_W) - 2 * MARGIN_H, 2)
-            .into_iter();
+    let mut warning = flipper_ui::font::wrap(warning, KB_WARNING_W, 2).into_iter();
     screen.set_kb_warning(warning.next().unwrap_or_default().into());
     screen.set_kb_warning2(warning.next().unwrap_or_default().into());
     screen.set_kb_cells(slint::ModelRc::new(slint::VecModel::from(cells)));
@@ -3216,10 +3226,9 @@ fn apply_text_input(
 #[cfg(feature = "slint")]
 fn dialog_wrap(apt: &[String]) -> Vec<String> {
     use flipper_ui::font::TITLE;
-    use flipper_ui::theme::metric::{MODAL_W, PAD_LEFT};
 
     const MAX_LINES: usize = 3;
-    let budget = (MODAL_W - 2 * PAD_LEFT) as u16;
+    let budget = DIALOG_TEXT_W as u16;
     let names: Vec<String> = apt.to_vec();
 
     let mut lines: Vec<String> = Vec::new();
@@ -3957,10 +3966,24 @@ fn png(
         }
     }
     // The passphrase keyboard as a failed join brings it back, with nmcli's reason.
-    if which.as_deref() == Some("passphrase") {
+    // `passphrase-long` is one too long for it, read first in a dialog over it.
+    if let Some(name) = which.as_deref().filter(|n| n.starts_with("passphrase")) {
         let input = flipper_ui::keyboard::TextInput::new("Password for cybercats", "");
-        let error = "Error: 802-11-wireless-security.key-mgmt: property is missing.";
-        apply_text_input(&screen, &input, error, true);
+        let stderr = if name == "passphrase-long" {
+            "Warning: password for '802-11-wireless-security.psk' not given in 'passwd-file' \
+             and nmcli cannot ask without '--ask' option.\n\
+             Error: Connection activation failed: Secrets were required, but not provided.\n"
+        } else {
+            "Error: 802-11-wireless-security.key-mgmt: property is missing.\n"
+        };
+        apply_text_input(&screen, &input, &wifi::reason(stderr), true);
+        if name == "passphrase-long" {
+            let lines =
+                flipper_ui::font::wrap(&wifi::whole(stderr), DIALOG_TEXT_W, DIALOG_MAX_LINES);
+            let lines: Vec<slint::SharedString> = lines.iter().map(|l| l.as_str().into()).collect();
+            screen.set_modal_lines(slint::ModelRc::new(slint::VecModel::from(lines)));
+            screen.set_modal_left("Back".into());
+        }
         screen.set_screen(Screen::TextInput);
     }
     if modal {
@@ -8322,8 +8345,25 @@ fn panel(
                                 ));
                                 kb_for = KbFor::Passphrase {
                                     ssid: ssid.clone(),
-                                    error: e.lines().next().unwrap_or_default().trim().into(),
+                                    error: wifi::reason(&e),
                                 };
+                                // More than the keyboard's two lines can hold is
+                                // read in full first, over it.
+                                let whole = wifi::whole(&e);
+                                if flipper_ui::font::wrap(&whole, KB_WARNING_W, usize::MAX).len()
+                                    > 2
+                                {
+                                    dialog = Some(Dialog {
+                                        lines: flipper_ui::font::wrap(
+                                            &whole,
+                                            DIALOG_TEXT_W,
+                                            DIALOG_MAX_LINES,
+                                        ),
+                                        left: "Back",
+                                        right: "",
+                                        act: DialogAct::None,
+                                    });
+                                }
                                 kb_dirty = true;
                                 screen.set_screen(Screen::TextInput);
                             }
