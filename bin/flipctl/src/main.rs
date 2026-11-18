@@ -2771,6 +2771,7 @@ const BROWSER_BUNDLE: &str = "browser-aarch64.fap.AppImage";
 #[cfg(all(feature = "device", feature = "slint"))]
 enum Opened {
     /// It was running, and is in front now.
+    #[cfg(feature = "wayland")]
     Front,
     /// Its install is under way, and the question is already on the panel.
     Queued,
@@ -4037,9 +4038,9 @@ fn panel(
     auto: bool,
     bench: bool,
     remote: Option<String>,
-    assets: Option<String>,
+    #[cfg_attr(not(feature = "remote"), allow(unused_variables))] assets: Option<String>,
     headless: bool,
-    peer: Option<String>,
+    #[cfg_attr(not(feature = "remote"), allow(unused_variables))] peer: Option<String>,
     wayland: bool,
     kernels: flipper_ui::boot::Kernels,
 ) -> std::io::Result<()> {
@@ -4050,7 +4051,9 @@ fn panel(
     use flipper_ui::slint_render::{render_into, FlipperSlintPlatform};
     use flipper_ui::theme::timing;
     use flipper_ui::ui::Screen;
-    use flipper_ui::{FlipperKey, Frame, FrameSink, InputSource, PANEL_H, PANEL_W};
+    #[cfg(feature = "remote")]
+    use flipper_ui::FrameSink;
+    use flipper_ui::{FlipperKey, Frame, InputSource, PANEL_H, PANEL_W};
     use slint::ComponentHandle;
 
     // Headless: the browser view is the only output and the only input, so cog
@@ -4764,6 +4767,7 @@ fn panel(
     // and they are worth having, but a line a second for as long as an app is in
     // front is 86400 a day into a journal on flash, to say a number nobody is reading.
     // FLIPCTL_PERFLOG=1 turns them back on.
+    #[cfg(feature = "wayland")]
     let perflog = std::env::var_os("FLIPCTL_PERFLOG").is_some();
     /// What paces one turn of the loop.
     ///
@@ -4888,7 +4892,9 @@ fn panel(
     #[cfg(feature = "wayland")]
     let mut wl_drawn = false;
     // The spinner shown while an app starts, and which frame of it is up.
+    #[cfg(feature = "wayland")]
     let mut app_starting = false;
+    #[cfg(feature = "wayland")]
     let mut app_spin = 0i32;
     // Whether an app had the panel on the previous turn, so the turn it stops having
     // it can be committed in full.
@@ -5047,6 +5053,7 @@ fn panel(
             };
             let name = apps[at].name.clone();
             match open_app!(at, "from a desktop") {
+                #[cfg(feature = "wayland")]
                 Opened::Front => req.ok(&format!("front {name}")),
                 Opened::Queued => req.ok(&format!("queued {name}")),
                 Opened::Starting => req.ok(&format!("starting {name}")),
@@ -5757,7 +5764,6 @@ fn panel(
                     app_commit += put.elapsed();
                     wl_drawn = true;
                     // Its card is the frame itself, shared rather than copied.
-                    #[cfg(feature = "remote")]
                     if front_carded.elapsed() >= Duration::from_secs(1) {
                         front_carded = Instant::now();
                         recents.snapshot(&front, bytes.clone());
@@ -8280,6 +8286,7 @@ fn panel(
 
         // Radio state moved, so any row whose status reads it has to be rebuilt.
         if net.take_dirty() {
+            #[cfg(feature = "wayland")]
             let was = net_now.portal;
             net_now = net.get();
             // Behind a captive portal: the Browser opens on the page that brings the

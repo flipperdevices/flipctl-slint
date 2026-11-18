@@ -890,7 +890,7 @@ fn modem_bars_follow_the_signal() {
     screen.show().expect("show");
 
     let stride = usize::from(theme::PANEL_W);
-    let mut lit = |quality: i32| -> usize {
+    let lit = |quality: i32| -> usize {
         screen.set_modem_quality(quality);
         slint::platform::update_timers_and_animations();
         let frame = render_frame(&window).expect("a quality change repaints");
