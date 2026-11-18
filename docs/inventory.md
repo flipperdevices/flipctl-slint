@@ -579,7 +579,12 @@ needs during an attach. The port now keeps the `POWER_SUPPLY_*` snapshot from ea
 of the gauge's uevents, `src/battery.rs`, and reads the gauge once at startup
 through its `uevent` file. The gauge announces a change in capacity, flags or
 charging state, on its own 360 s poll or half a second after the charger reports
-one, so temperature and power stand still between those.
+one, so temperature stands still between those.
+
+Power on the idle screen comes from the charger instead, 2026-11-18: `current_now`
+times `voltage_now` of `bq257xx-charger`, read every second, but only while the idle
+screen is up. The charger announces no current either, so it has to be polled; two
+reads a second, against the gauge's one for `power_avg`, and with no averaging.
 
 ## The idle screen's addresses, revisited 2026-10-01
 

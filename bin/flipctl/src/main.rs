@@ -4186,6 +4186,9 @@ fn panel(
     let mut link_scroll = apply_idle(&screen, &idle, 0);
     let mut sensor_poll = Instant::now();
     let mut link_poll = Instant::now();
+    // The charger's power reading, polled only while the idle screen is up: every
+    // read is I2C on the bus the Type-C controller shares.
+    let mut power_live: Option<flipper_ui::watch::Watch<Option<i32>>> = None;
 
     // The socket a desktop hands a bundle to. Not fatal without it: the panel is the
     // product and the hand-off a convenience.
@@ -8473,6 +8476,23 @@ fn panel(
             if idle.refresh_sensors() {
                 link_scroll = apply_idle(&screen, &idle, link_scroll);
             }
+        }
+        // Started on the idle screen, kept under the deck, dropped anywhere else.
+        match screen.get_screen() {
+            Screen::Idle if power_live.is_none() => {
+                power_live = Some(flipper_ui::watch::Watch::spawn(
+                    "watch-power",
+                    Duration::from_secs(1),
+                    idle.power_mw,
+                    flipper_ui::status::charger_power_mw,
+                ));
+            }
+            Screen::Idle | Screen::Switcher => {}
+            _ => power_live = None,
+        }
+        if let Some(power) = power_live.as_ref().filter(|w| w.take_dirty()) {
+            idle.power_mw = power.get();
+            link_scroll = apply_idle(&screen, &idle, link_scroll);
         }
         if link_poll.elapsed() >= Duration::from_secs(3) {
             link_poll = Instant::now();

@@ -329,27 +329,22 @@ impl Idle {
         let mut idle = Self::default();
         idle.read_identity();
         idle.refresh_sensors();
+        idle.power_mw = charger_power_mw();
         idle.refresh_links();
         idle
     }
 
-    /// The fields that actually move: temperatures and power flow. Cheap, three
-    /// small files. desktop.js polls these every 5s and so do we.
+    /// The two temperatures on the idle screen: the pack's, as the gauge last
+    /// announced it, and the SoC package's. Power is not here: it is a charger
+    /// read, which the loop makes only while the idle screen is up.
     ///
-    /// Returns whether anything changed, so an unchanged reading never dirties the
-    /// screen.
-    /// The three readouts on the idle screen: the pack's temperature, the SoC
-    /// package's, and the power flowing in or out.
-    ///
-    /// Three small sysfs reads, and it reports a change only when one of the
-    /// values actually moved, so the screen redraws when a temperature does
-    /// rather than on the clock.
+    /// Reports a change only when a value actually moved, so the screen redraws
+    /// when a temperature does rather than on the clock.
     pub fn refresh_sensors(&mut self) -> bool {
-        let before = (self.battery_temp, self.cpu_temp, self.power_mw);
+        let before = (self.battery_temp, self.cpu_temp);
         self.battery_temp = battery_temp();
         self.cpu_temp = cpu_temp();
-        self.power_mw = power_mw();
-        before != (self.battery_temp, self.cpu_temp, self.power_mw)
+        before != (self.battery_temp, self.cpu_temp)
     }
 
     /// Interface addresses, every few seconds: a cable or a DHCP renewal changes
@@ -432,24 +427,23 @@ fn cpu_temp() -> Option<i32> {
     })
 }
 
-/// Power into or out of the battery, in milliwatts.
+/// Power into or out of the battery, in milliwatts, from the charger's ADCs.
 ///
-/// `power_avg` first, which is what the prototype reads: the bq28z610 gauge
-/// writes a smoothed average there, and the instantaneous product of
-/// `current_now` and `voltage_now` visibly jitters by comparison. This gauge
-/// exposes no `power_now`, so that is only a middle fallback.
+/// Not from the gauge, whose numbers arrive only with its uevents, minutes apart.
+/// The charger announces nothing about current either, so this is a read: two I2C
+/// transactions on the bus the Type-C controller shares. Only the idle screen's
+/// own poller makes it, and only while that screen is up.
 ///
-/// Negative means the pack is discharging, matching the prototype's convention
-/// that positive flows into the battery. As the gauge last announced it.
-fn power_mw() -> Option<i32> {
-    let pack = crate::battery::latest()?;
-    let num = |field: &str| pack.get(field)?.parse::<i64>().ok();
-    if let Some(uw) = num("power_avg").or_else(|| num("power_now")) {
-        return Some((uw / 1000) as i32);
-    }
+/// `current_now` is the battery current, positive into the pack, which is the
+/// prototype's convention. No averaging, unlike the gauge's `power_avg`.
+pub fn charger_power_mw() -> Option<i32> {
+    let num = |field: &str| read(format!("{CHARGER}/{field}"))?.parse::<i64>().ok();
     // uA * uV = pW; /1_000_000_000 gives mW.
     Some(((num("current_now")? * num("voltage_now")?) / 1_000_000_000) as i32)
 }
+
+/// The bq257xx driver's fixed supply name.
+const CHARGER: &str = "/sys/class/power_supply/bq257xx-charger";
 
 /// The running profile: the subvolume `/` is mounted from, named the way the boot menu
 /// names it.
