@@ -13,6 +13,7 @@ import { Modal } from "modal.slint";
 import { DetailBody, DetailRow } from "detail.slint";
 import { EthernetBody, EthLink, EthDetailRow } from "ethernet.slint";
 import { WifiBody, WifiRow, WifiNetRow, WifiDetailRow } from "wifi.slint";
+import { PortraitBar } from "portrait.slint";
 import { BootBody, BootRow, BootPopupRow } from "boot.slint";
 import { TextInputBody, KbCell } from "keyboard.slint";
 import { SwitcherBody, SwitchCard } from "switcher.slint";
@@ -46,6 +47,15 @@ export component Root inherits Window {
     in property <bool> modem_available;
     in property <string> access_tech: "--";
     in property <int> modem_quality;
+
+    // Show the portrait bar, for the one render that lifts a turned app's status strip.
+    //
+    // A turned app's top edge is the panel's short side, so the landscape bar cannot be
+    // rotated onto it: the battery would be cropped off the end. The bar it needs is
+    // `PortraitBar`, and the platform here hands out one window - the panel's - so a
+    // component cannot be rendered by itself. Drawn into this scene at a known corner and
+    // lifted back out is how the same component reaches a turned app's glass.
+    in property <bool> portrait_strip: false;
 
     // Idle screen.
     in property <int> battery_temp: -32768;
@@ -537,5 +547,26 @@ export component Root inherits Window {
         backdrop: root.choice_backdrop;
         has_backdrop: root.choice_has_backdrop;
         pressed_slot: root.choice_pressed_slot;
+    }
+
+    // The portrait bar, parked in the scene's bottom-left corner.
+    //
+    // It is only visible for the render that lifts a turned app's status strip, and the
+    // corner it occupies is read by `portrait_strip_at()` in flipctl - so the two numbers
+    // below are a contract, and `PORTRAIT_STRIP_X`/`_Y` in `bin/flipctl` are the other half.
+    // Bottom-left because the idle screen leaves paper there: a stray frame of this bar on
+    // the panel would be text in a corner rather than a bar across the top.
+    if root.portrait_strip: PortraitBar {
+        x: 0;
+        y: root.height - FlipperTheme.status_bar_h;
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
     }
 }
