@@ -40,6 +40,8 @@ use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
 };
 
+use crate::app::Rotate;
+
 /// How often a hosted app's own output refreshes, in Hz.
 ///
 /// Just above the panel's own rate, deliberately. The panel commits in 15.9 ms, which
@@ -204,6 +206,11 @@ struct Grab {
     /// What the panel takes.
     dw: u32,
     dh: u32,
+    /// Which edge of the panel is the app's own top.
+    ///
+    /// The capture arrives in the app's own frame, so a portrait app's frame is the
+    /// panel's rectangle transposed, and only this says which way to turn it back.
+    turn: Rotate,
     /// The two buffers screencopy copies into, and the request outstanding on each.
     #[cfg(feature = "gpu")]
     buffers: [Option<Copied>; 2],
@@ -520,6 +527,22 @@ impl Grab {
         let Some(shm) = self.shm.as_ref() else { return };
         let bgr = matches!(shm.format, wl_shm::Format::Xrgb8888 | wl_shm::Format::Argb8888);
         let src = unsafe { std::slice::from_raw_parts(shm.map, shm.len) };
+        // A portrait app's frame is the panel's rectangle the other way up: the same
+        // pixels, turned. Fitting it would letterbox a 144-wide page onto a 256-wide
+        // panel and scale the text down with it, so a frame that is exactly the panel
+        // transposed is rotated instead and nothing is resampled.
+        if self.turn != Rotate::None && self.w == self.dh && self.h == self.dw {
+            crate::scale::turn_from_xrgb(
+                src,
+                shm.stride,
+                bgr,
+                self.w,
+                self.h,
+                crate::pixel::from_bytes_mut(out),
+                self.turn == Rotate::Left,
+            );
+            return;
+        }
         // Letterbox bars are the caller's black, not the last frame's edges.
         out.fill(0);
         crate::scale::fit_from_xrgb(
@@ -546,6 +569,11 @@ impl Session {
     /// `SWAYSOCK` is withheld deliberately. An app that could talk to the compositor's
     /// IPC could move itself between outputs, focus another app's workspace or read the
     /// tree, and none of that is an app's business.
+    ///
+    /// `w` by `h` is what the app draws at, and `turn` is which edge of the panel that
+    /// frame's top is. A portrait app draws 144 by 256 with `turn` set, so its output is
+    /// shaped to its own page and the capture is turned on the way to the panel; a
+    /// landscape one passes `Rotate::None` and the two sizes agree.
     #[allow(clippy::too_many_arguments)]
     pub fn attach(
         host_dir: &Path,
@@ -557,6 +585,7 @@ impl Session {
         h: u32,
         env: &[String],
         audio: bool,
+        turn: Rotate,
     ) -> io::Result<Self> {
         let socket = host_dir.join(display);
         let stream = UnixStream::connect(&socket)?;
@@ -689,6 +718,7 @@ impl Session {
             h,
             dw: u32::from(crate::PANEL_W),
             dh: u32::from(crate::PANEL_H),
+            turn,
             #[cfg(feature = "gpu")]
             buffers: [None, None],
             #[cfg(feature = "gpu")]
@@ -911,6 +941,14 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
     #[cfg(feature = "gpu")]
     let mut gpu = if std::env::var_os("FLIPCTL_NO_GPU").is_some() {
         eprintln!("wl: GPU conversion disabled, reading on the CPU");
+        None
+    } else if grab.turn != Rotate::None {
+        // A turned app's frame needs a rotation, and the shader converts and fits but
+        // does not rotate: it would letterbox a 144-wide page across a 256-wide panel.
+        // The CPU pass turns as it greys, and a frame that needs no scaling pays almost
+        // nothing for it, so this is the right side of the trade rather than a
+        // shortfall.
+        eprintln!("wl: portrait app, reading on the CPU to turn its frames");
         None
     } else {
         match crate::gpu::Converter::new(u32::from(crate::PANEL_W), u32::from(crate::PANEL_H)) {

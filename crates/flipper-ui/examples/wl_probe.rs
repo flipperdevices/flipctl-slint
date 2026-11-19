@@ -64,6 +64,7 @@ fn main() -> std::io::Result<()> {
             .map(|v| vec![format!("WAYLAND_DEBUG={v}")])
             .unwrap_or_default(),
         false,
+        flipper_ui::Rotate::None,
     )?;
     // The keyboard goes to the focused surface, so the app has to have the focus
     // its workspace would give it on the panel.

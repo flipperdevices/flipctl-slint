@@ -12,6 +12,57 @@
 
 use crate::pixel::Gray8;
 
+/// Turn a `sw` by `sh` capture a quarter turn and grey it onto the panel, without
+/// scaling.
+///
+/// A portrait app's frame is the panel's size the other way up: 144 by 256 against 256
+/// by 144. Resampling it would be a mistake twice over -- it is the same rectangle, so
+/// there is nothing to fit, and a box average over a pixel font turns every glyph edge
+/// into a grey the design has no token for. So this is a rotation of the source, one
+/// destination pixel per source pixel.
+///
+/// `left` is the direction a `rotate = "left"` manifest promises: the app's top edge
+/// becomes the panel's left edge. `(x, y)` from the app lands at panel `(y, sh - 1 - x)`;
+/// turning the other way leaves the page upside down.
+pub fn turn_from_xrgb(
+    src: &[u8],
+    stride: u32,
+    bgr: bool,
+    sw: u32,
+    sh: u32,
+    dst: &mut [Gray8],
+    left: bool,
+) {
+    let (dw, dh) = (sh, sw);
+    if sw == 0 || sh == 0 || dst.len() < (dw * dh) as usize || src.len() < (stride * sh) as usize {
+        return;
+    }
+    // The panel is grey, so whatever is not covered is paper rather than the black a
+    // letterboxed fit uses: a turned page fills the frame, and a row that came up short
+    // should show as blank rather than as an ink bar.
+    dst[..(dw * dh) as usize].fill(Gray8::WHITE);
+
+    for y in 0..sh {
+        let row = (y * stride) as usize;
+        for x in 0..sw {
+            let p = row + (x * 4) as usize;
+            let (first, third) = (u32::from(src[p]), u32::from(src[p + 2]));
+            let (r, g, b) = if bgr {
+                (third, u32::from(src[p + 1]), first)
+            } else {
+                (first, u32::from(src[p + 1]), third)
+            };
+            let grey = ((r * 299 + g * 587 + b * 114) / 1000).min(255) as u8;
+            // A quarter turn into a `dw` by `dh` frame: left puts the source's top edge
+            // on the frame's left, right puts it on the frame's right. Both swap the
+            // axes, so the two are mirror images of each other and only one can be right
+            // for a given manifest.
+            let (dx, dy) = if left { (y, dh - 1 - x) } else { (dw - 1 - y, x) };
+            dst[(dy * dw + dx) as usize] = Gray8(grey);
+        }
+    }
+}
+
 /// Scale `src` to fit `dw` by `dh`, centred, keeping its aspect ratio.
 ///
 /// `dst` is not cleared: the fitted image lands in the middle and whatever the
@@ -182,6 +233,66 @@ mod tests {
         let mut dst = grey(&[0; 4]);
         fit_from_xrgb(&src, 8, true, 40, 40, &mut dst, 2, 2);
         assert!(dst.iter().all(|p| p.0 == 0), "nothing written");
+    }
+
+    /// A portrait app's frame is the panel's size the other way up, so the turn is a
+    /// rotation of the pixels rather than a fit, and the corners say which way round.
+    #[test]
+    fn a_portrait_capture_turns_onto_the_panel() {
+        use super::turn_from_xrgb;
+        // 4 wide by 2 tall, one distinct luma per corner of the source.
+        let (sw, sh) = (4u32, 2u32);
+        let luma = |v: u8| [v, v, v, 0];
+        let px: Vec<[u8; 4]> = vec![
+            luma(10), luma(20), luma(30), luma(40), // top row
+            luma(50), luma(60), luma(70), luma(80), // bottom row
+        ];
+        let src: Vec<u8> = px.concat();
+        let mut dst = grey(&[0; 8]);
+
+        // Turned left: the source's top edge becomes the result's left edge. The result
+        // is 2 wide by 4 tall, and `(x, y)` lands at `(y, sw - 1 - x)`.
+        turn_from_xrgb(&src, sw * 4, true, sw, sh, &mut dst, true);
+        let at = |x: usize, y: usize| dst[y * sh as usize + x].0;
+        assert_eq!(at(0, 3), 10, "the source's top-left is the result's bottom-left");
+        assert_eq!(at(0, 0), 40, "its top-right is the result's top-left");
+        assert_eq!(at(1, 3), 50, "and its bottom-left is the result's bottom-right");
+        assert_eq!(at(1, 0), 80, "with the bottom-right at the top-right");
+    }
+
+    /// The other manifest value turns the other way, and the same pixel ends up in a
+    /// different corner: that is what makes `rotate = "right"` a different thing.
+    #[test]
+    fn a_right_turn_is_not_a_left_turn() {
+        use super::turn_from_xrgb;
+        let (sw, sh) = (4u32, 2u32);
+        let mut src = vec![0u8; (sw * sh * 4) as usize];
+        src[0..4].copy_from_slice(&[10, 10, 10, 0]);
+        let (mut left, mut right) = (grey(&[0; 8]), grey(&[0; 8]));
+        turn_from_xrgb(&src, sw * 4, true, sw, sh, &mut left, true);
+        turn_from_xrgb(&src, sw * 4, true, sw, sh, &mut right, false);
+        assert_ne!(left, right, "the two turns are the same picture");
+        assert_eq!(left.iter().filter(|p| p.0 == 10).count(), 1, "one pixel moves");
+        assert_eq!(right.iter().filter(|p| p.0 == 10).count(), 1);
+    }
+
+    /// Nothing but the capture's own pixels: a portrait page drawn in the panel's greys
+    /// comes out with exactly the greys it went in with. A box average would invent
+    /// shades between them, which on this panel is a smudge rather than an edge.
+    #[test]
+    fn a_turn_invents_no_greys() {
+        use super::turn_from_xrgb;
+        let (sw, sh) = (8u32, 6u32);
+        let src: Vec<u8> = (0..sw * sh)
+            .flat_map(|i| {
+                let v = if i % 3 == 0 { 0u8 } else { 255 };
+                [v, v, v, 0]
+            })
+            .collect();
+        let mut dst = grey(&vec![0; (sw * sh) as usize]);
+        turn_from_xrgb(&src, sw * 4, true, sw, sh, &mut dst, true);
+        let odd: Vec<u8> = dst.iter().map(|p| p.0).filter(|v| *v != 0 && *v != 255).collect();
+        assert!(odd.is_empty(), "the turn produced {} greys that were not in the capture", odd.len());
     }
 
     #[test]
