@@ -1,40 +1,125 @@
-//! Lending the Wi-Fi chip to an app as a radio.
+//! Lending hardware to an app, and taking it back however the app ends.
 //!
-//! The onboard MT7921 is Wi-Fi and Bluetooth in one chip, and an SDR app needs it with
-//! neither driver on it. An app asks for it on flipctl's socket:
+//! An app asks on flipctl's socket:
 //!
 //! ```text
-//! POST /claim/mt7921 HTTP/1.1
+//! POST /claim/<resource> HTTP/1.1
 //! ```
 //!
-//! and gets `200` with `{"claimed":"mt7921"}` once the chip is driverless and its USB
-//! node is the app's user's, or `409` or `500` with `{"error":"..."}`. The `200` has no
-//! length: the connection stays open, and the chip is the app's for as long as it does.
-//! Close, a kill and a crash all close it, so all of them give the chip back, which is
-//! the point of asking flipctl rather than holding the chip from the app itself.
+//! and gets `200` with `{"claimed":"<resource>"}` once the thing is the app's user's,
+//! or `404`, `409` or `500` with `{"error":"..."}`. The `200` has no length: the
+//! connection stays open, and the resource is the app's for as long as it does. Close,
+//! a kill and a crash all close it, so all of them give it back, which is the point of
+//! asking flipctl rather than holding it from the app itself.
 //!
-//! Giving back powers the chip off, loads both drivers and powers it on again, unless
-//! it was off when claimed: airplane mode blocks the same rfkill switch, and is left as
-//! it was found. A hold that outlives flipctl is given back when flipctl starts again.
+//! | Resource | Lent | Given back |
+//! |---|---|---|
+//! | `mt7921` | the onboard Wi-Fi chip, driverless, for an SDR app | both drivers, rfkill as found |
+//! | `udc` | the device side of the main USB-C, as /dev/raw-gadget | the boot gadget, started again |
+//! | `usb/<port>` | the usbfs node of a device in a socket, e.g. `usb/1-1.2` | the device, re-enumerated onto its own driver |
+//! | `usbip-share/<port>` | a device in a socket, served by USB/IP on port 3240 | the device to its own driver; usbipd stopped if we started it |
+//! | `usbip-attach/<ipv4>/<busid>` | a device another machine serves, attached here; where it landed is in `/run/flipctl-usbip-attach-<ipv4>+<busid>` | detached |
 //!
-//! The work is two root scripts run through `sudo -n`, the passwordless sudo flipctl
-//! already relies on. The state they share is in /run, so it is volatile like the hold.
+//! A hold that outlives flipctl is given back when flipctl starts again. The work is
+//! root scripts run through `sudo -n`, the passwordless sudo flipctl already relies
+//! on. The state they share is in /run, so it is volatile like the hold.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
-/// The one resource there is.
+/// The Wi-Fi chip.
 pub const MT7921: &str = "mt7921";
 
 /// Headers end within this much, or the request is refused.
 const MAX_HEAD: usize = 8192;
 
-/// Whether a claim is out. One owner at a time.
-static OUT: Mutex<bool> = Mutex::new(false);
+/// The resources lent out, by name. One owner each.
+static OUT: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
-const COMMON: &str = r#"
+/// What can be asked for.
+#[derive(Debug, PartialEq)]
+enum Resource {
+    Mt7921,
+    Udc,
+    /// A device in a socket, by its place on the USB tree.
+    Usb(String),
+    /// A device in a socket, served to the network by USB/IP.
+    UsbipShare(String),
+    /// A device another machine serves by USB/IP, by its address and busid there.
+    UsbipAttach(String, String),
+}
+
+impl Resource {
+    fn parse(name: &str) -> Option<Resource> {
+        if let Some(rest) = name.strip_prefix("usbip-attach/") {
+            let (host, busid) = rest.split_once('/')?;
+            let ok = host.parse::<std::net::Ipv4Addr>().is_ok() && is_port(busid);
+            return ok.then(|| Resource::UsbipAttach(host.into(), busid.into()));
+        }
+        let port =
+            |prefix: &str| name.strip_prefix(prefix).filter(|p| is_port(p)).map(String::from);
+        match name {
+            MT7921 => Some(Resource::Mt7921),
+            "udc" => Some(Resource::Udc),
+            _ => port("usb/")
+                .map(Resource::Usb)
+                .or_else(|| port("usbip-share/").map(Resource::UsbipShare)),
+        }
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Resource::Mt7921 => MT7921.into(),
+            Resource::Udc => "udc".into(),
+            Resource::Usb(port) => format!("usb/{port}"),
+            Resource::UsbipShare(port) => format!("usbip-share/{port}"),
+            Resource::UsbipAttach(host, busid) => format!("usbip-attach/{host}/{busid}"),
+        }
+    }
+
+    fn busy(&self) -> &'static str {
+        match self {
+            Resource::Mt7921 => "the Wi-Fi chip is in use",
+            Resource::Udc => "the USB-C device port is in use",
+            Resource::Usb(_) => "that USB device is in use",
+            Resource::UsbipShare(_) => "that USB device is shared already",
+            Resource::UsbipAttach(..) => "that remote device is attached already",
+        }
+    }
+
+    fn hold(&self) -> Result<(), String> {
+        match self {
+            Resource::Mt7921 => root(&format!("{MT7921_COMMON}{HOLD}"), &[]),
+            Resource::Udc => root(UDC_HOLD, &[]),
+            Resource::Usb(port) => root(&format!("{SOCKET}{USB_HOLD}"), &[port]),
+            Resource::UsbipShare(port) => root(&format!("{SOCKET}{SHARE_HOLD}"), &[port]),
+            Resource::UsbipAttach(host, busid) => root(ATTACH_HOLD, &[host, busid]),
+        }
+    }
+
+    fn release(&self) -> Result<(), String> {
+        match self {
+            Resource::Mt7921 => root(&format!("{MT7921_COMMON}{RELEASE}"), &[]),
+            Resource::Udc => root(UDC_RELEASE, &[]),
+            Resource::Usb(port) => root(USB_RELEASE, &[port]),
+            Resource::UsbipShare(port) => root(SHARE_RELEASE, &[port]),
+            Resource::UsbipAttach(host, busid) => root(ATTACH_RELEASE, &[host, busid]),
+        }
+    }
+}
+
+/// A place on the USB tree as sysfs names it, `<bus>-<port>[.<port>]...`. Nothing else
+/// reaches a script or a file name.
+fn is_port(p: &str) -> bool {
+    let Some((bus, path)) = p.split_once('-') else { return false };
+    let digits = |s: &str| !s.is_empty() && s.len() <= 3 && s.bytes().all(|b| b.is_ascii_digit());
+    digits(bus) && path.split('.').count() <= 7 && path.split('.').all(digits)
+}
+
+const MT7921_COMMON: &str = r#"
 RFK=/sys/class/rfkill/rfkill0
 DEV=/sys/bus/usb/devices/2-1.1
 RULE=/run/udev/rules.d/79-flipctl-mt7921.rules
@@ -92,11 +177,144 @@ rm -f $STATE
 exit 0
 "#;
 
-/// Run one of the scripts as root, and say what went wrong in its own words.
-fn root(script: &str) -> Result<(), String> {
+/// Take the device port for user `$1`: the boot gadget stops and /dev/raw-gadget is
+/// the user's. The unit that was running is kept for the release.
+///
+/// The getty on the gadget's serial port goes first. While it holds /dev/ttyGS0,
+/// removing the ACM function waits for it in D state, and the gadget's stop with it.
+/// udev starts it again with the port.
+const UDC_HOLD: &str = r#"
+STATE=/run/flipctl-udc.unit
+[ -e /dev/raw-gadget ] || modprobe raw_gadget 2>/dev/null
+[ -e /dev/raw-gadget ] || { echo "this kernel has no raw-gadget"; exit 1; }
+unit=$(systemctl list-units --state=active --no-legend --plain 'usb-*gadget.service' | awk '{print $1; exit}')
+[ -e $STATE ] || echo "$unit" > $STATE
+systemctl stop 'serial-getty@flipserial*.service'
+[ -z "$unit" ] || systemctl stop "$unit"
+for g in /sys/kernel/config/usb_gadget/*/UDC; do
+    [ -n "$(cat "$g" 2>/dev/null)" ] && { echo "the port is held by gadget $(basename "$(dirname "$g")")"; exit 1; }
+done
+chown "$1" /dev/raw-gadget
+exit 0
+"#;
+
+/// Give the port back to the gadget that had it. Nothing to do without a hold.
+const UDC_RELEASE: &str = r#"
+STATE=/run/flipctl-udc.unit
+[ -e $STATE ] || exit 0
+chown root /dev/raw-gadget 2>/dev/null
+unit=$(cat $STATE)
+rm -f $STATE
+[ -z "$unit" ] || systemctl start --no-block "$unit"
+exit 0
+"#;
+
+/// Give user `$1` the usbfs node of the device at `$2`. Only a device in a socket: one
+/// wired inside the case has a claim of its own or none.
+const USB_HOLD: &str = r#"
+node=$(printf /dev/bus/usb/%03d/%03d "$(cat "$d/busnum")" "$(cat "$d/devnum")")
+echo "$node" > "/run/flipctl-usb-$2.node"
+chown "$1" "$node"
+exit 0
+"#;
+
+/// Give the device back: re-enumerated, its own driver binds again. One unplugged
+/// meanwhile is gone already, and whatever took its place re-enumerates harmlessly.
+const USB_RELEASE: &str = r#"
+f=/run/flipctl-usb-$2.node
+[ -e "$f" ] || exit 0
+node=$(cat "$f")
+rm -f "$f"
+[ -e "$node" ] && chown root "$node"
+d=/sys/bus/usb/devices/$2
+[ -e "$d/authorized" ] && { echo 0 > "$d/authorized"; echo 1 > "$d/authorized"; }
+exit 0
+"#;
+
+/// What a device at `$2` must be to be lent at all: plugged in, not a hub, and in a
+/// socket rather than wired inside the case, which has a claim of its own or none.
+/// Leaves `$d` naming it.
+const SOCKET: &str = r#"
+d=/sys/bus/usb/devices/$2
+[ -e "$d/devnum" ] || { echo "nothing is plugged in at $2"; exit 1; }
+[ "$(cat "$d/bDeviceClass")" = 09 ] && { echo "$2 is a hub"; exit 1; }
+case $2 in
+*.*) hub=${2%.*}; ports=/sys/bus/usb/devices/$hub/$hub:1.0/$hub-port ;;
+*) bus=${2%-*}; ports=/sys/bus/usb/devices/usb$bus/$bus-0:1.0/usb$bus-port ;;
+esac
+[ "$(cat "$ports${2##*[.-]}/connect_type" 2>/dev/null)" = hardwired ] \
+    && { echo "$2 is wired inside the case"; exit 1; }
+"#;
+
+/// Serve the device at `$2` by USB/IP: usbip-host takes it from its driver and
+/// usbipd answers on port 3240. usbipd is started only if nothing runs one, and then
+/// remembered, so the last share to end stops it.
+const SHARE_HOLD: &str = r#"
+command -v usbip >/dev/null || { echo "usbip is not installed"; exit 1; }
+modprobe usbip-host || { echo "this kernel has no usbip-host"; exit 1; }
+if ! pgrep -x usbipd >/dev/null; then
+    usbipd -D || { echo "usbipd did not start"; exit 1; }
+    touch /run/flipctl-usbipd
+fi
+out=$(usbip bind -b "$2" 2>&1) || { echo "${out##*: }"; exit 1; }
+touch "/run/flipctl-usbip-share-$2"
+exit 0
+"#;
+
+/// Stop serving `$2`, give it back to its own driver, and stop a usbipd we started
+/// once nothing is shared.
+const SHARE_RELEASE: &str = r#"
+f=/run/flipctl-usbip-share-$2
+[ -e "$f" ] || exit 0
+rm -f "$f"
+usbip unbind -b "$2" >/dev/null 2>&1
+d=/sys/bus/usb/devices/$2
+[ -e "$d/authorized" ] && { echo 0 > "$d/authorized"; echo 1 > "$d/authorized"; }
+if [ -e /run/flipctl-usbipd ] && ! ls /run/flipctl-usbip-share-* >/dev/null 2>&1; then
+    pkill -x usbipd
+    rm -f /run/flipctl-usbipd
+fi
+exit 0
+"#;
+
+/// Attach device `$3` that `$2` serves by USB/IP, and wait for it to arrive on the
+/// virtual host controller. The state file says which vhci port it took and where it
+/// is on this machine's USB tree, readable by the app, which goes on to claim it.
+const ATTACH_HOLD: &str = r#"
+command -v usbip >/dev/null || { echo "usbip is not installed"; exit 1; }
+modprobe vhci-hcd || { echo "this kernel has no vhci-hcd"; exit 1; }
+out=$(usbip attach -r "$2" -b "$3" 2>&1) || { echo "${out##*: }"; exit 1; }
+want="usbip://$2:3240/$3"
+i=0
+while [ $i -lt 50 ]; do
+    found=$(usbip port 2>/dev/null | awk -v want="$want" \
+        '/^Port [0-9]+:/ { p = $2 + 0 } index($0, want) { print p, $1; exit }')
+    case $found in *-*) break ;; esac
+    sleep 0.1
+    i=$((i + 1))
+done
+case $found in *-*) ;; *) echo "the device did not arrive"; exit 1 ;; esac
+echo "$found" > "/run/flipctl-usbip-attach-$2+$3"
+exit 0
+"#;
+
+/// Detach what `$2` serves as `$3`. Nothing to do without a hold.
+const ATTACH_RELEASE: &str = r#"
+f=/run/flipctl-usbip-attach-$2+$3
+[ -e "$f" ] || exit 0
+read -r port _ < "$f"
+rm -f "$f"
+usbip detach -p "$port" >/dev/null 2>&1
+exit 0
+"#;
+
+/// Run one of the scripts as root, with this user as `$1` and `args` after it, and
+/// say what went wrong in its own words.
+fn root(script: &str, args: &[&str]) -> Result<(), String> {
     let user = user_name().ok_or("no name for this user")?;
     let out = Command::new("sudo")
-        .args(["-n", "sh", "-c", &format!("{COMMON}{script}"), "sh", &user])
+        .args(["-n", "sh", "-c", script, "sh", &user])
+        .args(args)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("sudo: {e}"))?;
@@ -116,13 +334,35 @@ fn user_name() -> Option<String> {
     Some(unsafe { std::ffi::CStr::from_ptr((*pw).pw_name) }.to_string_lossy().into_owned())
 }
 
-/// Give back a hold a previous flipctl left, on a thread of its own.
+/// Give back what a previous flipctl left held, on a thread of its own.
 pub fn recover() {
     std::thread::spawn(|| {
+        let mut left = Vec::new();
         if std::path::Path::new("/run/udev/rules.d/79-flipctl-mt7921.rules").exists() {
-            crate::logline!("claim          {MT7921} left held, giving it back");
-            if let Err(e) = root(RELEASE) {
-                crate::logline!("claim          {MT7921} release: {e}");
+            left.push(Resource::Mt7921);
+        }
+        if std::path::Path::new("/run/flipctl-udc.unit").exists() {
+            left.push(Resource::Udc);
+        }
+        for entry in std::fs::read_dir("/run").into_iter().flatten().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(port) =
+                name.strip_prefix("flipctl-usb-").and_then(|n| n.strip_suffix(".node"))
+            {
+                left.extend(Resource::parse(&format!("usb/{port}")));
+            } else if let Some(port) = name.strip_prefix("flipctl-usbip-share-") {
+                left.extend(Resource::parse(&format!("usbip-share/{port}")));
+            } else if let Some(pair) = name.strip_prefix("flipctl-usbip-attach-") {
+                if let Some((host, busid)) = pair.split_once('+') {
+                    left.extend(Resource::parse(&format!("usbip-attach/{host}/{busid}")));
+                }
+            }
+        }
+        for resource in left {
+            let name = resource.name();
+            crate::logline!("claim          {name} left held, giving it back");
+            if let Err(e) = resource.release() {
+                crate::logline!("claim          {name} release: {e}");
             }
         }
     });
@@ -153,33 +393,30 @@ fn handle(first: &str, rest: &[u8], mut stream: UnixStream) -> std::io::Result<(
     }
     let mut parts = first.split(' ');
     let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-    let Some(resource) = path.strip_prefix("/claim/") else {
+    let Some(asked) = path.strip_prefix("/claim/") else {
         return reply(&mut stream, 404, "Not Found", &error("no such endpoint"));
     };
-    if resource != MT7921 {
+    let Some(resource) = Resource::parse(asked) else {
         return reply(&mut stream, 404, "Not Found", &error("no such resource"));
-    }
+    };
     if method != "POST" {
         return reply(&mut stream, 405, "Method Not Allowed", &error("a claim is a POST"));
     }
-    {
-        let mut out = OUT.lock().unwrap();
-        if *out {
-            return reply(&mut stream, 409, "Conflict", &error("the Wi-Fi chip is in use"));
-        }
-        *out = true;
+    let name = resource.name();
+    if !OUT.lock().unwrap().insert(name.clone()) {
+        return reply(&mut stream, 409, "Conflict", &error(resource.busy()));
     }
-    crate::logline!("claim          {MT7921} taking");
-    if let Err(e) = root(HOLD) {
-        crate::logline!("claim          {MT7921} hold: {e}");
-        let _ = root(RELEASE);
-        *OUT.lock().unwrap() = false;
+    crate::logline!("claim          {name} taking");
+    if let Err(e) = resource.hold() {
+        crate::logline!("claim          {name} hold: {e}");
+        let _ = resource.release();
+        OUT.lock().unwrap().remove(&name);
         return reply(&mut stream, 500, "Internal Server Error", &error(&e));
     }
     let held = (|| {
         write!(
             stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n{{\"claimed\":\"{MT7921}\"}}\n"
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n{{\"claimed\":\"{name}\"}}\n"
         )?;
         stream.flush()?;
         // Held until the app closes its end, or dies and the kernel closes it
@@ -188,11 +425,11 @@ fn handle(first: &str, rest: &[u8], mut stream: UnixStream) -> std::io::Result<(
         while stream.read(&mut sink)? > 0 {}
         Ok::<(), std::io::Error>(())
     })();
-    crate::logline!("claim          {MT7921} giving back");
-    if let Err(e) = root(RELEASE) {
-        crate::logline!("claim          {MT7921} release: {e}");
+    crate::logline!("claim          {name} giving back");
+    if let Err(e) = resource.release() {
+        crate::logline!("claim          {name} release: {e}");
     }
-    *OUT.lock().unwrap() = false;
+    OUT.lock().unwrap().remove(&name);
     held
 }
 
@@ -226,13 +463,61 @@ mod tests {
         assert_eq!(error("say \"no\"\n"), r#"{"error":"say \"no\""}"#);
     }
 
-    /// Anything but a claim of the one resource is answered without touching the chip.
+    /// Only a sysfs port name reaches a script.
+    #[test]
+    fn a_port_is_a_sysfs_name() {
+        for good in ["1-1", "1-1.2", "2-1.4.3", "10-2"] {
+            assert_eq!(
+                Resource::parse(&format!("usb/{good}")),
+                Some(Resource::Usb(good.into())),
+                "{good}"
+            );
+        }
+        for bad in [
+            "", "1", "1-", "-1", "1-1.", "1-1..2", "a-1", "1-1 ", "1-1;id", "../1-1", "1-1/x",
+            "usb1",
+        ] {
+            assert_eq!(Resource::parse(&format!("usb/{bad}")), None, "{bad:?}");
+        }
+        assert_eq!(Resource::parse("udc"), Some(Resource::Udc));
+        assert_eq!(Resource::parse("usb"), None);
+        assert_eq!(
+            Resource::parse("usbip-share/1-1.2"),
+            Some(Resource::UsbipShare("1-1.2".into()))
+        );
+        assert_eq!(Resource::parse("usbip-share/1-1;id"), None);
+    }
+
+    /// An attach names an IPv4 address and a busid, and nothing else gets through.
+    #[test]
+    fn an_attach_is_an_address_and_a_busid() {
+        assert_eq!(
+            Resource::parse("usbip-attach/192.168.1.115/1-1.2"),
+            Some(Resource::UsbipAttach("192.168.1.115".into(), "1-1.2".into()))
+        );
+        for bad in [
+            "usbip-attach/192.168.1.115",
+            "usbip-attach/host.lan/1-1.2",
+            "usbip-attach/192.168.1.300/1-1.2",
+            "usbip-attach/192.168.1.115/1-1.2/x",
+            "usbip-attach/192.168.1.115;id/1-1",
+            "usbip-attach//1-1",
+        ] {
+            assert_eq!(Resource::parse(bad), None, "{bad}");
+        }
+    }
+
+    /// Anything but a claim of a known resource is answered without touching anything.
     #[test]
     fn a_wrong_request_is_refused() {
         for (first, code) in [
             ("GET /status HTTP/1.1", "404"),
             ("POST /claim/hackrf HTTP/1.1", "404"),
+            ("POST /claim/usb/1-1;reboot HTTP/1.1", "404"),
+            ("POST /claim/usb/../1-1 HTTP/1.1", "404"),
             ("GET /claim/mt7921 HTTP/1.1", "405"),
+            ("GET /claim/udc HTTP/1.1", "405"),
+            ("GET /claim/usb/1-1.2 HTTP/1.1", "405"),
         ] {
             let (mut a, b) = UnixStream::pair().unwrap();
             a.write_all(b"Host: flipctl\r\n\r\n").unwrap();
