@@ -20,6 +20,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::key::FlipperKey;
+
 /// The manifest, at the root of a bundle.
 pub const MANIFEST: &str = "app.toml";
 
@@ -33,6 +35,36 @@ pub enum Rotate {
     Left,
     /// Portrait the other way, the panel's right edge up.
     Right,
+}
+
+impl Rotate {
+    /// A key as the app sees it, given the way the panel is turned.
+    ///
+    /// The compositor turns the app's frame onto the glass, so the app's `up` is not the
+    /// panel's up: with the panel's left edge held upward, the app's top edge is the
+    /// panel's left edge, and the four directions are a quarter turn around. Forwarding
+    /// them unturned is a page whose d-pad works in panel coordinates - pressing Right
+    /// walks down the list, which looks like a broken app rather than a turned one.
+    ///
+    /// Only the four directions turn. Everything else is a named button and keeps its
+    /// meaning: Ok is Ok wherever it is, and the soft row's order is the silkscreen's,
+    /// which is a property of the hardware and not of the app's frame.
+    pub fn turn_key(self, key: FlipperKey) -> FlipperKey {
+        match (self, key) {
+            // Read with the panel's left edge up: the page's right is the panel's up, so
+            // the app's directions come back one quarter counter-clockwise.
+            (Self::Left, FlipperKey::Up) => FlipperKey::Right,
+            (Self::Left, FlipperKey::Right) => FlipperKey::Down,
+            (Self::Left, FlipperKey::Down) => FlipperKey::Left,
+            (Self::Left, FlipperKey::Left) => FlipperKey::Up,
+            // The other way round, so the quarter turn goes the other way.
+            (Self::Right, FlipperKey::Up) => FlipperKey::Left,
+            (Self::Right, FlipperKey::Left) => FlipperKey::Down,
+            (Self::Right, FlipperKey::Down) => FlipperKey::Right,
+            (Self::Right, FlipperKey::Right) => FlipperKey::Up,
+            _ => key,
+        }
+    }
 }
 
 /// An app found on disk, before it runs.
@@ -835,5 +867,54 @@ mod tests {
         assert_eq!(args[0], Path::new("-c"));
         assert_eq!(args[1], Path::new("'/home/user/Apps/My Radio.AppImage'"));
         assert!(app.work_dir().ends_with("flipctl/apps/My Radio"));
+    }
+
+    /// A portrait app's d-pad is a quarter turn from the panel's.
+    ///
+    /// The compositor turns the app's frame onto the glass, so the panel's Up is the page's
+    /// Right. Forwarding the four directions unturned is a page whose up and down do
+    /// nothing and whose left and right walk the list, which reads as a broken app.
+    #[test]
+    fn a_turned_app_gets_its_directions_turned() {
+        use FlipperKey::{Down, Left, Right, Up};
+        const DIRS: [FlipperKey; 4] = [Up, Right, Down, Left];
+        const TURNED_LEFT: [FlipperKey; 4] = [Right, Down, Left, Up];
+        for (panel, page) in DIRS.iter().zip(TURNED_LEFT) {
+            assert_eq!(Rotate::Left.turn_key(*panel), page, "left: {panel:?}");
+        }
+        // The other turn is the opposite rotation, so its four run the other way:
+        // Up -> Left, Right -> Up, Down -> Right, Left -> Down.
+        const TURNED_RIGHT: [FlipperKey; 4] = [Left, Up, Right, Down];
+        for (panel, page) in DIRS.iter().zip(TURNED_RIGHT) {
+            assert_eq!(Rotate::Right.turn_key(*panel), page, "right: {panel:?}");
+        }
+        // A quarter turn is its own inverse after four presses, which is what makes the two
+        // directions a rotation rather than an arbitrary table.
+        let mut k = Up;
+        for _ in 0..4 {
+            k = Rotate::Left.turn_key(k);
+        }
+        assert_eq!(k, Up, "four turns of a key are the key again");
+        // And the two directions undo each other, which is what a device held the other way
+        // up needs them to do.
+        for k in DIRS {
+            assert_eq!(Rotate::Left.turn_key(Rotate::Right.turn_key(k)), k);
+        }
+    }
+
+    /// Everything that is not a direction keeps its meaning through the turn.
+    #[test]
+    fn a_turned_app_keeps_its_named_buttons() {
+        use FlipperKey::{AppSwitch, Back, Escape, Edit, Ok, Power, Ptt, Run, View};
+        let named = [Ok, Back, Escape, View, Power, Edit, Run, Ptt, AppSwitch];
+        for turn in [Rotate::None, Rotate::Left, Rotate::Right] {
+            for key in named {
+                assert_eq!(turn.turn_key(key), key, "{turn:?} moved {key:?}");
+            }
+        }
+        // Landscape is the identity on every key.
+        for key in FlipperKey::ALL {
+            assert_eq!(Rotate::None.turn_key(key), key);
+        }
     }
 }
