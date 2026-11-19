@@ -18,15 +18,26 @@ export component Modal inherits Rectangle {
     // 0 none, 1 left, 4 right: the soft slot flashing after a key press.
     in property <int> pressed_slot: -1;
 
+    // The frame's box, from `theme::metric` by default. A window narrower than the
+    // panel - a portrait page, say - passes its own: `modal_x` and `modal_w` are 256
+    // wide together, so a 144-wide page drew a frame that ran off it and took the
+    // text with it. The two have to move together, which is why they are one pair.
+    in property <length> frame_x: FlipperTheme.modal_x;
+    in property <length> frame_y: FlipperTheme.modal_y;
+    in property <length> frame_w: FlipperTheme.modal_w;
+    in property <length> frame_h: FlipperTheme.modal_h;
+    // A line's height, and the width its text is wrapped to before it gets here.
+    in property <length> line_h: FlipperTheme.modal_line_h;
+
     width: 100%;
     height: 100%;
     background: FlipperTheme.white.with-alpha(FlipperTheme.overlay_alpha);
 
     SelectorFrame {
-        x: FlipperTheme.modal_x;
-        y: FlipperTheme.modal_y;
-        frame_w: FlipperTheme.modal_w;
-        frame_h: FlipperTheme.modal_h;
+        x: root.frame_x;
+        y: root.frame_y;
+        frame_w: root.frame_w;
+        frame_h: root.frame_h;
         filled: true;
         stroke: true;
         shadow: false;
@@ -38,14 +49,14 @@ export component Modal inherits Rectangle {
     }
 
     // Text block centred in the frame, top edge at
-    // modal_y + floor((modal_h - lines * line_h) / 2).
+    // frame_y + floor((frame_h - lines * line_h) / 2).
     for line[i] in root.lines: Text {
-        x: FlipperTheme.modal_x
-            + Math.floor((FlipperTheme.modal_w - (self.width - 1px)) / 2 / 1px) * 1px;
-        y: FlipperTheme.modal_y
-            + Math.floor((FlipperTheme.modal_h
-                - root.lines.length * FlipperTheme.modal_line_h) / 2 / 1px) * 1px
-            + i * FlipperTheme.modal_line_h;
+        x: root.frame_x
+            + Math.floor((root.frame_w - (self.width - 1px)) / 2 / 1px) * 1px;
+        y: root.frame_y
+            + Math.floor((root.frame_h
+                - root.lines.length * root.line_h) / 2 / 1px) * 1px
+            + i * root.line_h;
         text: line;
         font-size: 16px;
         font-family: "HaxrCorp 4090";
