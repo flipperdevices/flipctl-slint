@@ -64,6 +64,8 @@ tui = ["dep:cursive"]
 # getifaddrs, for the idle screen's IPv4 addresses. procfs exposes IPv6 as text
 # but has no IPv4 equivalent, and a UI process should not be shelling out to `ip`.
 libc = "0.2"
+# A script app's icon may sit in its manifest as a data URI, so the app stays one file.
+base64 = "0.22"
 drm = { version = "0.14", optional = true }
 # For one ioctl the safe crate cannot express: ADDFB2 with a fourcc its enum has no
 # name for. drm-fourcc 2.2.0 predates DRM_FORMAT_Y8, and the drm crate funnels every

@@ -317,7 +317,13 @@ A `.js` is the same block behind `//`:
 
 Every manifest field means what it means for a bundle. Two are filled in when the
 block leaves them out: `runtime`, from the extension, and `wayland`, from the file's
-own name, because a script names no command of its own. An icon is a PNG beside it.
+own name, because a script names no command of its own. An icon is a PNG beside it,
+or the PNG itself in the block, so the app stays one file:
+
+    # icon = "data:image/png;base64,iVBORw0KGgo..."
+
+flipctl decodes it into its cache for that app when it lists the script, without
+running anything. `base64 -w0 icon.png` gives the part after the comma.
 
 `apps/ping.fap.py` and `apps/uptime.fap.js` are the worked examples, and each is the
 whole app: a file in the tree beside the bundle directories, pushed to `~/Apps` as it

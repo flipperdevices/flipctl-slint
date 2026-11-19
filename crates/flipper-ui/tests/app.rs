@@ -235,6 +235,37 @@ fn a_script_is_listed_beside_a_bundle() {
     );
 }
 
+/// An icon may sit in the block as a data URI, so a script app is one file. It is
+/// decoded into the app's cache and served from there; one that is not a PNG is none.
+#[test]
+fn a_script_carries_its_icon_in_its_block() {
+    use base64::Engine;
+
+    let root = apps_folder("script-icon");
+    let png = b"\x89PNG\r\n\x1a\nnot really the rest";
+    let uri = base64::engine::general_purpose::STANDARD.encode(png);
+    std::fs::write(
+        root.join("sniff.fap.py"),
+        format!(
+            "# /// flipctl\n# name = \"Sniff\"\n# icon = \"data:image/png;base64,{uri}\"\n# ///\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("text.fap.py"),
+        "# /// flipctl\n# name = \"Text\"\n# icon = \"data:image/png;base64,aGVsbG8=\"\n# ///\n",
+    )
+    .unwrap();
+
+    let apps = bundle::discover(&root);
+    let sniff = apps.iter().find(|a| a.name == "Sniff").expect("listed");
+    let icon = sniff.icon_path().expect("an icon");
+    assert!(icon.starts_with(bundle::cache_dir(&sniff.key)), "{}", icon.display());
+    assert_eq!(std::fs::read(&icon).unwrap(), png);
+    let text = apps.iter().find(|a| a.name == "Text").expect("still listed");
+    assert_eq!(text.icon_path(), None, "\"hello\" is not a PNG");
+}
+
 /// A block of its own beats the defaults, and a script may name a launcher that is
 /// not Python.
 #[test]
