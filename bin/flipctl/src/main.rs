@@ -1679,6 +1679,12 @@ mod detail {
         }
         out.push(row("Memory", &sysinfo::memory_text(s.mem_used, s.mem_total)));
         sections.push(("Device", std::mem::take(&mut out)));
+        if let Some(m) = &s.mcu {
+            for (label, value) in [("MCU", &m.version), ("Slot", &m.slot), ("Boot", &m.boot)] {
+                out.extend(long(label, value));
+            }
+            sections.push(("MCU", std::mem::take(&mut out)));
+        }
         out.extend(long("OS", &s.os));
         for (label, value) in [("Profile", s.profile.as_str()), ("Installed", &s.installed)] {
             out.extend(long(label, value));
@@ -1831,11 +1837,20 @@ mod detail {
             ("CPU".into(), s.cpu.clone()),
             ("CPU serial".into(), s.serial.clone()),
             ("Memory".into(), sysinfo::installed_text(s.mem_total)),
+        ];
+        if let Some(m) = &s.mcu {
+            out.extend([
+                ("MCU".into(), m.version.clone()),
+                ("MCU slot".into(), m.slot.clone()),
+                ("MCU boot".into(), m.boot.clone()),
+            ]);
+        }
+        out.extend([
             ("OS".into(), s.os.clone()),
             ("Profile".into(), s.profile.clone()),
             ("Kernel".into(), s.kernel.clone()),
             ("flipctl".into(), COMMIT.into()),
-        ];
+        ]);
         // The builds and not their sources: those are a line of ninety characters
         // each, and the code has to stay small enough for the panel to show.
         out.extend(builds(&s.install).into_iter().map(|(k, v, _)| (k.into(), v)));

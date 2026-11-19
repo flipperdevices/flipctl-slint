@@ -916,6 +916,7 @@ pub struct System {
     /// The card in the slot, or None with the slot empty.
     pub sd: Option<SdCard>,
     pub pack: Option<Pack>,
+    pub mcu: Option<Mcu>,
     /// What each radio is, as (kind, what): `("Wi-Fi", "MediaTek mt7921u")`.
     pub radios: Vec<(String, String)>,
     /// The hardware addresses, as (what, address).
@@ -1053,6 +1054,7 @@ pub fn system() -> System {
         ufs: ufs(),
         sd: sd_card(),
         pack: pack(),
+        mcu: mcu(),
         radios: radios(),
         macs: macs(),
         uptime: read_str("/proc/uptime")
@@ -1686,6 +1688,31 @@ fn pack() -> Option<Pack> {
         design: num("charge_full_design"),
         cycles: num("cycle_count"),
         health: text("health"),
+    })
+}
+
+/// The MCU's firmware, as its update driver reports it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Mcu {
+    pub version: String,
+    /// The flash slot it booted from: `A` or `B`.
+    pub slot: String,
+    /// How it came to boot: `flash-update` after an update.
+    pub boot: String,
+}
+
+/// From the attributes `flipper-one-mcu-update.c` puts on its platform device, an
+/// MFD cell of the MCU's I2C device. None without the driver.
+fn mcu() -> Option<Mcu> {
+    let dir =
+        fs::read_dir("/sys/bus/platform/devices").ok()?.flatten().map(|e| e.path()).find(|p| {
+            p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("flipper-one-fw-update."))
+        })?;
+    let text = |f: &str| read_str(dir.join(f)).unwrap_or_default();
+    Some(Mcu {
+        version: text("firmware_version"),
+        slot: text("boot_slot"),
+        boot: text("boot_type"),
     })
 }
 
