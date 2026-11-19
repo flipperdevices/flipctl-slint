@@ -262,6 +262,20 @@ pub trait App {
         false
     }
 
+    /// A key as it comes back up, for an app whose button means something while held.
+    ///
+    /// `key` only sees presses: a moment later flipctl draws the button released and calls
+    /// `release`, and until this existed the app was never told that the finger had gone.
+    /// That is fine for a menu - a press is the whole event - but not for push-to-talk,
+    /// where the key is down for exactly as long as the person is speaking. A toggle there
+    /// is not a substitute: the panel repeats a held key, so a toggle flips the link on and
+    /// off for as long as the button is held.
+    ///
+    /// The default does nothing, so an app that has no held button needs no change.
+    fn key_up(&mut self, key: Key, ui: &mut Ui) {
+        let _ = (key, ui);
+    }
+
     /// How often to call [`App::tick`] and draw, for an app showing something that
     /// changes on its own.
     fn every(&self) -> Option<Duration> {
@@ -444,6 +458,21 @@ impl<A: App, S: Screen> Driver<A, S> {
         self.screen.set_pressed_slot(-1);
         self.screen.set_row_pressed(false);
         self.act(key);
+    }
+
+    /// The key has come back up.
+    ///
+    /// Separate from [`App::release`], which finishes a press's flash and *acts*: this one
+    /// only tells the app the finger is gone, and every key gets it. A held push-to-talk
+    /// needs it and a menu ignores it.
+    pub fn key_up(&mut self, key: Key) {
+        if self.closed {
+            return;
+        }
+        let here = self.current;
+        let mut ui = *self.state(here);
+        self.app.key_up(key, &mut ui);
+        self.settle(here, ui);
     }
 
     /// The clock [`App::every`] asked for.
