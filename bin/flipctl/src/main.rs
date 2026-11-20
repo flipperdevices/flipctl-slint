@@ -3319,9 +3319,11 @@ struct AppLabel {
     /// script is run through. Empty for a bundle, which is run by nothing.
     tag: String,
     status: String,
-    /// The app's own icon, a PNG kept beside its manifest. None for a folder or an
-    /// app without one.
+    /// The app's own icon, a PNG kept beside its manifest, or a folder's. None for
+    /// one without.
     icon: Option<std::path::PathBuf>,
+    /// A folder, which without an icon of its own draws the list's folder icon.
+    folder: bool,
 }
 
 /// A folder's own icon, which is a PNG called `icon.png` inside it.
@@ -3352,6 +3354,7 @@ fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow], path: &[String]) -
                 tag: String::new(),
                 status: count.to_string(),
                 icon: folder_icon(path, name),
+                folder: true,
             },
             // An app that is run through something says so, in the dim tone the
             // status column already uses: a script is not the same kind of thing as a
@@ -3361,6 +3364,7 @@ fn app_labels(apps: &[flipper_ui::AppEntry], rows: &[AppRow], path: &[String]) -
                 tag: String::new(),
                 status: apps.get(*at).map_or_else(String::new, |a| a.tag().to_string()),
                 icon: apps.get(*at).and_then(|a| a.icon_path()),
+                folder: false,
             },
         })
         .collect()
@@ -3460,6 +3464,7 @@ fn manager_labels(apps: &[flipper_ui::AppEntry]) -> Vec<AppLabel> {
             tag: String::new(),
             status: app.tag().to_string(),
             icon: None,
+            folder: false,
         })
         .collect()
 }
@@ -3490,6 +3495,7 @@ fn offer_labels(
                 tag: offer.runtime.clone(),
                 status: what,
                 icon: None,
+                folder: false,
             }
         })
         .collect()
@@ -3501,7 +3507,13 @@ fn offer_labels(
 /// would have been.
 #[cfg(feature = "slint")]
 fn offer_notice(say: &str) -> Vec<AppLabel> {
-    vec![AppLabel { label: say.to_string(), tag: String::new(), status: String::new(), icon: None }]
+    vec![AppLabel {
+        label: say.to_string(),
+        tag: String::new(),
+        status: String::new(),
+        icon: None,
+        folder: false,
+    }]
 }
 
 /// Draw the manager's list body: the Install tab with what the catalogue offers, or
@@ -3622,7 +3634,8 @@ fn apply_app_list(
                 label: row.label.as_str().into(),
                 tag: row.tag.as_str().into(),
                 status: row.status.as_str().into(),
-                icon: 0,
+                // The list's own folder icon, which an icon.png of the folder's replaces
+                icon: if row.folder { 14 } else { 0 },
                 picture,
                 frames,
                 chevrons: 0,

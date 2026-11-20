@@ -225,6 +225,8 @@ component MenuLine inherits Rectangle {
             : root.icon == 11 ? @image-url("../assets/icons/modem_5g.png")
             : root.icon == 12 ? @image-url("../assets/icons/wifi.png")
             : root.icon == 13 ? @image-url("../assets/icons/ethernet.png")
+            // A folder in the Apps list without an icon of its own.
+            : root.icon == 14 ? @image-url("../assets/icons/folder.png")
             : @image-url("../assets/icons/media.png");
         colorize: root.content;
     }
