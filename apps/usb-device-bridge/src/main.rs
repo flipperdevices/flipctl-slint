@@ -58,7 +58,7 @@ use flipctl_app::{item, App, Item, Key, Page, Typing, Ui};
 
 use crate::pcap::{Mode, WIRESHARK_PORT};
 use crate::remote::{own_address, Beacons, Remote, Transmitter};
-use crate::sysfs::{describe, device, pc_port_name, read, socket_name, sockets};
+use crate::sysfs::{describe, device, read, socket_name, sockets};
 
 // A menu row's text runs from past its icon (3 + 14 + 4) to the status inset (5) of
 // its 224px line. A value between chevrons gives up room to them.
@@ -212,7 +212,7 @@ struct Bridge {
 impl Bridge {
     fn new() -> Bridge {
         let (tx, rx) = channel();
-        let pc_port = pc_port_name();
+        let pc_port = flipctl_app::device_port_name();
         let store = std::env::var_os("FLIPCTL_HOSTED").map(|_| PathBuf::from(STORE));
         let kept = store.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
         let mut typed: Vec<Ipv4Addr> = Vec::new();

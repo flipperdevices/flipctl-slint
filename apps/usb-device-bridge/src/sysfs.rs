@@ -9,7 +9,6 @@ use std::sync::{Mutex, OnceLock};
 
 pub const DEVICES: &str = "/sys/bus/usb/devices";
 const DEVICE_TREE: &str = "/sys/firmware/devicetree/base";
-const TYPEC: &str = "/sys/class/typec";
 
 pub fn read(path: &Path) -> String {
     std::fs::read_to_string(path)
@@ -145,25 +144,6 @@ fn find_socket_name(port: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// The label of the Type-C connector the device port is behind.
-pub fn pc_port_name() -> String {
-    let Ok(dir) = std::fs::read_dir(TYPEC) else { return String::new() };
-    let mut ports: Vec<PathBuf> = dir
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .is_some_and(|n| n.to_string_lossy().chars().all(|c| c.is_ascii_alphanumeric()))
-        })
-        .collect();
-    ports.sort();
-    ports
-        .into_iter()
-        .map(|p| label(&p.join("device/of_node/connector")))
-        .find(|l| !l.is_empty())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

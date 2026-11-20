@@ -491,6 +491,7 @@ What the crate gives the app:
 | `picture` | A `paint::Surface` as an image, for an app that draws pixels. |
 | `paint`, `font`, `pixel`, `theme` | The primitives, the panel's bitmap fonts, and every token. |
 | `dropdown` | The settings row's own geometry: what to put in a `DropRow`, and where a picker's options go. |
+| `device_port_name` | The case's name for the USB-C port a PC plugs into, such as `USB-C1`, from the device tree; empty when it names none. |
 | `type_text`, `Typing` | flipctl's own keyboard over the app, for a line of text. Returns at once; `Typing::take` has the answer once the user is done, the text on Done or `None` on Cancel, and the page is drawn again when it arrives. Only the app in front can ask. On the socket it is `POST /keyboard?title=..&text=..`, answered with `{"text":..}`. |
 | `claim` | Hardware borrowed from flipctl (`udc`, `usb/<port>` and the rest, listed in `claim.rs`) for as long as the returned stream is open. Blocks while flipctl prepares it, so ask off the drawing thread. |
 | `keyboard`, `Key::flipper` | The on-screen keyboard's model, `TextInput`, which `TextInputBody` draws. It takes flipper-ui's key names, which `Key::flipper` gives. |
