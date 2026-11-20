@@ -13,11 +13,18 @@ status=0
 
 # Hex colour literals. tokens.toml, the generated output and the doc comments
 # that quote a token's value are the only legitimate holders.
+#
+# A test fixture that measures a known pattern - black bars on white, so the
+# frame can be counted - has no theme to read: an inline `slint!` block has no
+# library path, so `@theme` is not importable there. Such a line says
+# `not-a-raw-colour`, the same way a deliberate board number says
+# `not-a-panel-dimension` below.
 hits=$(grep -rInE '#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?\b' \
         --include='*.rs' --include='*.slint' \
         crates bin 2>/dev/null \
     | grep -v '^crates/flipper-ui/build.rs:' \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|///|//!)' \
+    | grep -v 'not-a-raw-colour' \
     || true)
 if [ -n "$hits" ]; then
     echo "raw colour literals outside tokens.toml:"
@@ -37,7 +44,7 @@ hits=$(grep -rInE '\b(256|144)(px)?\b' \
         crates bin 2>/dev/null \
     | grep -v '^crates/flipper-ui/build.rs:' \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|///|//!)' \
-    | grep -vE 'PANEL_[WH]' \
+    | grep -vE 'PANEL_[WH]|panel_[wh]' \
     | grep -v 'not-a-panel-dimension' \
     || true)
 if [ -n "$hits" ]; then

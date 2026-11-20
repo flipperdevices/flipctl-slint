@@ -488,6 +488,61 @@ What the crate gives the app:
 | `keyboard`, `Key::flipper` | The on-screen keyboard's model, `TextInput`, which `TextInputBody` draws. It takes flipper-ui's key names, which `Key::flipper` gives. |
 | `TouchpadSource`, `Haptic` | The pad and the motor, behind the `device` feature. The compositor has no pointer, so an app that wants the pad opens it itself. |
 
+## A portrait app
+
+The panel is 256x144, landscape, and the framework's `Shell` is that window. A handheld
+radio, a list of settings, anything that reads as a device held upright is drawn the other
+way up: a page 144 across and 256 down, turned a quarter turn onto the glass.
+
+There is a shell for it. `flipctl_app::portrait` gives the page's numbers and the two keys
+a portrait page needs, and `render::portrait_panel` gives a headless window of that shape
+for tests:
+
+    use flipctl_app::portrait::{self, TOP, W, H};
+    use flipctl_app::render;
+    use flipctl_app::Rotate;
+
+    // In the app: a page W x H, with the status strip reserved above TOP.
+    // In a test: the same page, headless, then turned onto the panel as flipctl turns it.
+    let window = render::portrait_panel();
+    let page = render::portrait_frame(&window, Rotate::Left);
+
+The `.slint` side is an ordinary page of the app's own - `build::compile("ui/app.slint")`,
+inheriting nothing, `W` x `H` in its `Window`, its rows built from `@flipctl`'s widgets.
+Two things differ from a landscape page:
+
+* **Widths are the page's, not the panel's.** A chip measured against `panel_w` is 71px
+  past the edge of a 144-wide page. Pass your own width: `DropLine` takes `chip_w`, and
+  `dropdown`'s helpers take the width they fit into. `ui/portrait.slint` in `flipper-ui`
+  is the smallest working example.
+* **Text is placed by Rust.** A portrait page is narrow enough that a `Text` left to size
+  itself overflows, and Slint cannot measure the string it is about to draw. Work the
+  width out in Rust with `font::tw` and hand it over with the string.
+
+**The turn is the renderer's, not the markup's.** `transform-rotation` is silently
+dropped: the software renderer reports `supports_transformations() == false`, so a page
+turned in Slint draws upright text over turned shapes. Use
+`SoftwareRenderer::set_rendering_rotation(Rotate270)` on the whole framebuffer instead, or
+`scale::turn_from_xrgb`, which does the same to a finished frame. Both turn the glyphs and
+the shapes together.
+
+`app.toml` says which way up the app is, and flipctl transposes the window it gives the
+app, turns the finished frame onto the glass, and turns the d-pad to match:
+
+    rotate = "left"
+
+**The d-pad turns with the frame.** An app drawn portrait is read with the device rotated,
+so the panel's Up is the page's Right. flipctl maps the four directions through the same
+quarter turn as the pixels (`Rotate::turn_key`), which means an app never has to ask which
+way it is being held: `Key::Up` in the app is up on its own page. Everything else - Ok,
+Back, Escape, the five soft keys, PTT - is a named button and keeps its meaning. Forwarding
+the directions unturned gives a page whose up and down do nothing and whose left and right
+walk the list, which reads as a broken app rather than a turned one.
+
+The status strip is still flipctl's, painted along what is now the page's top edge. It
+measures `theme::metric::STATUS_BAR_H` rows, so a portrait page starts below that and ends at its
+own bottom margin - the strip does not move to the side.
+
 ## The widgets
 
 Imported from `@flipctl`, the same components flipctl's own screens are built from:

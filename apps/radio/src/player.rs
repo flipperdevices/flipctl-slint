@@ -170,7 +170,11 @@ fn play(sink: &str, shared: &Shared, rx: &Receiver<minimp3::Frame>) -> io::Resul
                 channels: channels as u8,
                 sample_rate: rate,
             },
-            channel_map: if channels == 1 { protocol::ChannelMap::mono() } else { protocol::ChannelMap::stereo() },
+            channel_map: if channels == 1 {
+                protocol::ChannelMap::mono()
+            } else {
+                protocol::ChannelMap::stereo()
+            },
             sink_name: Some(pulse::cstr(sink)),
             // A second of audio held by the server, which is what rides out a
             // network that hesitates.
@@ -192,7 +196,8 @@ fn play(sink: &str, shared: &Shared, rx: &Receiver<minimp3::Frame>) -> io::Resul
             let frame = rx.recv().map_err(|_| io::Error::other("stream ended"))?;
             samples(&frame, channels, pending);
         }
-        protocol::write_memblock(conn.sock.get_mut(), channel, &pending[..bytes], 0).map_err(pulse::err)?;
+        protocol::write_memblock(conn.sock.get_mut(), channel, &pending[..bytes], 0)
+            .map_err(pulse::err)?;
         pending.drain(..bytes);
         shared.state.lock().unwrap().started = true;
         Ok(())
@@ -209,9 +214,13 @@ fn play(sink: &str, shared: &Shared, rx: &Receiver<minimp3::Frame>) -> io::Resul
         let mut cursor = Cursor::new(&body[..]);
         let Ok((_, msg)) = Command::read_tag_prefixed(&mut cursor, conn.version) else { continue };
         match msg {
-            Command::Request(r) if r.channel == channel => send(&mut conn, r.length as usize, &mut pending)?,
+            Command::Request(r) if r.channel == channel => {
+                send(&mut conn, r.length as usize, &mut pending)?
+            }
             // The sink it was on has gone: the server says so rather than moving it.
-            Command::PlaybackStreamKilled(c) if c == channel => return Err(io::Error::other("killed")),
+            Command::PlaybackStreamKilled(c) if c == channel => {
+                return Err(io::Error::other("killed"))
+            }
             _ => {}
         }
     }

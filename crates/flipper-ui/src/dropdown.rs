@@ -48,7 +48,19 @@ pub struct Line {
 }
 
 /// Build a row. `slider` is `None` for a chip and a 0..1 fraction for a slider.
-pub fn line(y: i32, title: &str, value: &str, slider: Option<f32>, selected: bool) -> Line {
+/// Build a row on a chip `chip_w` wide.
+///
+/// A row's chip is not always the panel's width. A window narrower than the panel
+/// - a portrait screen laid out 144 across - needs a narrower chip, and the value
+/// has to be fitted and centred in that and not in the panel's.
+pub fn line_in(
+    chip_w: i32,
+    y: i32,
+    title: &str,
+    value: &str,
+    slider: Option<f32>,
+    selected: bool,
+) -> Line {
     // The chevrons take their room out of the value's, so a long value is cut to
     // what is left rather than drawn over them.
     let arrows = if selected && slider.is_none() {
@@ -56,25 +68,37 @@ pub fn line(y: i32, title: &str, value: &str, slider: Option<f32>, selected: boo
     } else {
         0
     };
-    let value = fit(value, metric::DROP_CHIP_W - metric::DROP_CHIP_INSET - arrows);
+    let value = fit(value, chip_w - metric::DROP_CHIP_INSET - arrows);
     Line {
         y,
         title: title.to_string(),
-        value_x: (metric::DROP_CHIP_W - tw(&value)) / 2,
+        value_x: (chip_w - tw(&value)) / 2,
         value,
         kind: if slider.is_some() { SLIDER } else { CHIP },
-        fill_w: slider.map_or(0, fill_w),
+        fill_w: slider.map_or(0, |f| fill_w_in(chip_w, f)),
         selected,
     }
+}
+
+/// Build a row on the panel's own chip. See [`line_in`] for the one that takes a
+/// width.
+pub fn line(y: i32, title: &str, value: &str, slider: Option<f32>, selected: bool) -> Line {
+    line_in(metric::DROP_CHIP_W, y, title, value, slider, selected)
 }
 
 /// A slider's fill, in pixels from the chip's left edge.
 ///
 /// Never narrower than the nub: an empty chip reads as a control that is missing
 /// rather than as a value at the bottom of its range.
-pub fn fill_w(fraction: f32) -> i32 {
-    let width = (fraction.clamp(0.0, 1.0) * metric::DROP_CHIP_W as f32).round() as i32;
+/// A slider's fill across a chip `chip_w` wide.
+pub fn fill_w_in(chip_w: i32, fraction: f32) -> i32 {
+    let width = (fraction.clamp(0.0, 1.0) * chip_w as f32).round() as i32;
     width.max(metric::DROP_SLIDER_MIN_W)
+}
+
+/// A slider's fill across the panel's own chip.
+pub fn fill_w(fraction: f32) -> i32 {
+    fill_w_in(metric::DROP_CHIP_W, fraction)
 }
 
 /// One option of an open picker.
@@ -103,6 +127,9 @@ pub struct Picker {
     /// The row's title, drawn again over the wash so the user can see which row
     /// they are picking a value for.
     pub title: String,
+    /// Where that title is drawn: the row's own line, which is where the frame starts
+    /// unless the frame had to move up to fit the page.
+    pub title_y: i32,
     pub items: Vec<Item>,
     /// The selector, in panel coordinates. It wraps the option and the pixel of
     /// fill above and below it.
@@ -119,18 +146,38 @@ pub fn picker_h(n: usize) -> i32 {
         + metric::DROP_PICK_PAD * 2
 }
 
-/// Lay out the picker for a row whose chip is at `chip_y`.
-pub fn picker(chip_y: i32, title: &str, options: &[String], selected: usize) -> Picker {
+/// The chip's left edge on a `page_w` wide page, worked out the way `DropLine` does it
+/// in `dropdown.slint`: the page's right edge, less the padding a chip keeps from it,
+/// less the chip itself.
+///
+/// It is a function of the page and not a constant because a portrait page is 144 wide
+/// while the panel is 256: the panel's answer is 71 and a 62-wide chip on a 144-wide
+/// page starts at 77, six pixels apart. A picker that used the panel's number opened
+/// left of the row it belonged to.
+pub fn chip_x_in(page_w: i32, chip_w: i32) -> i32 {
+    page_w - metric::DROP_CHIP_PAD_R - chip_w
+}
+
+/// Open a picker over a chip `chip_w` wide, on a page `page_w` wide, whose chip is at
+/// `chip_y`. The frame's left edge is the chip's, so the two read as one shape.
+pub fn picker_in(
+    page_w: i32,
+    chip_w: i32,
+    chip_y: i32,
+    title: &str,
+    options: &[String],
+    selected: usize,
+) -> Picker {
     let pitch = metric::DROP_PICK_ITEM_H + metric::DROP_PICK_GAP;
     let last = options.len().saturating_sub(1);
     let items: Vec<Item> = options
         .iter()
         .enumerate()
         .map(|(i, option)| {
-            let text = fit(option, metric::DROP_CHIP_W - metric::DROP_CHIP_INSET);
+            let text = fit(option, chip_w - metric::DROP_CHIP_INSET);
             Item {
                 y: chip_y + metric::DROP_PICK_PAD + i as i32 * pitch,
-                text_x: (metric::DROP_CHIP_W - tw(&text)) / 2,
+                text_x: (chip_w - tw(&text)) / 2,
                 text,
                 rule: i != last,
             }
@@ -138,16 +185,23 @@ pub fn picker(chip_y: i32, title: &str, options: &[String], selected: usize) -> 
         .collect();
     let sel = selected.min(last) as i32;
     Picker {
-        x: CHIP_X,
+        x: chip_x_in(page_w, chip_w),
         y: chip_y,
-        w: metric::DROP_CHIP_W,
+        w: chip_w,
         h: picker_h(options.len()),
         title: title.to_string(),
+        title_y: chip_y,
         items,
         sel_y: chip_y + sel * pitch,
-        sel_w: metric::DROP_CHIP_W - metric::DROP_PICK_SEL_INSET,
+        sel_w: chip_w - metric::DROP_PICK_SEL_INSET,
         sel_h: metric::DROP_PICK_SEL_H,
     }
+}
+
+/// Open a picker over the panel's own chip. See [`picker_in`] for the one that takes a
+/// page width and a chip width.
+pub fn picker(chip_y: i32, title: &str, options: &[String], selected: usize) -> Picker {
+    picker_in(PANEL_W as i32, metric::DROP_CHIP_W, chip_y, title, options, selected)
 }
 
 #[cfg(test)]
@@ -291,5 +345,101 @@ mod tests {
         assert!(picker.items[0].text.ends_with(".."));
         assert!(tw(&picker.items[0].text) <= metric::DROP_CHIP_W - metric::DROP_CHIP_INSET);
         assert!(picker.items[0].text_x >= 0);
+    }
+}
+
+#[cfg(test)]
+mod narrow_chip {
+    //! A chip is not always the panel's width. A portrait window is 144 across
+    //! where the panel is 256, so a row built for it has to fit, centre and clip
+    //! its value against that width and not against the panel's.
+
+    use super::*;
+
+    /// The chip a 144-wide portrait page leaves: what the earlier panel maths
+    /// came to when the page was laid out by hand.
+    const PORTRAIT_CHIP: i32 = 62;
+    /// A portrait page, the panel read the long way up.
+    const PORTRAIT_PAGE: i32 = crate::PANEL_H as i32;
+
+    #[test]
+    fn a_row_fits_its_value_to_its_own_chip() {
+        let row = line_in(PORTRAIT_CHIP, 40, "Power", "22 dBm", None, true);
+        assert!(
+            tw(&row.value) <= PORTRAIT_CHIP - metric::DROP_CHIP_INSET,
+            "{:?} is {} wide in a {} chip",
+            row.value,
+            tw(&row.value),
+            PORTRAIT_CHIP
+        );
+    }
+
+    #[test]
+    fn a_value_is_centred_in_its_own_chip() {
+        let row = line_in(PORTRAIT_CHIP, 40, "Power", "22 dBm", None, false);
+        let left = row.value_x;
+        let right = PORTRAIT_CHIP - tw(&row.value) - row.value_x;
+        assert!(
+            (left - right).abs() <= 1,
+            "the value sits {} from the left and {} from the right of its chip",
+            left,
+            right
+        );
+    }
+
+    #[test]
+    fn the_same_value_is_narrower_in_a_narrow_chip() {
+        // A long value is cut to the room it has, so the same string comes out
+        // shorter where the chip is narrower rather than overflowing it.
+        let wide = line_in(metric::DROP_CHIP_W, 40, "Audio in", "Built-in Speaker", None, true);
+        let narrow = line_in(PORTRAIT_CHIP, 40, "Audio in", "Built-in Speaker", None, true);
+        assert!(
+            tw(&narrow.value) < tw(&wide.value),
+            "the narrow chip cuts the value: {:?} against {:?}",
+            narrow.value,
+            wide.value
+        );
+    }
+
+    #[test]
+    fn a_slider_fill_is_a_share_of_its_own_chip() {
+        assert_eq!(fill_w_in(PORTRAIT_CHIP, 1.0), PORTRAIT_CHIP);
+        assert_eq!(fill_w_in(PORTRAIT_CHIP, 0.5), PORTRAIT_CHIP / 2);
+    }
+
+    /// The picker's left edge is its chip's, on any page width.
+    ///
+    /// The panel's chip starts at 71 and a 62-wide chip on a 144-wide page at 77, so a
+    /// picker anchored on the panel's number opened six pixels left of the row it grew
+    /// from - visible as a popup that missed its chip.
+    #[test]
+    fn a_picker_opens_over_the_chip_it_belongs_to() {
+        let options = vec!["London".to_owned()];
+        let panel = picker_in(PANEL_W as i32, metric::DROP_CHIP_W, 40, "", &options, 0);
+        assert_eq!(panel.x, CHIP_X, "the panel's picker keeps the panel's chip");
+
+        let portrait = picker_in(PORTRAIT_PAGE, PORTRAIT_CHIP, 40, "", &options, 0);
+        assert_eq!(
+            portrait.x,
+            PORTRAIT_PAGE - metric::DROP_CHIP_PAD_R - PORTRAIT_CHIP,
+            "the portrait picker starts where its own chip does"
+        );
+        assert_eq!(
+            portrait.x,
+            PORTRAIT_PAGE - metric::DROP_CHIP_PAD_R - PORTRAIT_CHIP,
+            "the page's chip, six columns right of the panel's"
+        );
+        assert_ne!(portrait.x, CHIP_X, "the panel's chip is six pixels to the left");
+    }
+
+    #[test]
+    fn a_picker_opens_as_wide_as_its_own_chip() {
+        let options = vec!["London".to_owned(), "Berlin".to_owned()];
+        let view = picker_in(PORTRAIT_PAGE, PORTRAIT_CHIP, 40, "", &options, 0);
+        assert_eq!(view.w, PORTRAIT_CHIP, "the picker is as wide as the chip it grows from");
+        assert!(
+            tw(&view.items[0].text) <= PORTRAIT_CHIP - metric::DROP_CHIP_INSET,
+            "and its options are cut to that"
+        );
     }
 }

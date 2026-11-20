@@ -65,3 +65,57 @@ export component Shell inherits Window {
         @children
     }
 }
+
+// A window for a page drawn the long way up: 144 across, 256 down.
+//
+// The panel is landscape and a portrait app is read with the device turned, so the
+// app's window and the panel disagree by a quarter turn. flipctl makes that turn when
+// it puts the frame on the glass (`rotate = "left"`, or `"right"`), and it does it in
+// the renderer's inner loop rather than by resampling a landscape picture, so text
+// stays crisp. What this component adds is only the shape: the same window, the same
+// keys and the same soft bar as `Shell`, sized `panel_h` by `panel_w`.
+//
+// The status bar is not here. flipctl paints its own bar along the edge that is the
+// page's top (`status = true`), so a portrait page loses `status_bar_h` rows of its own
+// and gains the real bar, in the real font, saying the same things as everywhere else.
+// A page that draws its own bar instead leaves `status` off; see `docs/apps.md`.
+//
+// Slint cannot turn this for the app: the software renderer has no
+// `supports_transformations` and drops `transform-rotation` without a word. A page
+// turned in the markup would draw upright text over turned shapes. Laying the page out
+// portrait and letting the renderer turn the finished frame is the way round that
+// works, and it is why this window exists rather than a rotation wrapper.
+export component PortraitShell inherits Window {
+    width: FlipperTheme.panel_h;
+    height: FlipperTheme.panel_w;
+    background: FlipperTheme.white;
+    default-font-family: "HaxrCorp 4090";
+    default-font-size: 16px;
+
+    callback key(string, bool);
+
+    forward-focus: scope;
+
+    init => {
+        scope.focus();
+    }
+
+    scope := FocusScope {
+        width: 100%;
+        height: 100%;
+
+        key-pressed(event) => {
+            root.key(event.text, true);
+            AppKeys.key(event.text, true);
+            EventResult.accept
+        }
+        key-released(event) => {
+            root.key(event.text, false);
+            AppKeys.key(event.text, false);
+            EventResult.accept
+        }
+
+        @children
+    }
+}
+

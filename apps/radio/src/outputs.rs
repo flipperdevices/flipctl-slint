@@ -53,7 +53,9 @@ fn run(tx: &Sender<Vec<(String, String)>>) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("sink events".into())
         .spawn(move || {
-            while let Ok((_, msg)) = protocol::read_command_message(&mut events.sock, events.version) {
+            while let Ok((_, msg)) =
+                protocol::read_command_message(&mut events.sock, events.version)
+            {
                 if matches!(msg, Command::SubscribeEvent(_)) && heard.send(()).is_err() {
                     return;
                 }

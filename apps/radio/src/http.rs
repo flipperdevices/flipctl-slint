@@ -103,7 +103,10 @@ fn connect(host: &str, port: u16) -> io::Result<TcpStream> {
     Err(last)
 }
 
-fn tls(host: &str, tcp: TcpStream) -> io::Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>> {
+fn tls(
+    host: &str,
+    tcp: TcpStream,
+) -> io::Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     let config = CONFIG.get_or_init(|| {
         let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
@@ -169,11 +172,21 @@ mod tests {
     fn urls_split_into_their_parts() {
         assert_eq!(
             parse("http://media-ice.musicradio.com/CapitalMP3").unwrap(),
-            Url { tls: false, host: "media-ice.musicradio.com".into(), port: 80, path: "/CapitalMP3".into() }
+            Url {
+                tls: false,
+                host: "media-ice.musicradio.com".into(),
+                port: 80,
+                path: "/CapitalMP3".into()
+            }
         );
         assert_eq!(
             parse("https://quincy.torontocast.com:2070/stream.mp3").unwrap(),
-            Url { tls: true, host: "quincy.torontocast.com".into(), port: 2070, path: "/stream.mp3".into() }
+            Url {
+                tls: true,
+                host: "quincy.torontocast.com".into(),
+                port: 2070,
+                path: "/stream.mp3".into()
+            }
         );
         assert_eq!(
             parse("http://naxi128.streaming.rs:9150").unwrap(),
@@ -185,9 +198,13 @@ mod tests {
 
     #[test]
     fn a_header_block_gives_its_status_and_interval() {
-        let block = b"HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\nicy-metaint: 16000\r\n\r\nMP3DATA";
+        let block =
+            b"HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\nicy-metaint: 16000\r\n\r\nMP3DATA";
         let mut r = &block[..];
-        assert_eq!(headers(&mut r).unwrap(), Head { status: 200, location: None, metaint: Some(16000) });
+        assert_eq!(
+            headers(&mut r).unwrap(),
+            Head { status: 200, location: None, metaint: Some(16000) }
+        );
         assert_eq!(r, b"MP3DATA", "the body is left where it starts");
     }
 
@@ -197,7 +214,10 @@ mod tests {
         assert_eq!(headers(&mut r).unwrap().status, 200);
         let mut r = &b"HTTP/1.1 302 Found\r\nLocation: https://cdn.example/live\r\n\r\n"[..];
         let head = headers(&mut r).unwrap();
-        assert_eq!((head.status, head.location.as_deref()), (302, Some("https://cdn.example/live")));
+        assert_eq!(
+            (head.status, head.location.as_deref()),
+            (302, Some("https://cdn.example/live"))
+        );
     }
 
     #[test]

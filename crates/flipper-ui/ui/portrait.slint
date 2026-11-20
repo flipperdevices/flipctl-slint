@@ -1,0 +1,105 @@
+// A settings row laid out for a portrait page, 144 across.
+//
+// What this file is for: the framework's row components measure their chip from
+// `tokens.toml`, which is the panel's, so a portrait page has to pass its own
+// width. This is the smallest thing that proves a row can be built for a
+// narrower window and turned onto the panel afterwards - the two halves of a
+// portrait screen that were missing.
+import { FlipperTheme } from "@theme";
+import { DropLine, DropRow } from "dropdown.slint";
+import { SelectorFrame } from "frame.slint";
+import { StatusBar } from "statusbar.slint";
+import { PanelFonts } from "fonts.slint";
+
+export { DropRow }
+
+// The numbers a 144-wide page needs that the panel's tokens cannot supply.
+//
+// A portrait page is `panel_height` across, and a chip measured from the panel is 180 wide
+// in a 144-wide page. The values here are the page's own: a chip two thirds of the width so
+// a title like "Audio out" still fits beside it, and the row's top far enough down to clear
+// the status strip and a title line.
+export global Portrait {
+    out property <length> chip_w: 62px;
+    out property <length> row_y: 40px;
+}
+
+export component PortraitRow inherits Window {
+    // The panel read the long way up: the theme's two numbers, swapped.
+    width: FlipperTheme.panel_h;
+    height: FlipperTheme.panel_w;
+    background: FlipperTheme.white;
+
+    // The row the app would build in Rust and hand over.
+    in property <DropRow> line;
+
+    DropLine {
+        line: root.line;
+        chip_w: Portrait.chip_w;
+    }
+
+    // The frame around the picked row: a one-pixel outline and its shadow, which is what
+    // `SelectorFrame` draws and what a page used to draw for itself.
+    //
+    // Its height is the framework's own selector height, and its width is the page less the
+    // two columns it keeps clear at either edge - the same relationship `DropLine` keeps
+    // between its row and the window.
+    if root.line.selected: SelectorFrame {
+        x: 2px;
+        y: Portrait.row_y - 3px;
+        frame_w: root.width - 4px;
+        frame_h: FlipperTheme.drop_selector_h;
+        radius: 3px;
+        filled: false;
+        stroke: true;
+        shadow: true;
+    }
+}
+
+// The status bar a portrait page wears, at the width that page has.
+//
+// It is the same `StatusBar` the landscape screen draws - the same five signal bars, the
+// same wifi and ethernet icons, the same battery glyph and bolt, the same `HaxrCorp 4090` -
+// laid out in the 144 columns a turned page is wide. `StatusBar` measures itself from its
+// parent (`battery_x: root.width - 2px - 16px`), so nothing but the size has to change.
+//
+// flipctl cannot render this component on its own: the platform it installs hands out one
+// window, of the panel's size, to every component in the process
+// (`create_window_adapter` returns that window, and `set_platform` may only be called
+// once). So flipctl draws this bar into its own scene, at a known corner of `Root`, while
+// a turned app is in front, and lifts the pixels back out - the same route the landscape
+// bar takes, where flipctl's scene is rendered and its top rows are cut off.
+//
+// `values` are properties rather than the `PanelStatus` global so that a caller which
+// already sets the rest of a screen's numbers sets these the same way, and one assignment
+// keeps both bars current.
+export component PortraitBar inherits Rectangle {
+    in property <int> battery: -1;
+    in property <bool> charging;
+    in property <bool> wifi_connected;
+    in property <int> wifi_quality;
+    // 0 down, 1 real, 2 usb gadget.
+    in property <int> ethernet;
+    in property <bool> recording;
+    in property <bool> modem_available;
+    in property <string> access_tech: "--";
+    in property <int> modem_quality;
+
+    width: FlipperTheme.panel_h;
+    height: FlipperTheme.status_bar_h;
+    background: FlipperTheme.bar_bg;
+
+    StatusBar {
+        x: 0;
+        y: 0;
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+    }
+}

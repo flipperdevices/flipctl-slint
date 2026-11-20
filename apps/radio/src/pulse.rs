@@ -20,7 +20,8 @@ use pulseaudio::protocol::{self, ChannelVolume, Command, CommandReply, Volume};
 /// The sink flipctl pinned this app to, which is the panel's speaker. The fallback
 /// is the name flipctl falls back to, so the app run by hand still finds it.
 pub fn pinned() -> String {
-    std::env::var("PULSE_SINK").unwrap_or_else(|_| "alsa_output.platform-sound.stereo-fallback".into())
+    std::env::var("PULSE_SINK")
+        .unwrap_or_else(|_| "alsa_output.platform-sound.stereo-fallback".into())
 }
 
 pub fn err(e: protocol::ProtocolError) -> io::Error {
@@ -43,9 +44,16 @@ pub struct Conn {
 
 impl Conn {
     pub fn open() -> io::Result<Self> {
-        let path = pulseaudio::socket_path_from_env().ok_or_else(|| io::Error::other("no sound server"))?;
-        let mut conn = Self { sock: BufReader::new(UnixStream::connect(path)?), version: protocol::MAX_VERSION, seq: 0 };
-        let cookie = pulseaudio::cookie_path_from_env().and_then(|p| std::fs::read(p).ok()).unwrap_or_default();
+        let path = pulseaudio::socket_path_from_env()
+            .ok_or_else(|| io::Error::other("no sound server"))?;
+        let mut conn = Self {
+            sock: BufReader::new(UnixStream::connect(path)?),
+            version: protocol::MAX_VERSION,
+            seq: 0,
+        };
+        let cookie = pulseaudio::cookie_path_from_env()
+            .and_then(|p| std::fs::read(p).ok())
+            .unwrap_or_default();
         let auth: protocol::AuthReply = conn.ask(&Command::Auth(protocol::AuthParams {
             version: protocol::MAX_VERSION,
             supports_shm: false,
@@ -61,7 +69,8 @@ impl Conn {
 
     pub fn send(&mut self, command: &Command) -> io::Result<u32> {
         self.seq += 1;
-        protocol::write_command_message(self.sock.get_mut(), self.seq, command, self.version).map_err(err)?;
+        protocol::write_command_message(self.sock.get_mut(), self.seq, command, self.version)
+            .map_err(err)?;
         Ok(self.seq)
     }
 
@@ -92,8 +101,12 @@ impl Conn {
     }
 
     pub fn sink_volume(&mut self, name: &str) -> Option<i32> {
-        let info: protocol::SinkInfo =
-            self.ask(&Command::GetSinkInfo(protocol::GetSinkInfo { index: None, name: Some(cstr(name)) })).ok()?;
+        let info: protocol::SinkInfo = self
+            .ask(&Command::GetSinkInfo(protocol::GetSinkInfo {
+                index: None,
+                name: Some(cstr(name)),
+            }))
+            .ok()?;
         Some(percent(&info.cvolume))
     }
 
@@ -125,7 +138,8 @@ fn percent(cv: &ChannelVolume) -> i32 {
 
 /// Both channels at `percent` of the server's 100%.
 fn volume(percent: i32) -> ChannelVolume {
-    let raw = (f64::from(Volume::NORM.as_u32()) * f64::from(percent.clamp(0, 100)) / 100.0).round() as u32;
+    let raw = (f64::from(Volume::NORM.as_u32()) * f64::from(percent.clamp(0, 100)) / 100.0).round()
+        as u32;
     let mut cv = ChannelVolume::empty();
     cv.push(Volume::from_u32_clamped(raw));
     cv.push(Volume::from_u32_clamped(raw));

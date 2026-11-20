@@ -37,10 +37,11 @@
 pub use flipper_ui::key::FlipperKey;
 pub use flipper_ui::platform::Touch;
 pub use flipper_ui::status::{Status, StatusSource};
-pub use flipper_ui::Ethernet;
 pub use flipper_ui::{dropdown, font, keyboard, paint, pixel, theme};
+pub use flipper_ui::{Ethernet, Rotate};
 
 pub mod app;
+pub mod portrait;
 #[cfg(feature = "render")]
 pub mod render;
 pub use app::{
@@ -111,11 +112,23 @@ pub fn attach(
     set_status: impl Fn(&Status) + 'static,
     bind: impl FnOnce(Box<dyn Fn(&str, bool)>),
     handler: impl FnMut(Key) -> bool + 'static,
+    released: impl FnMut(Key) + 'static,
 ) -> Attached {
     use std::cell::RefCell;
     use std::rc::Rc;
     let act = Rc::new(RefCell::new(handler));
+    // A key coming back up. A press is the whole event for a menu, but not for a button that
+    // means something while it is held: push-to-talk is down for exactly as long as the person
+    // is speaking. Until this existed the app was never told the finger had gone, and a
+    // toggle could not stand in for it - the panel repeats a held key, so a toggle flips the
+    // link on and off for as long as the button is held.
+    let up = Rc::new(RefCell::new(released));
     let act = move |key: Key| {
+        // `false` from the handler means "nothing more to do with this key", and Escape is
+        // the only key that reaches here meaning "leave": flipctl keeps Back to put the app
+        // in the background, and the rest are the app's own. Closing on any unclaimed key
+        // would make `_ => false` - the pattern this crate's own example teaches - quit the
+        // app on an arrow nobody bound.
         if !(act.borrow_mut())(key) && key == Key::Escape {
             let _ = slint::quit_event_loop();
         }
@@ -131,6 +144,7 @@ pub fn attach(
             });
         }
         if !down {
+            (up.borrow_mut())(key);
             return;
         }
         let Some(slot) = key.soft_slot() else {
@@ -173,7 +187,10 @@ pub(crate) fn poll_status(set: impl Fn(&Status) + 'static) -> slint::Timer {
 /// `PanelStatus` so Rust can reach them.
 #[macro_export]
 macro_rules! attach {
-    ($ui:expr, $status:ident, $keys:ident, $handler:expr) => {{
+    ($ui:expr, $status:ident, $keys:ident, $handler:expr) => {
+        $crate::attach!($ui, $status, $keys, $handler, |_key| {})
+    };
+    ($ui:expr, $status:ident, $keys:ident, $handler:expr, $released:expr) => {{
         let ui = $ui;
         let (slot, arrow, status, bind) = (ui.as_weak(), ui.as_weak(), ui.as_weak(), ui.as_weak());
         $crate::attach(
@@ -198,6 +215,7 @@ macro_rules! attach {
                 }
             },
             $handler,
+            $released,
         )
     }};
 }
