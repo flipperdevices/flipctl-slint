@@ -231,7 +231,7 @@ fn keyboard(
 }
 
 /// `%XX` and `+` back into what they stand for.
-fn percent_decode(s: &str) -> Option<String> {
+pub(crate) fn percent_decode(s: &str) -> Option<String> {
     let mut out = Vec::with_capacity(s.len());
     let mut bytes = s.bytes();
     while let Some(b) = bytes.next() {

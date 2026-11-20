@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Application Manager</title>
+<title>Flipper One App Manager</title>
 <style>
   :root {
     --ground: #14171C;
@@ -56,6 +56,8 @@
   li.folder .caret { flex: none; width: 10px; }
   li.folder .count { color: var(--ink); font-weight: 400; }
   li.in { padding-left: 34px; }
+  /* An installed app's own icon, the panel's 14px drawn at twice its size. */
+  .icon { flex: none; width: 28px; height: 28px; }
   /* Beside the name, in the dim tone the folder underneath already uses, so it reads
      as something about the app rather than part of what it is called. */
   .runtime {
@@ -192,8 +194,32 @@ function grouped(list, apps, filtering, make) {
   return rows;
 }
 
+// The icon the panel draws on an app's row: the first frame of its strip, scaled by
+// whole pixels so the pixel art stays sharp, and inked in the page's text colour,
+// since an icon is only a shape. The slot is kept for an app without one, so the
+// names down the list stay in line.
+function icon(app) {
+  const c = document.createElement('canvas');
+  c.className = 'icon';
+  c.width = c.height = 28;
+  if (!app.icon) return c;
+  const img = new Image();
+  img.onload = () => {
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    g.drawImage(img, 0, 0, 14, 14, 0, 0, 28, 28);
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--ink');
+    g.fillRect(0, 0, 28, 28);
+  };
+  img.src = 'apps/icon?key=' + encodeURIComponent(app.key);
+  return c;
+}
+
 function row(app, tag, tagClass, actions) {
   const li = document.createElement('li');
+  // Only an installed app has one to show: the catalogue carries no icons
+  if (app.key !== undefined) li.appendChild(icon(app));
   const n = document.createElement('span');
   n.className = 'name';
   n.textContent = app.name;
