@@ -18,7 +18,8 @@ ignore-dev-dependencies = true
 # offering a choice (e.g. "MIT OR Apache-2.0"), the first match wins, so MIT is
 # chosen wherever possible and extra texts are kept to a minimum. GPL-3.0-only is
 # accepted solely to satisfy Slint's tri-license, and LGPL-3.0 solely for LAME in
-# apps/recorder, the only MP3 encoder there is; both binaries are GPL-3.0-only.
+# apps/recorder and apps/usb-audio-bridge, the only MP3 encoder there is; those
+# binaries are GPL-3.0-only.
 # CDLA-Permissive-2.0 is for webpki-roots alone: the Mozilla root certificates
 # apps/radio carries, so it trusts https stations with nothing installed.
 accepted = [

@@ -1,0 +1,10 @@
+# USB Audio Bridge: the Flipper as the PC's USB sound card. What the PC plays comes
+# out of a Flipper output, and the PC records what the Flipper plays or hears.
+#
+# The device port is lent by flipctl (the uac2 claim), which builds the sound card
+# and puts the boot gadget back however the app ends. The routing is PipeWire's,
+# done as the user, and leaves the default devices and volumes alone.
+name = "USB Audio Bridge"
+wayland = "./target/release/usb-audio-bridge-app"
+folder = "Test Tools"
+icon = "icon.png"
