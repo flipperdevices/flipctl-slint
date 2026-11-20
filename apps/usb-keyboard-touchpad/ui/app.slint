@@ -1,0 +1,99 @@
+// USB BT Keyboard Touchpad: the on-screen keyboard with no field, the touchpad that is the
+// host's mouse while PTT has handed it over, and the host drawn as a monitor that
+// says which way it is reached and whether it is there. Placed as TV Media Box's
+// keyboard places them; everything arrives worked out from src/main.rs.
+import { Shell, PanelStatus } from "@app/shell.slint";
+import { TextInputBody, KbCell } from "@flipctl/keyboard.slint";
+import { FlipperTheme } from "@theme";
+
+export { KbCell, PanelStatus }
+
+export component AppWindow inherits Shell {
+    in property <int> pressed_slot: -1;
+
+    in property <[KbCell]> kb_cells;
+    in property <length> kb_chrome_x;
+    in property <length> kb_chrome_y;
+    in property <length> kb_chrome_w;
+    in property <length> kb_chrome_h;
+    in property <string> kb_lang_label;
+    in property <string> kb_tab_label;
+    in property <int> kb_tab_focus;
+    in property <int> kb_tab_pressed;
+    in property <[string]> buttons;
+
+    // Where the touchpad glyph is, and the PTT mark between it and the monitor:
+    // on the Flipper, or slid over to the host.
+    in property <length> pad_x: 70px;
+    in property <length> ptt_x: 144px;
+    in property <bool> to_host;
+    // The monitor's two lines: how the host is reached, and how it is.
+    in property <string> link;
+    in property <string> state;
+
+    callback keyed(string, bool);
+    key(text, down) => {
+        root.keyed(text, down);
+    }
+
+    TextInputBody {
+        title: "";
+        field_shown: false;
+        cells: root.kb_cells;
+        chrome_x: root.kb_chrome_x;
+        chrome_y: root.kb_chrome_y;
+        chrome_w: root.kb_chrome_w;
+        chrome_h: root.kb_chrome_h;
+        lang_label: root.kb_lang_label;
+        tab_label: root.kb_tab_label;
+        tab_focus: root.kb_tab_focus;
+        tab_pressed: root.kb_tab_pressed;
+        buttons: root.buttons;
+        pressed_slot: root.pressed_slot;
+    }
+
+    // The Flipper, under the pad while the pad is the Flipper's.
+    Image {
+        x: 26px;
+        y: 30px;
+        source: @image-url("icons/flipper_67x28.png");
+    }
+
+    // The host, with how it is reached and its state on its screen.
+    Image {
+        x: 174px;
+        y: 24px;
+        source: @image-url("icons/screen_keyboard_forwarding.png");
+    }
+    Text {
+        x: 174px + Math.round((57px - (self.width - 1px)) / 2 / 1px) * 1px;
+        y: 26px;
+        text: root.link;
+        font-size: 16px;
+        color: FlipperTheme.black;
+    }
+    Text {
+        x: 174px + Math.round((57px - (self.width - 1px)) / 2 / 1px) * 1px;
+        y: 38px;
+        text: root.state;
+        font-size: 16px;
+        color: FlipperTheme.black;
+    }
+
+    // PTT, behind the pad, with the arrow saying where pressing it sends the pad.
+    Image {
+        x: root.to_host ? 103px : 160px;
+        y: 38px;
+        source: root.to_host ? @image-url("icons/arrow_left_11px.png") : @image-url("icons/arrow_right_11px.png");
+    }
+    Image {
+        x: root.ptt_x;
+        y: 37px;
+        source: @image-url("icons/ptt_small_icon.png");
+    }
+    Image {
+        x: root.pad_x;
+        y: 23px;
+        source: @image-url("icons/touchpad.png");
+    }
+}
