@@ -16,6 +16,7 @@
 //! |---|---|---|
 //! | `mt7921` | the onboard Wi-Fi chip, driverless, for an SDR app | both drivers, rfkill as found |
 //! | `udc` | the device side of the main USB-C, as /dev/raw-gadget | the boot gadget, started again |
+//! | `uac2` | the same port as a USB sound card, 48 kHz stereo both ways, its ALSA card `UAC2Gadget` | the boot gadget, started again |
 //! | `usb/<port>` | the usbfs node of a device in a socket, e.g. `usb/1-1.2` | the device, re-enumerated onto its own driver |
 //! | `usbip-share/<port>` | a device in a socket, served by USB/IP on port 3240 | the device to its own driver; usbipd stopped if we started it |
 //! | `usbip-attach/<ipv4>/<busid>` | a device another machine serves, attached here; where it landed is in `/run/flipctl-usbip-attach-<ipv4>+<busid>` | detached |
@@ -44,6 +45,8 @@ static OUT: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 enum Resource {
     Mt7921,
     Udc,
+    /// The device port as a USB sound card.
+    Uac2,
     /// A device in a socket, by its place on the USB tree.
     Usb(String),
     /// A device in a socket, served to the network by USB/IP.
@@ -64,6 +67,7 @@ impl Resource {
         match name {
             MT7921 => Some(Resource::Mt7921),
             "udc" => Some(Resource::Udc),
+            "uac2" => Some(Resource::Uac2),
             _ => port("usb/")
                 .map(Resource::Usb)
                 .or_else(|| port("usbip-share/").map(Resource::UsbipShare)),
@@ -74,16 +78,25 @@ impl Resource {
         match self {
             Resource::Mt7921 => MT7921.into(),
             Resource::Udc => "udc".into(),
+            Resource::Uac2 => "uac2".into(),
             Resource::Usb(port) => format!("usb/{port}"),
             Resource::UsbipShare(port) => format!("usbip-share/{port}"),
             Resource::UsbipAttach(host, busid) => format!("usbip-attach/{host}/{busid}"),
         }
     }
 
+    /// What the claim takes, so two claims of one thing cannot both be out.
+    fn lock(&self) -> String {
+        match self {
+            Resource::Uac2 => Resource::Udc.name(),
+            _ => self.name(),
+        }
+    }
+
     fn busy(&self) -> &'static str {
         match self {
             Resource::Mt7921 => "the Wi-Fi chip is in use",
-            Resource::Udc => "the USB-C device port is in use",
+            Resource::Udc | Resource::Uac2 => "the USB-C device port is in use",
             Resource::Usb(_) => "that USB device is in use",
             Resource::UsbipShare(_) => "that USB device is shared already",
             Resource::UsbipAttach(..) => "that remote device is attached already",
@@ -93,7 +106,8 @@ impl Resource {
     fn hold(&self) -> Result<(), String> {
         match self {
             Resource::Mt7921 => root(&format!("{MT7921_COMMON}{HOLD}"), &[]),
-            Resource::Udc => root(UDC_HOLD, &[]),
+            Resource::Udc => root(&format!("{UDC}{UDC_CHECK}{GADGET_STOP}{UDC_HOLD}"), &[]),
+            Resource::Uac2 => root(&format!("{UAC2}{UAC2_CHECK}{GADGET_STOP}{SERIAL}{UAC2_HOLD}"), &[]),
             Resource::Usb(port) => root(&format!("{SOCKET}{USB_HOLD}"), &[port]),
             Resource::UsbipShare(port) => root(&format!("{SOCKET}{SHARE_HOLD}"), &[port]),
             Resource::UsbipAttach(host, busid) => root(ATTACH_HOLD, &[host, busid]),
@@ -103,7 +117,8 @@ impl Resource {
     fn release(&self) -> Result<(), String> {
         match self {
             Resource::Mt7921 => root(&format!("{MT7921_COMMON}{RELEASE}"), &[]),
-            Resource::Udc => root(UDC_RELEASE, &[]),
+            Resource::Udc => root(&format!("{UDC}{UDC_RELEASE}{GADGET_START}"), &[]),
+            Resource::Uac2 => root(&format!("{UAC2}{UAC2_RELEASE}{GADGET_START}"), &[]),
             Resource::Usb(port) => root(USB_RELEASE, &[port]),
             Resource::UsbipShare(port) => root(SHARE_RELEASE, &[port]),
             Resource::UsbipAttach(host, busid) => root(ATTACH_RELEASE, &[host, busid]),
@@ -177,16 +192,14 @@ rm -f $STATE
 exit 0
 "#;
 
-/// Take the device port for user `$1`: the boot gadget stops and /dev/raw-gadget is
-/// the user's. The unit that was running is kept for the release.
+/// Stop the boot gadget so the port is free, keeping the unit that ran it in `$STATE`
+/// for the release. The claim's own check goes before this, so a kernel without what
+/// it needs leaves the boot gadget up.
 ///
 /// The getty on the gadget's serial port goes first. While it holds /dev/ttyGS0,
 /// removing the ACM function waits for it in D state, and the gadget's stop with it.
 /// udev starts it again with the port.
-const UDC_HOLD: &str = r#"
-STATE=/run/flipctl-udc.unit
-[ -e /dev/raw-gadget ] || modprobe raw_gadget 2>/dev/null
-[ -e /dev/raw-gadget ] || { echo "this kernel has no raw-gadget"; exit 1; }
+const GADGET_STOP: &str = r#"
 unit=$(systemctl list-units --state=active --no-legend --plain 'usb-*gadget.service' | awk '{print $1; exit}')
 [ -e $STATE ] || echo "$unit" > $STATE
 systemctl stop 'serial-getty@flipserial*.service'
@@ -194,19 +207,104 @@ systemctl stop 'serial-getty@flipserial*.service'
 for g in /sys/kernel/config/usb_gadget/*/UDC; do
     [ -n "$(cat "$g" 2>/dev/null)" ] && { echo "the port is held by gadget $(basename "$(dirname "$g")")"; exit 1; }
 done
-chown "$1" /dev/raw-gadget
-exit 0
 "#;
 
-/// Give the port back to the gadget that had it. Nothing to do without a hold.
-const UDC_RELEASE: &str = r#"
-STATE=/run/flipctl-udc.unit
-[ -e $STATE ] || exit 0
-chown root /dev/raw-gadget 2>/dev/null
+/// Start the gadget `$STATE` says ran before the hold.
+const GADGET_START: &str = r#"
 unit=$(cat $STATE)
 rm -f $STATE
 [ -z "$unit" ] || systemctl start --no-block "$unit"
 exit 0
+"#;
+
+const UDC: &str = r#"
+STATE=/run/flipctl-udc.unit
+"#;
+
+/// Before the boot gadget stops: raw-gadget exists.
+const UDC_CHECK: &str = r#"
+[ -e /dev/raw-gadget ] || modprobe raw_gadget 2>/dev/null
+[ -e /dev/raw-gadget ] || { echo "this kernel has no raw-gadget"; exit 1; }
+"#;
+
+/// Take the device port for user `$1`, as /dev/raw-gadget.
+const UDC_HOLD: &str = r#"
+chown "$1" /dev/raw-gadget
+exit 0
+"#;
+
+/// Nothing to do without a hold.
+const UDC_RELEASE: &str = r#"
+[ -e $STATE ] || exit 0
+chown root /dev/raw-gadget 2>/dev/null
+"#;
+
+const UAC2: &str = r#"
+STATE=/run/flipctl-uac2.unit
+G=/sys/kernel/config/usb_gadget/flipctl-uac2
+"#;
+
+/// Before the boot gadget stops: the kernel has the function.
+const UAC2_CHECK: &str = r#"
+modprobe usb_f_uac2 2>/dev/null || { echo "this kernel has no USB audio gadget"; exit 1; }
+"#;
+
+/// The board's serial number, worked out as usb-gadget-setup.sh does for the system's
+/// own gadgets, so a PC sees one Flipper in every mode: the device tree's if the
+/// bootloader put it there, else the OTP's the way U-Boot computes serial#, else the
+/// machine-id. Uppercase hex, which mass storage needs and the rest do not mind.
+const SERIAL: &str = r#"
+if [ -r /sys/firmware/devicetree/base/serial-number ]; then
+    serial=$(tr -d '\0' < /sys/firmware/devicetree/base/serial-number)
+else
+    serial=$(/usr/local/bin/rk3576_cpu_serial.sh 2>/dev/null | awk -F'\t' '/^serial:/{print $2}')
+fi
+serial=${serial:-$(cat /etc/machine-id)}
+serial=$(printf '%s' "$serial" | tr -cd '0-9A-Fa-f' | tr 'a-f' 'A-F')
+: "${serial:=0123456789AB}"
+"#;
+
+/// The port as a USB Audio Class 2 sound card: stereo at 48 kHz, PipeWire's own rate,
+/// both ways. It has no volume or mute of its own, so the PC's controls scale the
+/// sound on the PC: the gadget's would only be reported to ALSA here and applied by
+/// nothing. Flipper's own vendor and product IDs, and the board's serial number.
+const UAC2_HOLD: &str = r#"
+F=$G/functions/uac2.usb0
+mkdir -p $G/strings/0x409 $F $G/configs/c.1 || { echo "configfs refused the gadget"; exit 1; }
+echo 0x37C1 > $G/idVendor
+echo 0xF125 > $G/idProduct
+echo 0x0100 > $G/bcdDevice
+echo "$serial" > $G/strings/0x409/serialnumber
+echo "Flipper FZCO" > $G/strings/0x409/manufacturer
+echo "Flipper One USB Sound Card" > $G/strings/0x409/product
+mkdir -p $G/configs/c.1/strings/0x409
+echo "Flipper One USB Sound Card" > $G/configs/c.1/strings/0x409/configuration
+for d in p c; do
+    echo 48000 > $F/${d}_srate
+    echo 3 > $F/${d}_chmask
+    echo 2 > $F/${d}_ssize
+    echo 0 > $F/${d}_mute_present
+    echo 0 > $F/${d}_volume_present
+done
+echo "Flipper One" > $F/function_name
+echo 250 > $G/configs/c.1/MaxPower
+[ -e $G/configs/c.1/uac2.usb0 ] || ln -s $F $G/configs/c.1/
+for u in /sys/class/udc/*; do
+    case $u in *vudc*) ;; *) udc=${u##*/}; break ;; esac
+done
+echo "$udc" > $G/UDC || { echo "the port did not take the sound card"; exit 1; }
+exit 0
+"#;
+
+/// Take the sound card down. Nothing to do without a hold or the gadget left behind.
+const UAC2_RELEASE: &str = r#"
+[ -e $STATE ] || [ -d $G ] || exit 0
+if [ -d $G ]; then
+    echo "" > $G/UDC 2>/dev/null
+    rm -f $G/configs/c.1/uac2.usb0
+    rmdir $G/configs/c.1/strings/0x409 $G/configs/c.1 $G/functions/uac2.usb0 $G/strings/0x409 $G
+fi
+[ -e $STATE ] || exit 0
 "#;
 
 /// Give user `$1` the usbfs node of the device at `$2`. Only a device in a socket: one
@@ -344,6 +442,11 @@ pub fn recover() {
         if std::path::Path::new("/run/flipctl-udc.unit").exists() {
             left.push(Resource::Udc);
         }
+        if std::path::Path::new("/run/flipctl-uac2.unit").exists()
+            || std::path::Path::new("/sys/kernel/config/usb_gadget/flipctl-uac2").exists()
+        {
+            left.push(Resource::Uac2);
+        }
         for entry in std::fs::read_dir("/run").into_iter().flatten().flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             if let Some(port) =
@@ -403,14 +506,15 @@ fn handle(first: &str, rest: &[u8], mut stream: UnixStream) -> std::io::Result<(
         return reply(&mut stream, 405, "Method Not Allowed", &error("a claim is a POST"));
     }
     let name = resource.name();
-    if !OUT.lock().unwrap().insert(name.clone()) {
+    let lock = resource.lock();
+    if !OUT.lock().unwrap().insert(lock.clone()) {
         return reply(&mut stream, 409, "Conflict", &error(resource.busy()));
     }
     crate::logline!("claim          {name} taking");
     if let Err(e) = resource.hold() {
         crate::logline!("claim          {name} hold: {e}");
         let _ = resource.release();
-        OUT.lock().unwrap().remove(&name);
+        OUT.lock().unwrap().remove(&lock);
         return reply(&mut stream, 500, "Internal Server Error", &error(&e));
     }
     let held = (|| {
@@ -429,7 +533,7 @@ fn handle(first: &str, rest: &[u8], mut stream: UnixStream) -> std::io::Result<(
     if let Err(e) = resource.release() {
         crate::logline!("claim          {name} release: {e}");
     }
-    OUT.lock().unwrap().remove(&name);
+    OUT.lock().unwrap().remove(&lock);
     held
 }
 
@@ -490,6 +594,8 @@ mod tests {
             assert_eq!(Resource::parse(&format!("usb/{bad}")), None, "{bad:?}");
         }
         assert_eq!(Resource::parse("udc"), Some(Resource::Udc));
+        assert_eq!(Resource::parse("uac2"), Some(Resource::Uac2));
+        assert_eq!(Resource::Uac2.lock(), Resource::Udc.lock(), "one port");
         assert_eq!(Resource::parse("usb"), None);
         assert_eq!(
             Resource::parse("usbip-share/1-1.2"),
@@ -527,6 +633,7 @@ mod tests {
             ("POST /claim/usb/../1-1 HTTP/1.1", "404"),
             ("GET /claim/mt7921 HTTP/1.1", "405"),
             ("GET /claim/udc HTTP/1.1", "405"),
+            ("GET /claim/uac2 HTTP/1.1", "405"),
             ("GET /claim/usb/1-1.2 HTTP/1.1", "405"),
         ] {
             let (mut a, b) = UnixStream::pair().unwrap();
