@@ -131,7 +131,8 @@ def copy_licenses(repo: Path, app_dir: Path, doc: Path, program: str) -> None:
     third_party = app_dir / "THIRD-PARTY-LICENSES.md"
     if third_party.is_file():
         shutil.copy2(third_party, doc / third_party.name)
-    else:
+    elif (app_dir / "Cargo.toml").is_file():
+        # Only a Rust app links crates: a script or an AppRun has nothing to attribute
         print(f"warning: {third_party} missing; run scripts/gen-third-party-licenses.sh", file=sys.stderr)
     # Whatever the crate attributions cannot cover: data an app carries that is
     # somebody else's, which a generator reading Cargo.lock has no way to know about.
