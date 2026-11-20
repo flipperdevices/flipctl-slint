@@ -4478,7 +4478,18 @@ fn panel(
     // never refused by us, so that line carries the AP's own last refusal instead.
     enum KbFor {
         Profile(String),
-        Passphrase { ssid: String, error: String },
+        Passphrase {
+            ssid: String,
+            error: String,
+        },
+        /// The app in front asked: its name, its request to answer, and the screen of
+        /// ours the keyboard went up over.
+        #[cfg(feature = "wayland")]
+        App {
+            name: String,
+            asked: flipper_ui::ipc::Pending,
+            over: Screen,
+        },
     }
     let mut kb_for = KbFor::Profile(String::new());
     let mut kb_dirty = false;
@@ -4648,6 +4659,8 @@ fn panel(
                 }
                 KbFor::Passphrase { error, .. } if !error.is_empty() => error.clone(),
                 KbFor::Passphrase { .. } => wifi::passphrase_warning(&$input.text).into(),
+                #[cfg(feature = "wayland")]
+                KbFor::App { .. } => String::new(),
             }
         };
     }
@@ -4919,6 +4932,11 @@ fn panel(
     // deck, complete with its Kill button, until the app was touched.
     #[cfg(feature = "wayland")]
     let mut wl_fresh = false;
+    // The keys the front app has been sent a press for and not yet the release. A
+    // release that arrives while flipctl has the keys still goes to the app: one it
+    // never got leaves the key held there, and its client repeats it.
+    #[cfg(feature = "wayland")]
+    let mut wl_held: Vec<FlipperKey> = Vec::new();
 
     // The USB-C power question: asked once for each thing plugged in that speaks PD
     // and takes power from the Flipper, and from the Settings row whenever someone
@@ -5026,6 +5044,32 @@ fn panel(
         }};
     }
 
+    // The keyboard an app asked for, put away: the app gets what was typed, or None
+    // for a cancel, and the panel back with its current frame. Our own screen goes
+    // back to the one it was over, unless something else has changed it since.
+    #[cfg(feature = "wayland")]
+    macro_rules! app_kb_done {
+        ($typed:expr) => {
+            if let KbFor::App { name, asked, over } =
+                std::mem::replace(&mut kb_for, KbFor::Profile(String::new()))
+            {
+                let typed: Option<String> = $typed;
+                eprintln!(
+                    "app            {name} text {}",
+                    if typed.is_some() { "typed" } else { "cancelled" }
+                );
+                asked.typed(typed.as_deref());
+                kb = None;
+                press.cancel();
+                if screen.get_screen() == Screen::TextInput {
+                    screen.set_screen(over);
+                }
+                wl_fresh = true;
+                window.request_redraw();
+            }
+        };
+    }
+
     loop {
         // A desktop handing a bundle over: list it, start it or front it, and answer.
         // The reply says what was accepted, not what came of it: the outcome shows on
@@ -5037,6 +5081,43 @@ fn panel(
                     continue;
                 }
                 flipper_ui::ipc::Request::Open(path) => path,
+                flipper_ui::ipc::Request::Keyboard { title, text, pid } => {
+                    // Over the app that asked, and only while it is the one in front:
+                    // the keys are going to it, so it is the only one that can expect
+                    // them to come back as text.
+                    #[cfg(feature = "wayland")]
+                    {
+                        let asker = wl_front
+                            .as_deref()
+                            .filter(|_| wl_drawn && kb.is_none() && usb_ask.is_none())
+                            .and_then(|name| wl_apps.iter().find(|a| a.name == name))
+                            .filter(|a| {
+                                let started = a.session.pid();
+                                pid == started || flipper_ui::app::ancestors(pid).contains(&started)
+                            });
+                        if let Some(app) = asker {
+                            eprintln!("app            {} asks for text", app.name);
+                            kb = Some(flipper_ui::keyboard::TextInput::new(&title, &text));
+                            kb_for = KbFor::App {
+                                name: app.name.clone(),
+                                asked: req,
+                                over: screen.get_screen(),
+                            };
+                            kb_dirty = true;
+                            press.cancel();
+                            screen.set_screen(Screen::TextInput);
+                            window.request_redraw();
+                        } else {
+                            req.refused("only the app in front can ask, one at a time");
+                        }
+                    }
+                    #[cfg(not(feature = "wayland"))]
+                    {
+                        let _ = (title, text, pid);
+                        req.refused("no app is in front");
+                    }
+                    continue;
+                }
             };
             if !demo::can_host_apps() {
                 req.err("cannot host apps");
@@ -5074,6 +5155,14 @@ fn panel(
                 Opened::Starting => req.ok(&format!("starting {name}")),
                 Opened::Refused => req.err(&format!("{name} cannot start; the panel says why")),
             }
+        }
+
+        // An app's keyboard outlives nothing: the app that asked has gone, or is no
+        // longer the one in front, so nobody is waiting for the text.
+        #[cfg(feature = "wayland")]
+        if matches!(&kb_for, KbFor::App { name, .. } if wl_front.as_deref() != Some(name.as_str()))
+        {
+            app_kb_done!(None);
         }
 
         #[cfg(feature = "remote")]
@@ -5224,7 +5313,8 @@ fn panel(
                 .map(|sw| sw.shown().into_iter().map(str::to_string).collect())
                 .unwrap_or_default();
             for app in wl_apps.iter() {
-                let want = if wl_front.as_deref() == Some(app.name.as_str()) {
+                let typing = matches!(kb_for, KbFor::App { .. });
+                let want = if wl_front.as_deref() == Some(app.name.as_str()) && !typing {
                     // An app in front that has drawn the same picture for a while is
                     // not worth sixty repaints a second. Half a second of stillness at
                     // the front rate, so a pause between frames is not mistaken for an
@@ -5694,7 +5784,9 @@ fn panel(
         // and nothing to decide about what the kernel may already have delivered.
         // Not while the USB-C question is up: it has the panel and the keys.
         #[cfg(feature = "wayland")]
-        if let Some(front) = wl_front.clone().filter(|_| usb_ask.is_none()) {
+        if let Some(front) =
+            wl_front.clone().filter(|_| usb_ask.is_none() && !matches!(kb_for, KbFor::App { .. }))
+        {
             let mut leave = None;
             for event in pending_input.drain(..).chain(pending_remote.drain(..)) {
                 if keylog {
@@ -5709,6 +5801,10 @@ fn panel(
                     key => {
                         if let Some(app) = wl_apps.iter_mut().find(|a| a.name == front) {
                             app.session.key(u32::from(key.to_evdev()), event.down);
+                            wl_held.retain(|k| *k != key);
+                            if event.down {
+                                wl_held.push(key);
+                            }
                             // The frame this press causes is the one being waited for,
                             // so the app is quick again before it draws rather than a
                             // tenth of a second afterwards.
@@ -6013,6 +6109,39 @@ fn panel(
                     _ => {}
                 }
                 usb_dirty = true;
+                continue;
+            }
+
+            // The keyboard an app asked for owns every key, as the question above
+            // does: AppSwitch would leave it up with nobody looking, and Back is
+            // the keyboard's own. Done and Cancel answer the app.
+            #[cfg(feature = "wayland")]
+            if matches!(kb_for, KbFor::App { .. }) {
+                if !event.down && wl_held.contains(&event.key) {
+                    wl_held.retain(|k| *k != event.key);
+                    let front = wl_front.as_deref();
+                    if let Some(app) = wl_apps.iter_mut().find(|a| Some(a.name.as_str()) == front) {
+                        app.session.key(u32::from(event.key.to_evdev()), false);
+                    }
+                    continue;
+                }
+                let Some(input) = kb.as_mut() else { continue };
+                if !event.down {
+                    if input.release(event.key) {
+                        kb_dirty = true;
+                    }
+                    continue;
+                }
+                match event.key {
+                    FlipperKey::Escape => press.only(0, Instant::now() + flash),
+                    FlipperKey::Run => press.only(4, Instant::now() + flash),
+                    _ => {}
+                }
+                match input.key(event.key, true) {
+                    Some(flipper_ui::keyboard::Exit::Save(text)) => app_kb_done!(Some(text)),
+                    Some(flipper_ui::keyboard::Exit::Cancel) => app_kb_done!(None),
+                    None => kb_dirty = true,
+                }
                 continue;
             }
 
@@ -6893,6 +7022,9 @@ fn panel(
                             wifi::passphrase_warning(&input.text).is_empty()
                         }
                         KbFor::Profile(_) => warning.is_empty(),
+                        // Answered in a block of its own, before this one.
+                        #[cfg(feature = "wayland")]
+                        KbFor::App { .. } => true,
                     };
                     let typed = match input.key(event.key, saveable) {
                         Some(flipper_ui::keyboard::Exit::Save(text)) => Some(Some(text)),
@@ -6938,6 +7070,8 @@ fn panel(
                             wifi_dirty = true;
                             screen.set_screen(Screen::Wifi);
                         }
+                        #[cfg(feature = "wayland")]
+                        (Some(_), KbFor::App { .. }) => {}
                     }
                 }
                 continue;
@@ -8653,7 +8787,10 @@ fn panel(
         // is damage, which would put the Apps list on top of a running game for a
         // frame every second.
         #[cfg(feature = "wayland")]
-        let app_owns_panel = wl_front.is_some() && wl_drawn && usb_ask.is_none();
+        let app_owns_panel = wl_front.is_some()
+            && wl_drawn
+            && usb_ask.is_none()
+            && !matches!(kb_for, KbFor::App { .. });
         #[cfg(not(feature = "wayland"))]
         let app_owns_panel = false;
 

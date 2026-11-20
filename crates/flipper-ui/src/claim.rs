@@ -433,12 +433,22 @@ fn handle(first: &str, rest: &[u8], mut stream: UnixStream) -> std::io::Result<(
     held
 }
 
-fn error(why: &str) -> String {
-    let why: String = why.chars().filter(|c| !c.is_control()).collect();
-    format!("{{\"error\":\"{}\"}}", why.replace('\\', "\\\\").replace('"', "\\\""))
+pub(crate) fn error(why: &str) -> String {
+    format!("{{\"error\":{}}}", json_string(why))
 }
 
-fn reply(stream: &mut UnixStream, code: u16, reason: &str, body: &str) -> std::io::Result<()> {
+/// A JSON string literal: quoted, with control characters dropped.
+pub(crate) fn json_string(s: &str) -> String {
+    let s: String = s.chars().filter(|c| !c.is_control()).collect();
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+pub(crate) fn reply(
+    stream: &mut UnixStream,
+    code: u16,
+    reason: &str,
+    body: &str,
+) -> std::io::Result<()> {
     write!(
         stream,
         "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}\n",

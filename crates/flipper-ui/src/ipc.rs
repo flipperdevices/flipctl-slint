@@ -7,7 +7,17 @@
 //! the socket sits in that user's 0700 runtime directory, which is the whole of the
 //! access control.
 //!
-//! An HTTP request on the same socket is an app asking for hardware; see `claim`.
+//! An HTTP request on the same socket is an app asking for something. A claim asks for
+//! hardware; see `claim`. A hosted app asks for text with
+//!
+//! ```text
+//! POST /keyboard?title=<title>&text=<text> HTTP/1.1
+//! ```
+//!
+//! both percent-encoded, `text` what the field starts with and optional. flipctl puts
+//! its own keyboard over the app and answers once the user is done: `200` with
+//! `{"text":"..."}`, or `{"text":null}` when they cancel. Only the app in front may
+//! ask, one at a time; any other request gets `409` with `{"error":"..."}`.
 //!
 //! Not the browser view's HTTP port: that is an optional feature bound on every
 //! interface with no authentication, and a request that runs a file is not something
@@ -15,6 +25,7 @@
 
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -46,6 +57,9 @@ pub enum Request {
     Ping,
     /// Put this bundle on the panel.
     Open(PathBuf),
+    /// Type some text for the app `pid` belongs to. HTTP only, so answered with
+    /// [`Pending::typed`] and [`Pending::refused`].
+    Keyboard { title: String, text: String, pid: u32 },
 }
 
 /// One line into a request: `ping`, or `open` and an absolute path.
@@ -81,6 +95,20 @@ impl Pending {
     fn reply(mut self, status: &str, text: &str) {
         let _ = writeln!(self.stream, "{status} {text}");
         let _ = self.stream.flush();
+    }
+
+    /// What the keyboard was left with: the text, or `None` when it was cancelled.
+    pub fn typed(mut self, text: Option<&str>) {
+        let body = match text {
+            Some(t) => format!("{{\"text\":{}}}", crate::claim::json_string(t)),
+            None => "{\"text\":null}".into(),
+        };
+        let _ = crate::claim::reply(&mut self.stream, 200, "OK", &body);
+    }
+
+    /// The keyboard cannot be put up for this request.
+    pub fn refused(mut self, why: &str) {
+        let _ = crate::claim::reply(&mut self.stream, 409, "Conflict", &crate::claim::error(why));
     }
 }
 
@@ -134,6 +162,25 @@ fn accept_loop(listener: UnixListener, tx: Sender<Pending>) {
         if crate::claim::is_http(&line) {
             // The reader may hold the headers already, so they go along with the line
             let rest = reader.buffer().to_vec();
+            let path = line.split(' ').nth(1).unwrap_or("");
+            if path == "/keyboard" || path.starts_with("/keyboard?") {
+                match keyboard(&line, &rest, &stream) {
+                    Ok(request) => {
+                        if tx.send(Pending { request, stream }).is_err() {
+                            return;
+                        }
+                    }
+                    Err((code, reason, why)) => {
+                        let _ = crate::claim::reply(
+                            &mut stream,
+                            code,
+                            reason,
+                            &crate::claim::error(why),
+                        );
+                    }
+                }
+                continue;
+            }
             crate::claim::serve(line, rest, stream);
             continue;
         }
@@ -148,6 +195,77 @@ fn accept_loop(listener: UnixListener, tx: Sender<Pending>) {
             }
         }
     }
+}
+
+/// A `/keyboard` request into what it asks, its headers read so the answer is not
+/// sent over a request still arriving.
+fn keyboard(
+    first: &str,
+    rest: &[u8],
+    stream: &UnixStream,
+) -> Result<Request, (u16, &'static str, &'static str)> {
+    let bad = (400, "Bad Request", "bad request");
+    let mut reader =
+        BufReader::new(rest.chain(stream.try_clone().map_err(|_| bad)?)).take(MAX_LINE as u64 * 2);
+    let mut header = String::new();
+    while reader.read_line(&mut header).map_err(|_| bad)? > 0 && header.trim_end() != "" {
+        header.clear();
+    }
+    let mut parts = first.split(' ');
+    if parts.next() != Some("POST") {
+        return Err((405, "Method Not Allowed", "the keyboard is a POST"));
+    }
+    let query = parts.next().and_then(|p| p.split_once('?')).map_or("", |(_, q)| q);
+    let (mut title, mut text) = (String::new(), String::new());
+    for pair in query.split('&').filter(|p| !p.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let value = printable(&percent_decode(value).ok_or(bad)?);
+        match key {
+            "title" => title = value,
+            "text" => text = value,
+            _ => return Err(bad),
+        }
+    }
+    let pid = peer_pid(stream).ok_or((500, "Internal Server Error", "who is asking"))?;
+    Ok(Request::Keyboard { title, text, pid })
+}
+
+/// `%XX` and `+` back into what they stand for.
+fn percent_decode(s: &str) -> Option<String> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut bytes = s.bytes();
+    while let Some(b) = bytes.next() {
+        out.push(match b {
+            b'%' => {
+                let hex = [bytes.next()?, bytes.next()?];
+                u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?
+            }
+            b'+' => b' ',
+            b => b,
+        });
+    }
+    String::from_utf8(out).ok()
+}
+
+/// What the panel's fonts can draw: printable ASCII, the rest dropped.
+fn printable(s: &str) -> String {
+    s.chars().filter(|c| (' '..='~').contains(c)).collect()
+}
+
+/// The process on the other end of the socket, as the kernel says.
+fn peer_pid(stream: &UnixStream) -> Option<u32> {
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    (rc == 0 && cred.pid > 0).then_some(cred.pid as u32)
 }
 
 /// What the other side said.
@@ -172,6 +290,7 @@ pub fn send_to(path: &Path, request: &Request) -> Reply {
     let line = match request {
         Request::Ping => "ping".to_string(),
         Request::Open(path) => format!("open {}", path.display()),
+        Request::Keyboard { .. } => return Reply::Refused("not a line request".into()),
     };
     if writeln!(stream, "{line}").and_then(|()| stream.flush()).is_err() {
         return Reply::NotRunning;
@@ -221,6 +340,60 @@ mod tests {
         let mut answer = String::new();
         stream.read_to_string(&mut answer).unwrap();
         assert!(answer.starts_with("HTTP/1.1 404 "), "{answer}");
+    }
+
+    #[test]
+    fn a_query_value_is_decoded_to_what_the_font_draws() {
+        assert_eq!(percent_decode("10.0.0.2").as_deref(), Some("10.0.0.2"));
+        assert_eq!(percent_decode("Add+IP%20address%3F").as_deref(), Some("Add IP address?"));
+        assert_eq!(percent_decode("%4"), None);
+        assert_eq!(percent_decode("%zz"), None);
+        assert_eq!(printable("a\u{2014}b\n"), "ab");
+    }
+
+    /// The keyboard is asked for over HTTP, waits in the loop, and the answer goes back
+    /// on the same connection.
+    #[test]
+    fn a_keyboard_request_waits_for_its_answer() {
+        let path = std::env::temp_dir().join(format!("flipctl-ipc-kb-{}.sock", std::process::id()));
+        let mut listener = Listener::bind_at(path.clone()).expect("bind");
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .write_all(b"POST /keyboard?title=Add+IP+address&text=10.0.0.%32 HTTP/1.1\r\nHost: flipctl\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        let pending = loop {
+            if let Some(p) = listener.poll() {
+                break p;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(
+            pending.request,
+            Request::Keyboard {
+                title: "Add IP address".into(),
+                text: "10.0.0.2".into(),
+                pid: std::process::id(),
+            }
+        );
+        pending.typed(Some("10.8.0.\"1"));
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200 "), "{answer}");
+        assert!(answer.ends_with("{\"text\":\"10.8.0.\\\"1\"}\n"), "{answer}");
+    }
+
+    #[test]
+    fn a_keyboard_request_is_a_post() {
+        let path =
+            std::env::temp_dir().join(format!("flipctl-ipc-kb-get-{}.sock", std::process::id()));
+        let _listener = Listener::bind_at(path.clone()).expect("bind");
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream.write_all(b"GET /keyboard HTTP/1.1\r\n\r\n").unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 405 "), "{answer}");
     }
 
     /// A ping goes in, the loop answers, the client reads it back.
