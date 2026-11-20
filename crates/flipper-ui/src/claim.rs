@@ -17,6 +17,8 @@
 //! | `mt7921` | the onboard Wi-Fi chip, driverless, for an SDR app | both drivers, rfkill as found |
 //! | `udc` | the device side of the main USB-C, as /dev/raw-gadget | the boot gadget, started again |
 //! | `uac2` | the same port as a USB sound card, 48 kHz stereo both ways, its ALSA card `UAC2Gadget` | the boot gadget, started again |
+//! | `bt-hid` | the Bluetooth radio, powered and pairable, for an app to be a Bluetooth keyboard through BlueZ | powered, pairable, blocked and named as found |
+//! | `hid` | the same port as a keyboard, a mouse with a wheel and media keys, reports 1, 2 and 3 on the `/dev/hidgN` named in `/run/flipctl-hid.dev` | the boot gadget, started again |
 //! | `usb/<port>` | the usbfs node of a device in a socket, e.g. `usb/1-1.2` | the device, re-enumerated onto its own driver |
 //! | `usbip-share/<port>` | a device in a socket, served by USB/IP on port 3240 | the device to its own driver; usbipd stopped if we started it |
 //! | `usbip-attach/<ipv4>/<busid>` | a device another machine serves, attached here; where it landed is in `/run/flipctl-usbip-attach-<ipv4>+<busid>` | detached |
@@ -47,6 +49,10 @@ enum Resource {
     Udc,
     /// The device port as a USB sound card.
     Uac2,
+    /// The device port as a keyboard, a mouse and media keys.
+    Hid,
+    /// The Bluetooth radio, on and pairable.
+    BtHid,
     /// A device in a socket, by its place on the USB tree.
     Usb(String),
     /// A device in a socket, served to the network by USB/IP.
@@ -68,6 +74,8 @@ impl Resource {
             MT7921 => Some(Resource::Mt7921),
             "udc" => Some(Resource::Udc),
             "uac2" => Some(Resource::Uac2),
+            "hid" => Some(Resource::Hid),
+            "bt-hid" => Some(Resource::BtHid),
             _ => port("usb/")
                 .map(Resource::Usb)
                 .or_else(|| port("usbip-share/").map(Resource::UsbipShare)),
@@ -79,6 +87,8 @@ impl Resource {
             Resource::Mt7921 => MT7921.into(),
             Resource::Udc => "udc".into(),
             Resource::Uac2 => "uac2".into(),
+            Resource::Hid => "hid".into(),
+            Resource::BtHid => "bt-hid".into(),
             Resource::Usb(port) => format!("usb/{port}"),
             Resource::UsbipShare(port) => format!("usbip-share/{port}"),
             Resource::UsbipAttach(host, busid) => format!("usbip-attach/{host}/{busid}"),
@@ -88,7 +98,7 @@ impl Resource {
     /// What the claim takes, so two claims of one thing cannot both be out.
     fn lock(&self) -> String {
         match self {
-            Resource::Uac2 => Resource::Udc.name(),
+            Resource::Uac2 | Resource::Hid => Resource::Udc.name(),
             _ => self.name(),
         }
     }
@@ -96,7 +106,8 @@ impl Resource {
     fn busy(&self) -> &'static str {
         match self {
             Resource::Mt7921 => "the Wi-Fi chip is in use",
-            Resource::Udc | Resource::Uac2 => "the USB-C device port is in use",
+            Resource::Udc | Resource::Uac2 | Resource::Hid => "the USB-C device port is in use",
+            Resource::BtHid => "Bluetooth is lent out already",
             Resource::Usb(_) => "that USB device is in use",
             Resource::UsbipShare(_) => "that USB device is shared already",
             Resource::UsbipAttach(..) => "that remote device is attached already",
@@ -108,6 +119,8 @@ impl Resource {
             Resource::Mt7921 => root(&format!("{MT7921_COMMON}{HOLD}"), &[]),
             Resource::Udc => root(&format!("{UDC}{UDC_CHECK}{GADGET_STOP}{UDC_HOLD}"), &[]),
             Resource::Uac2 => root(&format!("{UAC2}{UAC2_CHECK}{GADGET_STOP}{SERIAL}{UAC2_HOLD}"), &[]),
+            Resource::Hid => root(&format!("{HID}{GADGET_STOP}{SERIAL}{HID_HOLD}"), &[]),
+            Resource::BtHid => root(BT_HID_HOLD, &[]),
             Resource::Usb(port) => root(&format!("{SOCKET}{USB_HOLD}"), &[port]),
             Resource::UsbipShare(port) => root(&format!("{SOCKET}{SHARE_HOLD}"), &[port]),
             Resource::UsbipAttach(host, busid) => root(ATTACH_HOLD, &[host, busid]),
@@ -119,6 +132,8 @@ impl Resource {
             Resource::Mt7921 => root(&format!("{MT7921_COMMON}{RELEASE}"), &[]),
             Resource::Udc => root(&format!("{UDC}{UDC_RELEASE}{GADGET_START}"), &[]),
             Resource::Uac2 => root(&format!("{UAC2}{UAC2_RELEASE}{GADGET_START}"), &[]),
+            Resource::Hid => root(&format!("{HID}{HID_RELEASE}{GADGET_START}"), &[]),
+            Resource::BtHid => root(BT_HID_RELEASE, &[]),
             Resource::Usb(port) => root(USB_RELEASE, &[port]),
             Resource::UsbipShare(port) => root(SHARE_RELEASE, &[port]),
             Resource::UsbipAttach(host, busid) => root(ATTACH_RELEASE, &[host, busid]),
@@ -244,6 +259,98 @@ STATE=/run/flipctl-uac2.unit
 G=/sys/kernel/config/usb_gadget/flipctl-uac2
 "#;
 
+/// The device port as a keyboard (report 1, the boot keyboard's eight bytes), a
+/// mouse (report 2: three buttons, x, y and a wheel) and media keys (report 3, one
+/// 16-bit consumer usage). The descriptor is written in octal: dash's printf has no
+/// hex escapes.
+const HID: &str = r#"
+STATE=/run/flipctl-hid.unit
+G=/sys/kernel/config/usb_gadget/flipctl-hid
+"#;
+const HID_HOLD: &str = r#"
+F=$G/functions/hid.usb0
+mkdir -p $G/strings/0x409 $G/configs/c.1 || { echo "configfs refused the gadget"; exit 1; }
+mkdir -p $F 2>/dev/null || { echo "this kernel has no USB HID gadget"; exit 1; }
+echo 0x37C1 > $G/idVendor
+echo 0xF126 > $G/idProduct
+echo 0x0100 > $G/bcdDevice
+echo "$serial" > $G/strings/0x409/serialnumber
+echo "Flipper FZCO" > $G/strings/0x409/manufacturer
+echo "Flipper One USB Keyboard Touchpad" > $G/strings/0x409/product
+mkdir -p $G/configs/c.1/strings/0x409
+echo "Flipper One USB Keyboard Touchpad" > $G/configs/c.1/strings/0x409/configuration
+echo 0 > $F/protocol
+echo 0 > $F/subclass
+echo 9 > $F/report_length
+printf '\005\001\011\006\241\001\205\001\005\007\031\340\051\347\025\000\045\001\165\001\225\010\201\002\225\001\165\010\201\001\225\006\165\010\025\000\045\145\005\007\031\000\051\145\201\000\300\005\001\011\002\241\001\205\002\011\001\241\000\005\011\031\001\051\003\025\000\045\001\225\003\165\001\201\002\225\001\165\005\201\001\005\001\011\060\011\061\011\070\025\201\045\177\165\010\225\003\201\006\300\300\005\014\011\001\241\001\205\003\025\000\046\377\003\031\000\052\377\003\165\020\225\001\201\000\300' > $F/report_desc
+echo 250 > $G/configs/c.1/MaxPower
+[ -e $G/configs/c.1/hid.usb0 ] || ln -s $F $G/configs/c.1/
+for u in /sys/class/udc/*; do
+    case $u in *vudc*) ;; *) udc=${u##*/}; break ;; esac
+done
+echo "$udc" > $G/UDC || { echo "the port did not take the HID device"; exit 1; }
+dev=/dev/$(sed -n 's/^DEVNAME=//p' "/sys/dev/char/$(cat $F/dev)/uevent")
+i=0
+while [ ! -e "$dev" ] && [ $i -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
+chown "$1" "$dev" || { echo "no $dev"; exit 1; }
+echo "$dev" > /run/flipctl-hid.dev
+exit 0
+"#;
+const HID_RELEASE: &str = r#"
+rm -f /run/flipctl-hid.dev
+[ -e $STATE ] || [ -d $G ] || exit 0
+if [ -d $G ]; then
+    echo "" > $G/UDC 2>/dev/null
+    rm -f $G/configs/c.1/hid.usb0
+    rmdir $G/configs/c.1/strings/0x409 $G/configs/c.1 $G/functions/hid.usb0 $G/strings/0x409 $G
+fi
+[ -e $STATE ] || exit 0
+"#;
+/// The Bluetooth radio, unblocked, powered and pairable, for an app that registers
+/// itself with BlueZ as a HID device, with bluetoothd started if it was not running.
+/// The app may rename the adapter; its name is noted too and given back.
+/// How each was is noted first, once, and put back on release, so a radio that was
+/// off goes off again. bluetoothctl waits forever for a daemon that is not there, so
+/// every call to it has a time limit.
+const BT_HID_HOLD: &str = r#"
+state=/run/flipctl-bt-hid.state
+bt() { timeout 5 bluetoothctl "$@"; }
+if [ ! -e $state ]; then
+    started=0
+    systemctl is-active -q bluetooth || { systemctl start bluetooth && started=1; }
+    shown=$(bt show)
+    powered=$(echo "$shown" | sed -n 's/^[[:space:]]*Powered: //p' | head -n1)
+    pairable=$(echo "$shown" | sed -n 's/^[[:space:]]*Pairable: //p' | head -n1)
+    blocked=$(rfkill list bluetooth | grep -c "Soft blocked: yes")
+    echo "${powered:-no} ${pairable:-no} $blocked $started" > $state
+    # The app names the adapter after itself; its own name comes back on release
+    echo "$shown" | sed -n 's/^[[:space:]]*Alias: //p' | head -n1 > $state.alias
+fi
+[ -d /sys/class/bluetooth/hci0 ] || { echo "no Bluetooth adapter"; exit 1; }
+rfkill unblock bluetooth
+# A radio just unblocked refuses power for a moment
+i=0
+until bt power on >/dev/null; do
+    i=$((i + 1))
+    [ $i -lt 6 ] || { echo "Bluetooth did not power on"; exit 1; }
+    sleep 0.5
+done
+bt pairable on >/dev/null
+exit 0
+"#;
+const BT_HID_RELEASE: &str = r#"
+state=/run/flipctl-bt-hid.state
+bt() { timeout 5 bluetoothctl "$@"; }
+[ -e $state ] || exit 0
+read -r powered pairable blocked started < $state
+[ "$pairable" = yes ] || bt pairable off >/dev/null
+[ "$powered" = yes ] || bt power off >/dev/null
+[ "$blocked" = 0 ] || rfkill block bluetooth
+[ ! -s $state.alias ] || bt system-alias "$(cat $state.alias)" >/dev/null
+[ "$started" != 1 ] || systemctl stop bluetooth
+rm -f $state $state.alias
+exit 0
+"#;
 /// Before the boot gadget stops: the kernel has the function.
 const UAC2_CHECK: &str = r#"
 modprobe usb_f_uac2 2>/dev/null || { echo "this kernel has no USB audio gadget"; exit 1; }
@@ -447,6 +554,14 @@ pub fn recover() {
         {
             left.push(Resource::Uac2);
         }
+        if std::path::Path::new("/run/flipctl-bt-hid.state").exists() {
+            left.push(Resource::BtHid);
+        }
+        if std::path::Path::new("/run/flipctl-hid.unit").exists()
+            || std::path::Path::new("/sys/kernel/config/usb_gadget/flipctl-hid").exists()
+        {
+            left.push(Resource::Hid);
+        }
         for entry in std::fs::read_dir("/run").into_iter().flatten().flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             if let Some(port) =
@@ -596,6 +711,9 @@ mod tests {
         assert_eq!(Resource::parse("udc"), Some(Resource::Udc));
         assert_eq!(Resource::parse("uac2"), Some(Resource::Uac2));
         assert_eq!(Resource::Uac2.lock(), Resource::Udc.lock(), "one port");
+        assert_eq!(Resource::parse("hid"), Some(Resource::Hid));
+        assert_eq!(Resource::Hid.lock(), Resource::Udc.lock(), "one port");
+        assert_eq!(Resource::parse("bt-hid"), Some(Resource::BtHid));
         assert_eq!(Resource::parse("usb"), None);
         assert_eq!(
             Resource::parse("usbip-share/1-1.2"),
@@ -634,6 +752,7 @@ mod tests {
             ("GET /claim/mt7921 HTTP/1.1", "405"),
             ("GET /claim/udc HTTP/1.1", "405"),
             ("GET /claim/uac2 HTTP/1.1", "405"),
+            ("GET /claim/hid HTTP/1.1", "405"),
             ("GET /claim/usb/1-1.2 HTTP/1.1", "405"),
         ] {
             let (mut a, b) = UnixStream::pair().unwrap();
