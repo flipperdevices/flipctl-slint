@@ -8,6 +8,7 @@
 # Nothing is bundled with it: the app ships no media, so what it plays is whatever
 # you put on the device.
 name = "Video Player"
+icon = "icon.png"
 wayland = "./AppRun"
 apt = ["mpv"]
 # The sound server, and with it the sink pinned to the panel's speaker rather than

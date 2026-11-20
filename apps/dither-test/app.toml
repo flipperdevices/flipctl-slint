@@ -5,6 +5,7 @@
 # than a tone curve, which is a change to how flipctl composites rather than
 # anything in an app.
 name = "Dither Test"
+icon = "icon.png"
 wayland = "./AppRun"
 apt = ["mpv"]
 folder = "Test Tools"

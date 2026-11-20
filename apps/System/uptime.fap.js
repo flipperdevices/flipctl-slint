@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // /// flipctl
 // name = "Uptime"
+// icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAATUlEQVR42q2S2woAIAxCNfr/X7aXgojJaHUeJ7vgJA4kCQEkGdWhCQyhHjW4IaveUCWb7LTyxn5zze6sbbT2T+rmZEb8f0c1OXzO6i0Dqp9L12hJUxYAAAAASUVORK5CYII="
 // status = true
 // ///
 //

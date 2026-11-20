@@ -7,6 +7,7 @@
 # PTT and a sideways swipe zoom, the arrows move the cursor and scroll at the page's
 # edge, Ok clicks and opens the keyboard on a text field, Edit types an address.
 name = "Browser"
+icon = "icon.png"
 wayland = "./target/release/browser-app"
 folder = "Network"
 apt = ["chromium"]

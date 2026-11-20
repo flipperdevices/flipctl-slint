@@ -10,6 +10,7 @@
 # writes, so nothing is scaled anywhere. The command line refuses a height below 200
 # but the config does not, which is the only reason that setting lives in a file.
 name = "Doom"
+icon = "icon.png"
 wayland = "./AppRun"
 audio = true
 folder = "Games"

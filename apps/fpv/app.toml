@@ -9,5 +9,6 @@
 # Wi-Fi and Bluetooth are off while it runs: it claims the chip from flipctl on start,
 # and flipctl gives it back when the app ends, however it ends.
 name = "FPV Receiver"
+icon = "icon.png"
 wayland = "./target/release/fpv-app"
 folder = "SDR"

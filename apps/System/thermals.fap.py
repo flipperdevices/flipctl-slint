@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # /// flipctl
 # name = "Thermals"
+# icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAAUElEQVR42r2RSQ7AMAgDGZT/f9m99GBFoVnUdo4gg8ERBbqJHVxQiXNnmA9pq0KA5Y295e83/nOjJAGMIvFazkRVL+Mt3JbTW2WW39ODjrgATw9nznKLd0AAAAAASUVORK5CYII="
 # status = true
 # ///
 """Every temperature sensor the kernel exposes, refreshed once a second.

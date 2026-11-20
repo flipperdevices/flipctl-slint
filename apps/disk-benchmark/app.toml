@@ -6,5 +6,6 @@
 # O_DIRECT, done by this binary; only mount, umount and making a folder on a
 # filesystem root owns go through sudo.
 name = "Disk Benchmark"
+icon = "icon.png"
 wayland = "./target/release/disk-benchmark-app"
 folder = "Test Tools"

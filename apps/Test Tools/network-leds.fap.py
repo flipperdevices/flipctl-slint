@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # /// flipctl
 # name = "Network LEDs"
+# icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAAKklEQVR42mNgGDDwHwqI5TPCBEmxhJGRkZGJ7k6lTuCQwifbj0NII/0BAKS+P9CJc0mpAAAAAElFTkSuQmCC"
 # status = true
 # ///
 """The four RGB LEDs along the top of the device, as a test tool.
