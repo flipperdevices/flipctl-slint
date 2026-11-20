@@ -545,6 +545,10 @@ impl Grab {
         }
         // Letterbox bars are the caller's black, not the last frame's edges.
         out.fill(0);
+        // A turned app that names a size of its own is not the panel transposed, so it
+        // comes through the fit - and the fit has to turn it, or the picture stands
+        // upright inside a frame whose keys and status strip are already turned.
+        let turn = fit_turn(self.turn);
         crate::scale::fit_from_xrgb(
             src,
             shm.stride,
@@ -554,6 +558,7 @@ impl Grab {
             crate::pixel::from_bytes_mut(out),
             self.dw,
             self.dh,
+            turn,
         );
     }
 }
@@ -1243,6 +1248,42 @@ impl Dispatch<wl_registry::WlRegistry, wayland_client::globals::GlobalListConten
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+    }
+}
+
+/// Which way the fit should turn a capture, if at all.
+///
+/// Separate from the caller so a test can ask it without a compositor: the branch it
+/// guards is the one where a turned app names a size of its own, which a headless test
+/// cannot otherwise reach.
+fn fit_turn(turn: Rotate) -> Option<bool> {
+    match turn {
+        Rotate::None => None,
+        Rotate::Left => Some(true),
+        Rotate::Right => Some(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit_turn;
+    use crate::Rotate;
+
+    /// The fit has to turn when the app asked for a turn.
+    ///
+    /// This is the branch a turned app with its own `size` takes: it is not the panel
+    /// transposed, so it is fitted rather than turned whole - and a fit that ignored the
+    /// turn left the picture upright inside a turned frame, which is what shipped.
+    #[test]
+    fn a_turned_capture_is_fitted_the_way_it_is_read() {
+        assert_eq!(fit_turn(Rotate::None), None, "a landscape fit turns nothing");
+        assert_eq!(fit_turn(Rotate::Left), Some(true), "left turns one way");
+        assert_eq!(fit_turn(Rotate::Right), Some(false), "right turns the other");
+        assert_ne!(
+            fit_turn(Rotate::Left),
+            fit_turn(Rotate::Right),
+            "the two turns are mirror images, not the same one"
+        );
     }
 }
 

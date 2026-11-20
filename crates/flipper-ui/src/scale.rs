@@ -114,6 +114,14 @@ pub fn fit(src: &[Gray8], sw: u32, sh: u32, dst: &mut [Gray8], dw: u32, dh: u32)
 /// `stride` is the capture's own row length in bytes, `bgr` says its first channel is
 /// blue, and the luma is the kernel's own 299/587/114 so a frame we grey and a frame
 /// `drm_fb_xrgb8888_to_gray8` greys agree.
+///
+/// `turn` rotates the capture before it is fitted. A portrait app that names a `size`
+/// of its own - `288x512`, say - is not the panel transposed, so it takes this path;
+/// without the turn the picture would come out upright in a frame whose status strip and
+/// d-pad are already turned. The turn is applied by reading the source in the turned
+/// order rather than by allocating a second buffer: `sw` and `sh` swap, and the sample a
+/// destination pixel needs is read at the source coordinates the turn maps it to.
+#[allow(clippy::too_many_arguments)]
 pub fn fit_from_xrgb(
     src: &[u8],
     stride: u32,
@@ -123,6 +131,7 @@ pub fn fit_from_xrgb(
     dst: &mut [Gray8],
     dw: u32,
     dh: u32,
+    turn: Option<bool>,
 ) {
     if sw == 0 || sh == 0 || dw == 0 || dh == 0 || dst.len() < (dw * dh) as usize {
         return;
@@ -130,23 +139,49 @@ pub fn fit_from_xrgb(
     if src.len() < (stride * sh) as usize {
         return;
     }
+    // The capture's own extent, before any turn: the turn is undone per sample.
+    let (src_w, src_h) = (sw, sh);
+    // What is fitted is the shape the panel sees, which is the turned one.
+    let (turned_w, turned_h) = match turn {
+        Some(_) => (src_h, src_w),
+        None => (src_w, src_h),
+    };
 
-    let (w, h) =
-        if sw * dh > dw * sh { (dw, (sh * dw / sw).max(1)) } else { ((sw * dh / sh).max(1), dh) };
+    let (w, h) = if turned_w * dh > dw * turned_h {
+        (dw, (turned_h * dw / turned_w).max(1))
+    } else {
+        ((turned_w * dh / turned_h).max(1), dh)
+    };
     let (ox, oy) = ((dw - w) / 2, (dh - h) / 2);
 
+    // Where a pixel of the fitted, turned image comes from in the capture. A quarter turn
+    // maps the capture's top edge onto one of the image's sides, so one axis is read
+    // backwards; `left` says which side, exactly as `turn_from_xrgb` does.
+    let sample = |ix: u32, iy: u32| -> (u32, u32) {
+        match turn {
+            None => (ix, iy),
+            Some(left) => {
+                if left {
+                    (iy, src_h - 1 - ix)
+                } else {
+                    (src_w - 1 - iy, ix)
+                }
+            }
+        }
+    };
+
     for y in 0..h {
-        let y0 = y * sh / h;
-        let y1 = (((y + 1) * sh / h).max(y0 + 1)).min(sh);
+        let y0 = y * turned_h / h;
+        let y1 = (((y + 1) * turned_h / h).max(y0 + 1)).min(turned_h);
         for x in 0..w {
-            let x0 = x * sw / w;
-            let x1 = (((x + 1) * sw / w).max(x0 + 1)).min(sw);
+            let x0 = x * turned_w / w;
+            let x1 = (((x + 1) * turned_w / w).max(x0 + 1)).min(turned_w);
             let mut sum = 0u32;
             let mut n = 0u32;
-            for sy in y0..y1 {
-                let row = (sy * stride) as usize;
-                for sx in x0..x1 {
-                    let p = row + (sx * 4) as usize;
+            for ty in y0..y1 {
+                for tx in x0..x1 {
+                    let (sx, sy) = sample(tx, ty);
+                    let p = (sy * stride + sx * 4) as usize;
                     let (first, third) = (u32::from(src[p]), u32::from(src[p + 2]));
                     let (r, g, b) = if bgr {
                         (third, u32::from(src[p + 1]), first)
@@ -216,7 +251,7 @@ mod tests {
         let (r, g, b) = (200u8, 100u8, 50u8);
         let src: Vec<u8> = std::iter::repeat([b, g, r, 0]).take(4).flatten().collect();
         let mut dst = grey(&[0; 4]);
-        fit_from_xrgb(&src, 8, true, 2, 2, &mut dst, 2, 2);
+        fit_from_xrgb(&src, 8, true, 2, 2, &mut dst, 2, 2, None);
         let want = Gray8::from_rgb(r, g, b);
         assert!(
             dst.iter().all(|p| p.0.abs_diff(want.0) <= 1),
@@ -231,8 +266,44 @@ mod tests {
         use super::fit_from_xrgb;
         let src = vec![255u8; 16];
         let mut dst = grey(&[0; 4]);
-        fit_from_xrgb(&src, 8, true, 40, 40, &mut dst, 2, 2);
+        fit_from_xrgb(&src, 8, true, 40, 40, &mut dst, 2, 2, None);
         assert!(dst.iter().all(|p| p.0 == 0), "nothing written");
+    }
+
+    /// A turned app whose `size` is not the panel's is fitted, and the fit turns it.
+    ///
+    /// Without the turn the picture stands upright while the status strip and the d-pad
+    /// are already turned: a 2x1 capture whose left pixel is dark would come out with the
+    /// dark pixel still on the left, where a left turn puts it at the top.
+    #[test]
+    fn a_turned_capture_is_fitted_the_way_up_it_is_read() {
+        use super::fit_from_xrgb;
+        // 2 wide by 1 tall: a dark pixel then a light one.
+        let mut src: Vec<u8> = Vec::new();
+        for v in [0u8, 255u8] {
+            src.extend_from_slice(&[v, v, v, 0]);
+        }
+        // A 2x1 capture fitted into a 2x2 destination. Unturned it is 2 wide and 1 tall,
+        // so it fills the width and sits on one row; turned it is 1 wide and 2 tall, so
+        // it fills the height and stands in one column. Which pixels are set says the
+        // difference a reader sees: sideways, or upright.
+        let mut straight = grey(&[128; 4]);
+        fit_from_xrgb(&src, 8, true, 2, 1, &mut straight, 2, 2, None);
+        let mut turned = grey(&[128; 4]);
+        fit_from_xrgb(&src, 8, true, 2, 1, &mut turned, 2, 2, Some(true));
+
+        // `grey(&[128; 4])` fills the letterbox, so the fitted pixels are the ones that
+        // are not 128.
+        // `128` is the letterbox the test filled, so a cell that is not 128 was written by
+        // the fit. Cells are flat, `y * 2 + x`.
+        let filled = |px: &[Gray8]| -> Vec<usize> { (0..4).filter(|i| px[*i].0 != 128).collect() };
+        assert_eq!(filled(&straight), vec![0, 1], "unturned: one row, two wide");
+        assert_eq!(filled(&turned), vec![0, 2], "turned: one column, two tall");
+
+        // And it is a rotation rather than a relabelling: the dark source pixel (luma 0)
+        // ends at the top of the column, and the light one at its bottom.
+        assert_eq!(turned[0].0, 0, "the top of the turned column is the dark pixel");
+        assert_eq!(turned[2].0, 255, "and the bottom is the light one");
     }
 
     /// A portrait app's frame is the panel's size the other way up, so the turn is a

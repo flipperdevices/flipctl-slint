@@ -25,12 +25,6 @@ fn tones(frame: &[Gray8]) -> usize {
     seen.iter().filter(|s| **s).count()
 }
 
-/// Inked pixels per row, to see whether a stroke is a run of whole blocks or a
-/// gradient of partial ones.
-fn stems(frame: &[Gray8], w: usize, h: usize) -> Vec<usize> {
-    (0..h).map(|y| (0..w).filter(|&x| frame[y * w + x].0 < 128).count()).collect()
-}
-
 slint::slint! {
     // Imported for the side effect: a .ttf import registers the face, which is
     // what `fonts.slint` does for the screens that use the theme's names.

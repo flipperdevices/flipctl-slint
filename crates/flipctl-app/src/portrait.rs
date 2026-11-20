@@ -120,6 +120,12 @@ macro_rules! portrait_attach {
     ($ui:expr, $status:ident, $keys:ident, $handler:expr) => {{
         $crate::attach!($ui, $status, $keys, $handler)
     }};
+    // The release half, for a page with a held button. Without this arm the five-argument
+    // form does not expand at all, so a portrait page built on this helper could not get
+    // push-to-talk's release - the one thing `attach!` grew a `released` closure for.
+    ($ui:expr, $status:ident, $keys:ident, $handler:expr, $released:expr) => {{
+        $crate::attach!($ui, $status, $keys, $handler, $released)
+    }};
 }
 
 /// Poll the status bar onto a page that draws its own.

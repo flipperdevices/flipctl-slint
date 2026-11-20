@@ -146,9 +146,22 @@ pub fn picker_h(n: usize) -> i32 {
         + metric::DROP_PICK_PAD * 2
 }
 
-/// Lay out the picker for a row whose chip is at `chip_y`.
-/// Open a picker over a chip `chip_w` wide.
+/// The chip's left edge on a `page_w` wide page, worked out the way `DropLine` does it
+/// in `dropdown.slint`: the page's right edge, less the padding a chip keeps from it,
+/// less the chip itself.
+///
+/// It is a function of the page and not a constant because a portrait page is 144 wide
+/// while the panel is 256: the panel's answer is 71 and a 62-wide chip on a 144-wide
+/// page starts at 77, six pixels apart. A picker that used the panel's number opened
+/// left of the row it belonged to.
+pub fn chip_x_in(page_w: i32, chip_w: i32) -> i32 {
+    page_w - metric::DROP_CHIP_PAD_R - chip_w
+}
+
+/// Open a picker over a chip `chip_w` wide, on a page `page_w` wide, whose chip is at
+/// `chip_y`. The frame's left edge is the chip's, so the two read as one shape.
 pub fn picker_in(
+    page_w: i32,
     chip_w: i32,
     chip_y: i32,
     title: &str,
@@ -172,7 +185,7 @@ pub fn picker_in(
         .collect();
     let sel = selected.min(last) as i32;
     Picker {
-        x: CHIP_X,
+        x: chip_x_in(page_w, chip_w),
         y: chip_y,
         w: chip_w,
         h: picker_h(options.len()),
@@ -185,10 +198,10 @@ pub fn picker_in(
     }
 }
 
-/// Open a picker over the panel's own chip. See [`picker_in`] for the one that
-/// takes a width.
+/// Open a picker over the panel's own chip. See [`picker_in`] for the one that takes a
+/// page width and a chip width.
 pub fn picker(chip_y: i32, title: &str, options: &[String], selected: usize) -> Picker {
-    picker_in(metric::DROP_CHIP_W, chip_y, title, options, selected)
+    picker_in(PANEL_W as i32, metric::DROP_CHIP_W, chip_y, title, options, selected)
 }
 
 #[cfg(test)]
@@ -346,6 +359,8 @@ mod narrow_chip {
     /// The chip a 144-wide portrait page leaves: what the earlier panel maths
     /// came to when the page was laid out by hand.
     const PORTRAIT_CHIP: i32 = 62;
+    /// A portrait page, the panel read the long way up.
+    const PORTRAIT_PAGE: i32 = crate::PANEL_H as i32;
 
     #[test]
     fn a_row_fits_its_value_to_its_own_chip() {
@@ -392,10 +407,35 @@ mod narrow_chip {
         assert_eq!(fill_w_in(PORTRAIT_CHIP, 0.5), PORTRAIT_CHIP / 2);
     }
 
+    /// The picker's left edge is its chip's, on any page width.
+    ///
+    /// The panel's chip starts at 71 and a 62-wide chip on a 144-wide page at 77, so a
+    /// picker anchored on the panel's number opened six pixels left of the row it grew
+    /// from - visible as a popup that missed its chip.
+    #[test]
+    fn a_picker_opens_over_the_chip_it_belongs_to() {
+        let options = vec!["London".to_owned()];
+        let panel = picker_in(PANEL_W as i32, metric::DROP_CHIP_W, 40, "", &options, 0);
+        assert_eq!(panel.x, CHIP_X, "the panel's picker keeps the panel's chip");
+
+        let portrait = picker_in(PORTRAIT_PAGE, PORTRAIT_CHIP, 40, "", &options, 0);
+        assert_eq!(
+            portrait.x,
+            PORTRAIT_PAGE - metric::DROP_CHIP_PAD_R - PORTRAIT_CHIP,
+            "the portrait picker starts where its own chip does"
+        );
+        assert_eq!(
+            portrait.x,
+            PORTRAIT_PAGE - metric::DROP_CHIP_PAD_R - PORTRAIT_CHIP,
+            "the page's chip, six columns right of the panel's"
+        );
+        assert_ne!(portrait.x, CHIP_X, "the panel's chip is six pixels to the left");
+    }
+
     #[test]
     fn a_picker_opens_as_wide_as_its_own_chip() {
         let options = vec!["London".to_owned(), "Berlin".to_owned()];
-        let view = picker_in(PORTRAIT_CHIP, 40, "", &options, 0);
+        let view = picker_in(PORTRAIT_PAGE, PORTRAIT_CHIP, 40, "", &options, 0);
         assert_eq!(view.w, PORTRAIT_CHIP, "the picker is as wide as the chip it grows from");
         assert!(
             tw(&view.items[0].text) <= PORTRAIT_CHIP - metric::DROP_CHIP_INSET,
