@@ -58,15 +58,10 @@ fn a_portrait_row_draws_its_chip_against_the_page_and_not_the_panel() {
     // started at 256 - 5 - 180 = 71 and run 63 px past the edge of this page,
     // so the check is that its own width put it inside the page.
     let hi = ink_columns(&frame, PW, PH).1;
-    assert!(
-        hi < PW,
-        "the row's ink runs to x={hi}: the chip is wider than the page it is on",
-    );
+    assert!(hi < PW, "the row's ink runs to x={hi}: the chip is wider than the page it is on",);
     // The chip's own band, 77 to 139, has to carry ink; the title and the
     // selector are elsewhere and say nothing about the chip.
-    let chip_ink: usize = (77..140)
-        .filter(|&x| (0..PH).any(|y| frame[y * PW + x].0 < 128))
-        .count();
+    let chip_ink: usize = (77..140).filter(|&x| (0..PH).any(|y| frame[y * PW + x].0 < 128)).count();
     assert!(
         chip_ink > 20,
         "only {chip_ink} columns of the chip's band are inked: the chip is not on the right",
@@ -85,7 +80,11 @@ fn a_portrait_page_turns_onto_the_panel() {
 
     // The panel is 256 across and 144 down, and a portrait page turned onto it
     // has to come out that shape.
-    assert_eq!(panel.len(), PANEL_W as usize * PANEL_H as usize, "the turned frame is the panel's size");
+    assert_eq!(
+        panel.len(),
+        PANEL_W as usize * PANEL_H as usize,
+        "the turned frame is the panel's size"
+    );
 
     // What was inked is still inked: a turn moves pixels and loses none.
     let inked = |f: &[Gray8]| f.iter().filter(|px| px.0 < 128).count();
@@ -110,9 +109,6 @@ fn a_turned_row_is_where_the_panel_expects_its_right_edge() {
         .filter(|&y| (0..PANEL_W as usize).any(|x| panel[y * PANEL_W as usize + x].0 < 128))
         .take(3)
         .count();
-    assert!(
-        top_band > 0,
-        "the chip's edge is at the top of the panel and nothing was inked there"
-    );
+    assert!(top_band > 0, "the chip's edge is at the top of the panel and nothing was inked there");
     assert!(lo < PANEL_W as usize, "and the ink is inside the panel");
 }

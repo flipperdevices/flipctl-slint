@@ -500,11 +500,12 @@ for tests:
 
     use flipctl_app::portrait::{self, TOP, W, H};
     use flipctl_app::render;
+    use flipctl_app::Rotate;
 
     // In the app: a page W x H, with the status strip reserved above TOP.
-    // In a test: the same page, headless, then turned onto the panel.
+    // In a test: the same page, headless, then turned onto the panel as flipctl turns it.
     let window = render::portrait_panel();
-    let page = render::frame(&window, W, H);
+    let page = render::portrait_frame(&window, Rotate::Left);
 
 The `.slint` side is an ordinary page of the app's own - `build::compile("ui/app.slint")`,
 inheriting nothing, `W` x `H` in its `Window`, its rows built from `@flipctl`'s widgets.

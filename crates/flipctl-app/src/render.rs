@@ -8,8 +8,8 @@
 use std::path::Path;
 use std::rc::Rc;
 
+use flipper_ui::slint_render::{render_frame, render_rotated, FlipperSlintPlatform};
 use flipper_ui::Rotate;
-use flipper_ui::slint_render::{FlipperSlintPlatform, render_frame, render_rotated};
 use slint::platform::software_renderer::MinimalSoftwareWindow;
 
 use crate::theme::{PANEL_H, PANEL_W};

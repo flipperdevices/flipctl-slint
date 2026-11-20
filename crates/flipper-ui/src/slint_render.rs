@@ -10,7 +10,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use slint::platform::software_renderer::{
-    MinimalSoftwareWindow, PremultipliedRgbaColor, RenderingRotation, RepaintBufferType, TargetPixel,
+    MinimalSoftwareWindow, PremultipliedRgbaColor, RenderingRotation, RepaintBufferType,
+    TargetPixel,
 };
 use slint::platform::{Platform, PlatformError, WindowAdapter};
 use slint::PhysicalSize;
@@ -294,7 +295,11 @@ mod tests {
 /// A portrait screen draws into a portrait window and turns the result on its
 /// way out. This is the whole of that in one call: the app gets the frame the
 /// panel wants and never sees the portrait buffer in between.
-pub fn render_turned(window: &MinimalSoftwareWindow, width: usize, height: usize) -> Option<Vec<Gray8>> {
+pub fn render_turned(
+    window: &MinimalSoftwareWindow,
+    width: usize,
+    height: usize,
+) -> Option<Vec<Gray8>> {
     render_frame(window).map(|frame| turn_left(&frame, width, height))
 }
 
@@ -336,7 +341,8 @@ mod turned {
         let hand = turn_left(&portrait, PW as usize, PH as usize);
 
         window.request_redraw();
-        let rotated = render_rotated(&window, RenderingRotation::Rotate270).expect("a turned frame");
+        let rotated =
+            render_rotated(&window, RenderingRotation::Rotate270).expect("a turned frame");
         assert_eq!(rotated.len(), (PW * PH) as usize, "the turned frame is panel-shaped");
 
         let differing = hand.iter().zip(&rotated).filter(|(a, b)| a.0 != b.0).count();

@@ -905,7 +905,7 @@ mod tests {
     /// Everything that is not a direction keeps its meaning through the turn.
     #[test]
     fn a_turned_app_keeps_its_named_buttons() {
-        use FlipperKey::{AppSwitch, Back, Escape, Edit, Ok, Power, Ptt, Run, View};
+        use FlipperKey::{AppSwitch, Back, Edit, Escape, Ok, Power, Ptt, Run, View};
         let named = [Ok, Back, Escape, View, Power, Edit, Run, Ptt, AppSwitch];
         for turn in [Rotate::None, Rotate::Left, Rotate::Right] {
             for key in named {

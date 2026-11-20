@@ -28,9 +28,7 @@ fn tones(frame: &[Gray8]) -> usize {
 /// Inked pixels per row, to see whether a stroke is a run of whole blocks or a
 /// gradient of partial ones.
 fn stems(frame: &[Gray8], w: usize, h: usize) -> Vec<usize> {
-    (0..h)
-        .map(|y| (0..w).filter(|&x| frame[y * w + x].0 < 128).count())
-        .collect()
+    (0..h).map(|y| (0..w).filter(|&x| frame[y * w + x].0 < 128).count()).collect()
 }
 
 slint::slint! {
@@ -60,14 +58,9 @@ fn an_enlarged_text_is_still_whole_blocks() {
     let frame = render_frame(&window).expect("a frame");
     assert_eq!(frame.len(), PW * PH, "the frame is the window's");
 
-    let used = tones(&frame);
-    println!("distinct grey values at 32px: {used}");
-    let rows = stems(&frame, PW, PH);
-    let inked: Vec<usize> = rows.iter().copied().filter(|n| *n > 0).collect();
-    println!("inked rows: {} of {PH}, widths {:?}", inked.len(), &inked[..inked.len().min(6)]);
-
     // Clean means two tones only: the paper and the ink. Anything between is the
     // rasteriser covering a pixel in part, which on this panel is a smudge.
+    let used = tones(&frame);
     assert!(
         used <= 2,
         "the text rasterised into {used} greys: that is antialiasing, not a pixel face"

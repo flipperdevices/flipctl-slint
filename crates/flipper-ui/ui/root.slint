@@ -552,8 +552,9 @@ export component Root inherits Window {
     // The portrait bar, parked in the scene's bottom-left corner.
     //
     // It is only visible for the render that lifts a turned app's status strip, and the
-    // corner it occupies is read by `portrait_strip_at()` in flipctl - so the two numbers
-    // below are a contract, and `PORTRAIT_STRIP_X`/`_Y` in `bin/flipctl` are the other half.
+    // corner it occupies is read by `portrait_strip_at()` in `bin/flipctl` - so the numbers
+    // below and that function are two halves of one contract. Move one without the other
+    // and the bar is cut out of the wrong place.
     // Bottom-left because the idle screen leaves paper there: a stray frame of this bar on
     // the panel would be text in a corner rather than a bar across the top.
     if root.portrait_strip: PortraitBar {

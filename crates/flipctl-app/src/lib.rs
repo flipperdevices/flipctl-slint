@@ -37,8 +37,8 @@
 pub use flipper_ui::key::FlipperKey;
 pub use flipper_ui::platform::Touch;
 pub use flipper_ui::status::{Status, StatusSource};
-pub use flipper_ui::{Ethernet, Rotate};
 pub use flipper_ui::{dropdown, font, keyboard, paint, pixel, theme};
+pub use flipper_ui::{Ethernet, Rotate};
 
 pub mod app;
 pub mod portrait;
@@ -124,13 +124,12 @@ pub fn attach(
     // link on and off for as long as the button is held.
     let up = Rc::new(RefCell::new(released));
     let act = move |key: Key| {
-        // The handler says `false` for "I have nothing more to do", and the app closes.
-        //
-        // Escape is the only key that reaches here meaning "leave": flipctl keeps Back to
-        // put the app in the background, and the rest are the app's own. A handler that
-        // answers `false` to a key of its own closes the app too, which is what returning
-        // `false` has always meant.
-        if !(act.borrow_mut())(key) {
+        // `false` from the handler means "nothing more to do with this key", and Escape is
+        // the only key that reaches here meaning "leave": flipctl keeps Back to put the app
+        // in the background, and the rest are the app's own. Closing on any unclaimed key
+        // would make `_ => false` - the pattern this crate's own example teaches - quit the
+        // app on an arrow nobody bound.
+        if !(act.borrow_mut())(key) && key == Key::Escape {
             let _ = slint::quit_event_loop();
         }
     };

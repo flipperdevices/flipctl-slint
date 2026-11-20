@@ -127,6 +127,9 @@ pub struct Picker {
     /// The row's title, drawn again over the wash so the user can see which row
     /// they are picking a value for.
     pub title: String,
+    /// Where that title is drawn: the row's own line, which is where the frame starts
+    /// unless the frame had to move up to fit the page.
+    pub title_y: i32,
     pub items: Vec<Item>,
     /// The selector, in panel coordinates. It wraps the option and the pixel of
     /// fill above and below it.
@@ -174,6 +177,7 @@ pub fn picker_in(
         w: chip_w,
         h: picker_h(options.len()),
         title: title.to_string(),
+        title_y: chip_y,
         items,
         sel_y: chip_y + sel * pitch,
         sel_w: chip_w - metric::DROP_PICK_SEL_INSET,

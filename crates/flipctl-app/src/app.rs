@@ -438,7 +438,14 @@ impl<A: App, S: Screen> Driver<A, S> {
                 _ => 2,
             });
         }
-        if !down || self.closed {
+        // The finger has gone, so tell the app before this press-only path gives up on the
+        // key. A held push-to-talk is the case that needs it: `key` only ever saw presses, so
+        // the release never arrived and the link stayed keyed.
+        if !down {
+            self.key_up(key);
+            return Press::Ignored;
+        }
+        if self.closed {
             return Press::Ignored;
         }
         if let Some(slot) = key.soft_slot() {
@@ -688,6 +695,8 @@ mod tests {
         runs: u32,
         picked: Option<usize>,
         closed: bool,
+        /// Every key whose release reached the app, in order.
+        released: Vec<Key>,
     }
 
     impl App for Test {
@@ -713,13 +722,16 @@ mod tests {
             }
             true
         }
+        fn key_up(&mut self, key: Key, _: &mut Ui) {
+            self.released.push(key);
+        }
         fn close(&mut self) {
             self.closed = true;
         }
     }
 
     fn driver(kind: i32, n: usize) -> Driver<Test, Fake> {
-        let test = Test { kind, n, runs: 0, picked: None, closed: false };
+        let test = Test { kind, n, runs: 0, picked: None, closed: false, released: Vec::new() };
         let mut d = Driver::new(test, Fake::default());
         d.draw();
         d
@@ -739,6 +751,30 @@ mod tests {
         assert_eq!(seen(&d, |s| s.slot), -1);
         assert_eq!(d.app.runs, 1);
         assert_eq!(seen(&d, |s| s.buttons[4].clone()), "Again", "drawn again after the key");
+    }
+
+    /// A held key's release has to reach the app: push-to-talk is exactly that.
+    ///
+    /// `key` only sees presses, so without this the app was never told the finger had gone
+    /// and the link stayed keyed. Nothing in the repository asserted it, which is why a
+    /// `key_up` that nothing called could sit in the tree compiling.
+    #[test]
+    fn a_release_reaches_the_app() {
+        let mut d = driver(0, 3);
+        d.key(Key::Ptt, true);
+        d.key(Key::Ptt, false);
+        assert_eq!(d.app.released, [Key::Ptt], "the release never reached the app");
+    }
+
+    /// Every key gets its release, not only the one an app reacted to.
+    #[test]
+    fn every_key_gets_its_release() {
+        let mut d = driver(0, 3);
+        for key in [Key::Down, Key::Up, Key::Ptt, Key::Run] {
+            d.key(key, true);
+            d.key(key, false);
+        }
+        assert_eq!(d.app.released, [Key::Down, Key::Up, Key::Ptt, Key::Run]);
     }
 
     #[test]

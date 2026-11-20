@@ -2990,8 +2990,12 @@ fn paint_status(
                 // panel and its rows run outward. The obvious mapping puts it upside
                 // down, which is how this was found.
                 flipper_ui::Rotate::Left => (y, ph - 1 - x),
-                // The right edge, the other way round.
-                flipper_ui::Rotate::Right => (pw - tall + y, ph - 1 - x),
+                // The other edge, mirrored: `turn_from_xrgb`'s right case puts the page's
+                // top on the panel's right-hand column, so the strip runs down that column
+                // and its rows go across. `pw - 1 - y` is the column and `x` the row, which
+                // is the same piece of frame `Left` covers, reflected. The mapping this
+                // replaces turned the strip a further 180 degrees.
+                flipper_ui::Rotate::Right => (pw - 1 - y, x),
             };
             if fx < pw && fy < ph {
                 frame[fy * pw + fx] = ink;

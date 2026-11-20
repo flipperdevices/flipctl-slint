@@ -36,6 +36,10 @@ export struct DropView {
     // The row's title, drawn again over the wash so the row being changed stays
     // legible while the rest of the page fades.
     title: string,
+    // Where that title is drawn, which is the row's own line and not the frame's top.
+    // A frame that had to move up to fit the page - the last row's list does - would
+    // otherwise carry the word with it and make it jump as the list opens.
+    title_y: length,
     sel_y: length,
     sel_w: length,
     sel_h: length,
@@ -231,11 +235,23 @@ export component DropPicker inherits Rectangle {
     height: 100%;
     background: FlipperTheme.white.with-alpha(FlipperTheme.overlay_alpha);
 
-    // The row's title is not drawn here. It is still on the page under the wash - the wash
-    // is translucent by design, so the row reads as the one being changed - and drawing it
-    // again at `view.y` put a second copy two rows lower: the picker's frame starts at the
-    // chip, which is `drop_top_pad` below the row's own top. Two copies of one word offset by
-    // two pixels read as a word that has doubled, which is what this used to look like.
+    // The row's title, drawn again over the wash.
+    //
+    // The wash is translucent, so the page's own copy shows through - but it shows through
+    // *greyed*, because white at `overlay_alpha` sits on top of it. Redrawing the word here,
+    // on top of the wash, is what keeps the row being changed readable in black. It lands on
+    // the row's own title rather than beside it: the caller passes the chip's y, which is
+    // `drop_top_pad` below the row's top, and that is exactly where `DropLine` draws the
+    // title.
+    Text {
+        x: FlipperTheme.drop_title_x;
+        y: root.view.title_y;
+        text: root.view.title;
+        font-size: 16px;
+        font-family: "HaxrCorp 4090";
+        color: FlipperTheme.black;
+    }
+
     SelectorFrame {
         x: root.view.x;
         y: root.view.y;

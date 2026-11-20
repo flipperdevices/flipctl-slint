@@ -244,8 +244,14 @@ mod tests {
         let (sw, sh) = (4u32, 2u32);
         let luma = |v: u8| [v, v, v, 0];
         let px: Vec<[u8; 4]> = vec![
-            luma(10), luma(20), luma(30), luma(40), // top row
-            luma(50), luma(60), luma(70), luma(80), // bottom row
+            luma(10),
+            luma(20),
+            luma(30),
+            luma(40), // top row
+            luma(50),
+            luma(60),
+            luma(70),
+            luma(80), // bottom row
         ];
         let src: Vec<u8> = px.concat();
         let mut dst = grey(&[0; 8]);
@@ -292,7 +298,11 @@ mod tests {
         let mut dst = grey(&vec![0; (sw * sh) as usize]);
         turn_from_xrgb(&src, sw * 4, true, sw, sh, &mut dst, true);
         let odd: Vec<u8> = dst.iter().map(|p| p.0).filter(|v| *v != 0 && *v != 255).collect();
-        assert!(odd.is_empty(), "the turn produced {} greys that were not in the capture", odd.len());
+        assert!(
+            odd.is_empty(),
+            "the turn produced {} greys that were not in the capture",
+            odd.len()
+        );
     }
 
     #[test]

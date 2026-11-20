@@ -13,7 +13,12 @@ import { PanelFonts } from "fonts.slint";
 
 export { DropRow }
 
-// The chip a 144-wide page leaves beside a title like "Audio out".
+// The numbers a 144-wide page needs that the panel's tokens cannot supply.
+//
+// A portrait page is `panel_height` across, and a chip measured from the panel is 180 wide
+// in a 144-wide page. The values here are the page's own: a chip two thirds of the width so
+// a title like "Audio out" still fits beside it, and the row's top far enough down to clear
+// the status strip and a title line.
 export global Portrait {
     out property <length> chip_w: 62px;
     out property <length> row_y: 40px;
@@ -33,13 +38,17 @@ export component PortraitRow inherits Window {
         chip_w: Portrait.chip_w;
     }
 
-    // The frame around the picked row: a one-pixel outline and its shadow, which
-    // is what `SelectorFrame` draws and what a page used to draw for itself.
+    // The frame around the picked row: a one-pixel outline and its shadow, which is what
+    // `SelectorFrame` draws and what a page used to draw for itself.
+    //
+    // Its height is the framework's own selector height, and its width is the page less the
+    // two columns it keeps clear at either edge - the same relationship `DropLine` keeps
+    // between its row and the window.
     if root.line.selected: SelectorFrame {
         x: 2px;
         y: Portrait.row_y - 3px;
-        frame_w: 140px;
-        frame_h: 20px;
+        frame_w: root.width - 4px;
+        frame_h: FlipperTheme.drop_selector_h;
         radius: 3px;
         filled: false;
         stroke: true;

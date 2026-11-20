@@ -44,9 +44,9 @@
 
 use std::time::Duration;
 
-use flipper_ui::Rotate;
 use flipper_ui::status::{Status, StatusSource};
-use flipper_ui::theme::{PANEL_H, PANEL_W, metric};
+use flipper_ui::theme::{metric, PANEL_H, PANEL_W};
+use flipper_ui::Rotate;
 
 /// The rows a portrait page loses to flipctl's status bar, measured in its own
 /// portrait rows.
