@@ -6,5 +6,5 @@
 # done as the user, and leaves the default devices and volumes alone.
 name = "USB Audio Bridge"
 wayland = "./target/release/usb-audio-bridge-app"
-folder = "Test Tools"
+folder = "USB"
 icon = "icon.png"

@@ -19,7 +19,7 @@
 #                                     (on its own: push them and build nothing)
 #   ./build_deploy.sh --app NAME      push only NAME, as --apps would: a bundle by its
 #                                     directory under apps/, a script by its path there
-#                                     ("Test Tools/ping.fap.py"). Repeatable
+#                                     ("Network/ping.fap.py"). Repeatable
 #   ./build_deploy.sh --no-run        build only, install nothing, restart nothing
 #   ./build_deploy.sh --status        report what is running, change nothing
 #

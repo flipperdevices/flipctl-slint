@@ -8,5 +8,5 @@
 # moves every byte the device and the PC exchange.
 name = "USB Device Bridge"
 wayland = "./target/release/usb-device-bridge-app"
-folder = "Test Tools"
+folder = "USB"
 icon = "icon.png"

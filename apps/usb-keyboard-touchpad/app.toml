@@ -2,5 +2,5 @@
 # USB-C port or Bluetooth.
 name = "USB BT Keyboard Touchpad"
 wayland = "./target/release/usb-keyboard-touchpad-app"
-folder = "Test Tools"
+folder = "USB"
 icon = "icon.png"

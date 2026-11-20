@@ -5,3 +5,4 @@
 # like the device without anything passing between them.
 name = "System Monitor"
 wayland = "./target/release/sysmon-app"
+folder = "System"

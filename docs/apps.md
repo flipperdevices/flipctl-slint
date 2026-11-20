@@ -325,11 +325,12 @@ or the PNG itself in the block, so the app stays one file:
 flipctl decodes it into its cache for that app when it lists the script, without
 running anything. `base64 -w0 icon.png` gives the part after the comma.
 
-`apps/ping.fap.py` and `apps/uptime.fap.js` are the worked examples, and each is the
-whole app: a file in the tree beside the bundle directories, pushed to `~/Apps` as it
-stands by `--apps`, with nothing to build. `apps/Test Tools/network-leds.fap.py` is the
-menu. Each draws with the panel's own widgets through the `flipctl` module its runtime
-carries, which compiles the pages in `crates/flipctl-app/ui/pages.slint` at run time.
+`apps/Network/ping.fap.py` and `apps/System/uptime.fap.js` are the worked examples,
+and each is the whole app: a file in the tree beside the bundle directories, pushed
+to `~/Apps` as it stands by `--apps`, with nothing to build.
+`apps/Test Tools/network-leds.fap.py` is the menu. Each draws with the panel's own
+widgets through the `flipctl` module its runtime carries, which compiles the pages in
+`crates/flipctl-app/ui/pages.slint` at run time.
 Both runtimes run the device's own interpreter, `python3` or `nodejs` from their `apt`,
 and carry only the drawing stack.
 
