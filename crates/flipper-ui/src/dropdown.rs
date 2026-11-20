@@ -77,6 +77,28 @@ pub fn fill_w(fraction: f32) -> i32 {
     width.max(metric::DROP_SLIDER_MIN_W)
 }
 
+/// A menu row's level bar, as `MenuLine` draws it in place of the status.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bar {
+    /// Cut to fit inside the bar.
+    pub text: String,
+    /// The text's left edge, centring it, from the bar's left edge.
+    pub text_x: i32,
+    pub fill_w: i32,
+}
+
+/// A level bar filled to `fraction` (0 to 1) with `text` centred in it. The same
+/// chip as a slider's, nub and all, at the menu's own width.
+pub fn bar(text: &str, fraction: f32) -> Bar {
+    let text = fit(text, metric::MENU_BAR_W - metric::DROP_CHIP_INSET);
+    let fill = (fraction.clamp(0.0, 1.0) * metric::MENU_BAR_W as f32).round() as i32;
+    Bar {
+        text_x: (metric::MENU_BAR_W - tw(&text)) / 2,
+        text,
+        fill_w: fill.max(metric::DROP_SLIDER_MIN_W),
+    }
+}
+
 /// One option of an open picker.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Item {
@@ -153,6 +175,17 @@ pub fn picker(chip_y: i32, title: &str, options: &[String], selected: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The level bar's text sits in the middle of the bar, and its fill keeps the nub.
+    #[test]
+    fn a_level_bar_centres_its_text() {
+        let b = bar("-20 dB", 0.5);
+        assert_eq!(b.text_x, (metric::MENU_BAR_W - tw("-20 dB")) / 2);
+        assert_eq!(b.fill_w, metric::MENU_BAR_W / 2);
+        assert_eq!(bar("silent", 0.0).fill_w, metric::DROP_SLIDER_MIN_W);
+        assert_eq!(bar("-0 dB", 2.0).fill_w, metric::MENU_BAR_W);
+        assert!(tw(&bar("a very long level indeed", 1.0).text) < metric::MENU_BAR_W);
+    }
 
     fn opts(names: &[&str]) -> Vec<String> {
         names.iter().map(|n| n.to_string()).collect()

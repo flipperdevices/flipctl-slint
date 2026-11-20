@@ -186,6 +186,8 @@ pub struct Item {
     pub value: String,
     pub at_start: bool,
     pub at_end: bool,
+    /// A level bar in place of the status, filled to this fraction (0 to 1).
+    pub bar: Option<f32>,
 }
 
 /// A menu row with its label, built on with [`Item::status`] or [`Item::toggle`] and
@@ -221,6 +223,14 @@ impl Item {
     /// rather than its value.
     pub fn dim(mut self) -> Self {
         self.dim = true;
+        self
+    }
+
+    /// A level bar where the status goes, filled to `fraction` (0 to 1) with `text`
+    /// in the middle of it.
+    pub fn bar(mut self, text: impl Into<String>, fraction: f32) -> Self {
+        self.status = text.into();
+        self.bar = Some(fraction);
         self
     }
 

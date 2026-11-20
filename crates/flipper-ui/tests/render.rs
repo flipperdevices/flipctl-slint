@@ -36,6 +36,9 @@ fn item(label: &str, status: &str, icon: i32, frames: i32) -> ListItem {
         at_start: false,
         at_end: false,
         dim: false,
+        bar: false,
+        bar_fill: 0.0,
+        bar_text_x: 0.0,
     }
 }
 

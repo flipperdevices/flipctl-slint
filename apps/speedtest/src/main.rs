@@ -977,6 +977,9 @@ fn setting(label: &str, value: &str, adjustable: bool) -> ListItem {
         value: if adjustable { value.into() } else { "".into() },
         at_start: false,
         at_end: false,
+        bar: false,
+        bar_fill: 0.0,
+        bar_text_x: 0.0,
     }
 }
 
@@ -1063,6 +1066,9 @@ fn list_item(app: &App, pick: &Pick, what: Listing) -> ListItem {
         value: "".into(),
         at_start: false,
         at_end: false,
+        bar: false,
+        bar_fill: 0.0,
+        bar_text_x: 0.0,
     }
 }
 

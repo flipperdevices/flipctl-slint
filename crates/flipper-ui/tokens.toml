@@ -288,6 +288,10 @@ app_bar_title_dy    = 1     # TITLE_TEXT_Y, from the status bar's bottom edge
 # empty chip reads as a missing control rather than as a value at the bottom of
 # its range.
 drop_slider_min_w   = 9
+# A menu row's level bar: the slider chip, right-aligned where the status goes,
+# narrow enough to leave the label its room and centred on the 20px row.
+menu_bar_w          = 72
+menu_bar_y          = 4
 
 list_container_x    = 5     # menu.js CONTAINER_X
 # menu.js's value, and the shipping device's. Five 20px rows plus four dividers is

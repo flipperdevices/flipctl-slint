@@ -284,6 +284,9 @@ mod demo {
                     at_start,
                     at_end,
                     dim: false,
+                    bar: false,
+                    bar_fill: 0.0,
+                    bar_text_x: 0.0,
                 }
             })
             .collect();
@@ -3628,6 +3631,9 @@ fn apply_app_list(
                 at_end: false,
                 // The runtime is a label about the app, not a value of it.
                 dim: true,
+                bar: false,
+                bar_fill: 0.0,
+                bar_text_x: 0.0,
             }
         })
         .collect();

@@ -86,7 +86,7 @@ keys' wiring are `main!`'s.
 | `Page` | Shows |
 |---|---|
 | `Page::detail(rows)` | Rows made with `pair`, `rule`, `gauge`, `text`, `choice` and `heading`, `.dim()` for a secondary one. `.fit_gauges()` sizes a gauge around its own label. |
-| `Page::menu(items)` | Rows made with `item("Label")`, then `.status(..)`, `.toggle(..)` or `.range(value, first, last)` for a value Left and Right change. Up and Down move the cursor, `ui.selected()` is the row under it, and Ok flashes the row before `key()` sees it. |
+| `Page::menu(items)` | Rows made with `item("Label")`, then `.status(..)`, `.toggle(..)` or `.range(value, first, last)` for a value Left and Right change, or `.bar(text, fraction)` for a level drawn as a bar with the text in it. Up and Down move the cursor, `ui.selected()` is the row under it, and Ok flashes the row before `key()` sees it. |
 | `Page::log(title, lines)` | Lines of output, oldest first. |
 | `Page::canvas(picture, texts)` | A picture the app paints, below. |
 

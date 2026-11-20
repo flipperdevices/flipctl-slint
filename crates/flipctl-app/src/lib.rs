@@ -269,18 +269,24 @@ macro_rules! main {
                     self.items.set_vec(
                         items
                             .iter()
-                            .map(|i| ListItem {
-                                label: shared(&i.label),
-                                tag: shared(&i.tag),
-                                status: shared(&i.status),
-                                icon: 0,
-                                picture: slint::Image::default(),
-                                frames: 1,
-                                chevrons: i.chevrons,
-                                dim: i.dim,
-                                value: shared(&i.value),
-                                at_start: i.at_start,
-                                at_end: i.at_end,
+                            .map(|i| {
+                                let bar = i.bar.map(|f| $crate::dropdown::bar(&i.status, f));
+                                ListItem {
+                                    label: shared(&i.label),
+                                    tag: shared(&i.tag),
+                                    status: shared(bar.as_ref().map_or(&i.status, |b| &b.text)),
+                                    icon: 0,
+                                    picture: slint::Image::default(),
+                                    frames: 1,
+                                    chevrons: i.chevrons,
+                                    dim: i.dim,
+                                    value: shared(&i.value),
+                                    at_start: i.at_start,
+                                    at_end: i.at_end,
+                                    bar: bar.is_some(),
+                                    bar_fill: bar.as_ref().map_or(0.0, |b| b.fill_w as f32),
+                                    bar_text_x: bar.as_ref().map_or(0.0, |b| b.text_x as f32),
+                                }
                             })
                             .collect::<Vec<_>>(),
                     );
