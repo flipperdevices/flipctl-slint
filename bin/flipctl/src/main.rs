@@ -147,7 +147,7 @@ usage: flipctl [--panel [--kms-device PATH]] [--png PATH]
   --auto         advance the selection on a timer, so frames are produced
                  without anyone pressing a button
   --bench        redraw as fast as the panel accepts, to measure the ceiling
-  --remote ADDR  also serve the browser view, e.g. 0.0.0.0:8080
+  --remote ADDR  also serve the browser view, e.g. [::]:8080
   --headless     serve the browser view only: no KMS, no buttons. Lets cog keep
                  the panel, so the prototype and this can be compared live
   --peer H:P     a host:port running the fake-flipctl2 prototype; / then serves

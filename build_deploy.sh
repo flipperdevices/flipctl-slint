@@ -332,7 +332,7 @@ if [ "$RUN" = no ]; then
     exit 0
 fi
 
-ARGS="--remote 0.0.0.0:$PORT --assets $SHARE/assets/remote"
+ARGS="--remote [::]:$PORT --assets $SHARE/assets/remote"
 [ -n "$PEER" ] && ARGS="$ARGS --peer $PEER"
 if [ "$MODE" = panel ]; then
     # The panel is single-owner. cog holds card0 and has to let go first, and the

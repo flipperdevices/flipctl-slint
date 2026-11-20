@@ -67,7 +67,7 @@ WorkingDirectory=/usr/share/flipctl
 StandardOutput=journal
 StandardError=journal
 ExecStart=/usr/bin/flipctl --panel \
-    --remote 0.0.0.0:8899 --assets /usr/share/flipctl/assets/remote
+    --remote [::]:8899 --assets /usr/share/flipctl/assets/remote
 
 # Stopping the unit does not stop what it started: PAMName=login puts these
 # processes in a logind session scope rather than the service's own cgroup, so a
