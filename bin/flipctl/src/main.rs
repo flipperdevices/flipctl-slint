@@ -7684,7 +7684,9 @@ fn panel(
                             act: DialogAct::Uninstall(at),
                         });
                     }
-                } else if key == FlipperKey::View && screen.get_screen() == Screen::Idle {
+                } else if matches!(key, FlipperKey::View | FlipperKey::Ok)
+                    && screen.get_screen() == Screen::Idle
+                {
                     screen.set_screen(Screen::Menu);
                     eprintln!("screen         menu");
                 } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Menu {
