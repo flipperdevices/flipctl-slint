@@ -394,11 +394,11 @@ mod demo {
         /// The breadcrumb crumb, which is also the screen's name.
         pub fn title(self) -> &'static str {
             match self {
-                Detail::System => "System info",
+                Detail::System => "System Info",
                 Detail::Ethernet => "Ethernet",
-                Detail::Routing => "Routing info",
-                Detail::Disk => "Disk info",
-                Detail::Battery => "Battery info",
+                Detail::Routing => "Routing Info",
+                Detail::Disk => "Disk Info",
+                Detail::Battery => "Battery Info",
                 Detail::Modem => "5G Modem",
                 Detail::Update => "Reinstall FlipperOS",
                 Detail::Profile => "Update FlipperOS",
@@ -418,7 +418,7 @@ mod demo {
         Airplane,
         /// OFF when the radio is off, else the SSID, else "not connected".
         Wifi,
-        /// "Airplane mode" while that is what blocks the row.
+        /// "Airplane Mode" while that is what blocks the row.
         ModemBlocked,
         /// The capability set the USB-C port is offering.
         UsbPower,
@@ -451,8 +451,8 @@ mod demo {
     pub static NETWORK: Menu = Menu {
         title: "Network",
         rows: &[
-            Row { label: "Airplane mode", icon: 9, frames: 10, stat: Stat::Airplane, act: Act::Airplane },
-            Row { label: "Routing info", icon: 10, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Routing) },
+            Row { label: "Airplane Mode", icon: 9, frames: 10, stat: Stat::Airplane, act: Act::Airplane },
+            Row { label: "Routing Info", icon: 10, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Routing) },
             Row { label: "5G Modem", icon: 11, frames: 1, stat: Stat::ModemBlocked, act: Act::Detail(Detail::Modem) },
             Row { label: "Wi-Fi", icon: 12, frames: 1, stat: Stat::Wifi, act: Act::Wifi },
             Row { label: "Ethernet", icon: 13, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Ethernet) },
@@ -463,7 +463,7 @@ mod demo {
     ///
     /// No icons: unlike `networkMenu`, that function sets no icon map, so every
     /// row here is label-only and the label starts where the icon would end.
-    /// "System info" has no factory in the prototype either.
+    /// "System Info" has no factory in the prototype either.
     /// Whether a submenu is one the app switcher tracks.
     ///
     /// Network and Settings, which is what the prototype marks as apps: they are
@@ -482,11 +482,11 @@ mod demo {
     pub static SETTINGS: Menu = Menu {
         title: "Settings",
         rows: &[
-            Row { label: "System info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::System) },
-            Row { label: "Battery info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Battery) },
-            Row { label: "USB-C1 power out", icon: 0, frames: 1, stat: Stat::UsbPower, act: Act::UsbPower },
+            Row { label: "System Info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::System) },
+            Row { label: "Battery Info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Battery) },
+            Row { label: "USB-C1 Power Out", icon: 0, frames: 1, stat: Stat::UsbPower, act: Act::UsbPower },
             Row { label: "LED Brightness", icon: 0, frames: 1, stat: Stat::None, act: Act::Sub(&LEDS) },
-            Row { label: "Disk info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
+            Row { label: "Disk Info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
             Row { label: "App Manager", icon: 0, frames: 1, stat: Stat::None, act: Act::Manager },
             Row { label: "OS Profiles", icon: 0, frames: 1, stat: Stat::None, act: Act::Boot },
             Row { label: "Update FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Profile) },
@@ -553,7 +553,7 @@ mod demo {
                     net.ssid.clone()
                 }
             }
-            Stat::ModemBlocked => if net.airplane { "Airplane mode" } else { "" }.into(),
+            Stat::ModemBlocked => if net.airplane { "Airplane Mode" } else { "" }.into(),
             Stat::UsbPower => flipper_ui::usb_pd::Port::read()
                 .filter(|p| p.powering())
                 .and_then(|p| p.sets.get(p.selected).map(|s| s.short()))
@@ -1623,11 +1623,11 @@ mod detail {
     fn install_rows(install: &sysinfo::Install, current: Vec<DetailRow>) -> Vec<DetailRow> {
         let number = |b: &sysinfo::Installed| b.number.map(|n| format!("#{n}")).unwrap_or_default();
         match &install.bundle {
-            Some(b) => std::iter::once(row("Install type", format!("Bundle {}", number(b)).trim()))
+            Some(b) => std::iter::once(row("Install Type", format!("Bundle {}", number(b)).trim()))
                 .chain(current)
                 .collect(),
             None if install.parts.is_empty() => current,
-            None => std::iter::once(row("Install type", "Custom"))
+            None => std::iter::once(row("Install Type", "Custom"))
                 .chain(current)
                 .chain(install.parts.iter().map(|p| row(part_label(&p.name), &number(p))))
                 .collect(),
@@ -1696,7 +1696,7 @@ mod detail {
             ("Hostname", &s.hostname),
             ("SoC", &s.soc),
             ("CPU", &s.cpu),
-            ("CPU serial", &s.serial),
+            ("CPU Serial", &s.serial),
         ] {
             out.extend(long(label, value));
         }
@@ -1723,7 +1723,7 @@ mod detail {
                 ("Size", &u.size),
                 ("Version", &u.version),
                 ("Link", &u.link),
-                ("Life used", &u.life),
+                ("Life Used", &u.life),
                 ("Health", &u.health),
             ] {
                 out.extend(long(label, value));
@@ -1733,16 +1733,16 @@ mod detail {
         match &s.sd {
             Some(c) => {
                 for (label, value) in
-                    [("SD card", c.name.as_str()), ("SD size", &c.size), ("SD type", &c.kind)]
+                    [("SD Card", c.name.as_str()), ("SD Size", &c.size), ("SD Type", &c.kind)]
                 {
                     out.extend(long(label, value));
                 }
                 let r = &c.ratings;
                 for (label, value) in [
-                    ("SD speed class", &r.speed),
-                    ("SD UHS grade", &r.uhs),
-                    ("SD video class", &r.video),
-                    ("SD app class", &r.app),
+                    ("SD Speed Class", &r.speed),
+                    ("SD UHS Grade", &r.uhs),
+                    ("SD Video Class", &r.video),
+                    ("SD App Class", &r.app),
                 ] {
                     if !value.is_empty() {
                         out.extend(long(label, value));
@@ -1752,34 +1752,34 @@ mod detail {
                 let w = &c.switch;
                 if !w.speeds.is_empty() {
                     for (label, value) in [
-                        ("SD speeds", &w.speeds),
-                        ("SD power limit", &w.power),
-                        ("SD current", &w.current),
-                        ("SD commands", &w.commands),
+                        ("SD Speeds", &w.speeds),
+                        ("SD Power Limit", &w.power),
+                        ("SD Current", &w.current),
+                        ("SD Commands", &w.commands),
                     ] {
                         out.extend(long(label, value));
                     }
                 }
                 for (label, value) in [
-                    ("SD spec", &c.spec),
-                    ("SD allocation unit", &c.au),
-                    ("SD perf", &c.perf),
-                    ("SD discard", &c.discard),
-                    ("SD made", &c.made),
-                    ("SD serial", &c.serial),
+                    ("SD Spec", &c.spec),
+                    ("SD Allocation Unit", &c.au),
+                    ("SD Perf", &c.perf),
+                    ("SD Discard", &c.discard),
+                    ("SD Made", &c.made),
+                    ("SD Serial", &c.serial),
                     ("SD OEM", &c.oem),
-                    ("SD rev", &c.rev),
+                    ("SD Rev", &c.rev),
                 ] {
                     out.extend(long(label, value));
                 }
                 if c.sduc {
-                    out.push(row("SD boot", "no (SDUC)"));
+                    out.push(row("SD Boot", "no (SDUC)"));
                 }
                 if c.locked {
-                    out.push(row("SD lock", "write-protected"));
+                    out.push(row("SD Lock", "write-protected"));
                 }
             }
-            None => out.push(row("SD card", "none")),
+            None => out.push(row("SD Card", "none")),
         }
         sections.push(("SD", std::mem::take(&mut out)));
         if let Some(p) = &s.pack {
@@ -1788,7 +1788,7 @@ mod detail {
                 ("Battery", b.what),
                 ("Capacity", b.capacity),
                 ("Cycles", b.cycles),
-                ("Batt health", b.health),
+                ("Batt Health", b.health),
             ] {
                 out.extend(long(label, &value));
             }
@@ -1858,14 +1858,14 @@ mod detail {
             ("Host".into(), s.hostname.clone()),
             ("SoC".into(), s.soc.clone()),
             ("CPU".into(), s.cpu.clone()),
-            ("CPU serial".into(), s.serial.clone()),
+            ("CPU Serial".into(), s.serial.clone()),
             ("Memory".into(), sysinfo::installed_text(s.mem_total)),
         ];
         if let Some(m) = &s.mcu {
             out.extend([
                 ("MCU".into(), m.version.clone()),
-                ("MCU slot".into(), m.slot.clone()),
-                ("MCU boot".into(), m.boot.clone()),
+                ("MCU Slot".into(), m.slot.clone()),
+                ("MCU Boot".into(), m.boot.clone()),
             ]);
         }
         out.extend([
@@ -1883,7 +1883,7 @@ mod detail {
                 ("Size".into(), u.size.clone()),
                 ("Version".into(), u.version.clone()),
                 ("Link".into(), u.link.clone()),
-                ("Life used".into(), u.life.clone()),
+                ("Life Used".into(), u.life.clone()),
                 ("Health".into(), u.health.clone()),
             ]);
         }
@@ -2414,7 +2414,7 @@ mod wifi {
             self.details.is_none()
         }
 
-        /// Flip Auto join, and tell NetworkManager.
+        /// Flip Auto Join, and tell NetworkManager.
         ///
         /// Optimistic, like the radio toggles: the row flips on the frame the key
         /// was pressed on and the command runs detached, because
@@ -4071,10 +4071,10 @@ fn png(
     if modal {
         screen.set_modal_lines(slint::ModelRc::new(slint::VecModel::from(vec![
             slint::SharedString::from("To use 5G Modem you need"),
-            slint::SharedString::from("to turn off Airplane mode"),
+            slint::SharedString::from("to turn off Airplane Mode"),
         ])));
         screen.set_modal_left("Cancel".into());
-        screen.set_modal_right("Turn off".into());
+        screen.set_modal_right("Turn Off".into());
     }
     slint::platform::update_timers_and_animations();
 
@@ -4444,7 +4444,7 @@ fn panel(
         act: DialogAct,
     }
     // What the dialog's right button does. Only one dialog has one so far: the
-    // airplane block, whose "Turn off" clears airplane mode and then proceeds to
+    // airplane block, whose "Turn Off" clears airplane mode and then proceeds to
     // the row that was blocked.
     #[derive(PartialEq)]
     enum DialogAct {
@@ -8091,10 +8091,10 @@ fn panel(
                             dialog = Some(Dialog {
                                 lines: vec![
                                     "To use 5G Modem you need".into(),
-                                    "to turn off Airplane mode".into(),
+                                    "to turn off Airplane Mode".into(),
                                 ],
                                 left: "Cancel",
-                                right: "Turn off",
+                                right: "Turn Off",
                                 act: DialogAct::ClearAirplane,
                             });
                         }
