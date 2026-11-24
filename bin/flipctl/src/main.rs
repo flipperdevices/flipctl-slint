@@ -321,9 +321,9 @@ mod demo {
         );
     }
 
-    /// The idle screen's soft keys. desktop.js puts "Menu" in slot 1, whose key is
-    /// `view`, and the boot target's shortcut on the right in slot 4, `run`.
-    pub const IDLE_LABELS: [&str; 5] = ["", "Menu", "", "", "Desktop"];
+    /// The idle screen's soft keys: none. Ok opens the menu, where desktop.js also
+    /// had Menu on slot 1 and its boot target's shortcut on slot 4.
+    pub const IDLE_LABELS: [&str; 5] = ["", "", "", "", ""];
 
     /// What activating a row does.
     ///
@@ -7397,8 +7397,7 @@ fn panel(
 
         if let Some((pressed_key, pressed_slot)) = press.expired(Instant::now()) {
             let slot = pressed_slot;
-            // The flash has been seen; now do what the button says. Idle's slot 1
-            // is "Menu", which is where desktop.js puts it.
+            // The flash has been seen; now do what the button says.
             {
                 let key = pressed_key;
                 // A dialog's own buttons, resolved before anything else since it
@@ -8003,9 +8002,7 @@ fn panel(
                             act: DialogAct::Uninstall(at),
                         });
                     }
-                } else if matches!(key, FlipperKey::View | FlipperKey::Ok)
-                    && screen.get_screen() == Screen::Idle
-                {
+                } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Idle {
                     screen.set_screen(Screen::Menu);
                     eprintln!("screen         menu");
                 } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Menu {
