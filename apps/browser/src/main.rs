@@ -538,6 +538,8 @@ fn apply_kb(ui: &AppWindow, app: &App) {
 enum Then {
     Stay,
     Quit,
+    /// To the background: Back with no page left to go back to.
+    Leave,
     /// A new tab, on this address.
     OpenTab(String),
     /// Click here, in CSS pixels, and say whether a text field took the focus.
@@ -548,10 +550,10 @@ enum Then {
 
 fn key(app: &mut App, key: Key, down: bool) -> Then {
     if app.failed.is_some() {
-        return if down && matches!(key, Key::Ok | Key::Run | Key::Back | Key::Escape) {
-            Then::Quit
-        } else {
-            Then::Stay
+        return match key {
+            Key::Back if down => Then::Leave,
+            Key::Ok | Key::Run | Key::Escape if down => Then::Quit,
+            _ => Then::Stay,
         };
     }
 
@@ -630,7 +632,7 @@ fn key(app: &mut App, key: Key, down: bool) -> Then {
         Key::Escape => return Then::Quit,
         Key::Back => {
             if !app.engine.as_ref().is_some_and(cdp::Browser::back) {
-                return Then::Quit;
+                return Then::Leave;
             }
         }
         Key::Ok => {
@@ -914,6 +916,10 @@ fn main() -> Result<(), slint::PlatformError> {
         match (then, remote) {
             (Then::Quit, _) => {
                 let _ = slint::quit_event_loop();
+                return;
+            }
+            (Then::Leave, _) => {
+                flipctl_app::leave();
                 return;
             }
             (Then::Click(at), Some(remote)) => {
@@ -1378,6 +1384,6 @@ mod tests {
     #[test]
     fn back_with_no_engine_leaves() {
         let mut app = app_with_page(false);
-        assert_eq!(key(&mut app, Key::Back, true), Then::Quit);
+        assert_eq!(key(&mut app, Key::Back, true), Then::Leave);
     }
 }

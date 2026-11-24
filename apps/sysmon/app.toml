@@ -4,4 +4,6 @@
 # flipctl's own widgets, from the framework in crates/flipctl-app, so the app looks
 # like the device without anything passing between them.
 name = "System Monitor"
+icon = "icon.png"
 wayland = "./target/release/sysmon-app"
+folder = "System"

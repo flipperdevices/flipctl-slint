@@ -1,0 +1,35 @@
+# Its own workspace, so this crate is independent of whatever it happens to sit
+# inside. Without it cargo refuses to build: a crate under a workspace directory
+# is assumed to be a member of it.
+[workspace]
+
+[package]
+name = "usb-keyboard-touchpad-app"
+version = "0.1.0"
+edition = "2021"
+# The source. The binary is a combined work: it links flipctl-app, and so Slint,
+# which makes the built app GPL-3.0-only like flipctl itself.
+license = "MIT"
+publish = false
+
+[dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["device"] }
+slint = { version = "1.17", default-features = false, features = ["compat-1-2", "backend-winit-wayland", "renderer-software", "std"] }
+libc = "0.2"
+# Bluetooth: the HID service, the advertisement and the pairing agent are objects
+# BlueZ calls on D-Bus. Pure Rust, so the binary still needs only libc, libm and
+# libgcc_s.
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+
+# The panel's own renderer, for the tests: they draw the page headlessly and read
+# the pixels back. Tests only, so an app built on the device never compiles it.
+[dev-dependencies]
+flipper-ui = { path = "../../crates/flipper-ui", default-features = false, features = ["slint"] }
+png = "0.17"
+
+[build-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
+
+[profile.release]
+opt-level = "z"
+strip = true

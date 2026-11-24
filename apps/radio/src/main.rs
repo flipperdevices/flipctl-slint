@@ -611,7 +611,8 @@ fn apply(ui: &AppWindow, state: &Radio) {
     }
 }
 
-/// One key, on the way down. Returns false when the app should close.
+/// One key, on the way down. Returns false for one left to `flipctl_app::unused`:
+/// Escape closes the app and Back sends it to the background.
 fn key(state: &mut Radio, key: Key) -> bool {
     // The dialog owns the keys while it is up, and any of them dismisses it: there
     // is one thing to say about a stream that would not start.
@@ -719,7 +720,8 @@ fn main() -> Result<(), slint::PlatformError> {
         }
         let mut state = keyed.borrow_mut();
         if !key(&mut state, pressed) {
-            let _ = slint::quit_event_loop();
+            // Escape is labelled Close wherever key() leaves it
+            flipctl_app::unused(pressed, flipctl_app::CLOSE);
             return;
         }
         apply(&ui, &state);
@@ -1171,6 +1173,6 @@ mod tests {
         let mut state = radio();
         state.picking = Some(0);
         assert!(key(&mut state, Key::Back), "the picker was closed, not the app");
-        assert!(!key(&mut state, Key::Back), "the app closes");
+        assert!(!key(&mut state, Key::Back), "the app leaves");
     }
 }

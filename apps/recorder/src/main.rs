@@ -8,9 +8,9 @@
 //! so the app needs nothing installed. Where this differs from the prototype,
 //! docs/inventory.md says so.
 //!
-//! A take keeps going when the app is sent to the background, since Back never
-//! reaches an app and the process simply keeps running; Stop or Close ends it, and
-//! closing finishes the file properly rather than abandoning it.
+//! A take keeps going when Back sends the app to the background, since the process
+//! simply keeps running; Stop or Close ends it, and closing finishes the file properly
+//! rather than abandoning it.
 
 mod capture;
 mod files;
@@ -433,10 +433,12 @@ impl Recorder {
         self.capture = None;
     }
 
-    /// One key on the way down. Returns false when the app should close.
+    /// One key on the way down. Returns false for one left to `flipctl_app::unused`:
+    /// Escape, which has closed the take first, closes the app and Back sends it to
+    /// the background.
     fn key(&mut self, key: Key) -> bool {
         if self.error.is_some() {
-            if matches!(key, Key::Ok | Key::Run | Key::Escape) {
+            if matches!(key, Key::Ok | Key::Run | Key::Escape | Key::Back) {
                 self.error = None;
             }
             return true;
@@ -452,7 +454,7 @@ impl Recorder {
         if let Some(highlighted) = self.picking {
             let total = self.options(row).len();
             match key {
-                Key::Escape => self.picking = None,
+                Key::Escape | Key::Back => self.picking = None,
                 Key::Down if total > 0 => self.picking = Some((highlighted + 1) % total),
                 Key::Up if total > 0 => self.picking = Some((highlighted + total - 1) % total),
                 Key::Ok | Key::Run => {
@@ -468,6 +470,7 @@ impl Recorder {
                 self.close();
                 return false;
             }
+            Key::Back => return false,
             Key::Run if !self.paused => {
                 if self.take.is_some() {
                     self.stop();
@@ -525,13 +528,13 @@ impl Recorder {
                         self.refresh_files(None);
                         self.next = files::next_name(&self.dir);
                     }
-                    Key::Ok | Key::Run | Key::Escape => {}
+                    Key::Ok | Key::Run | Key::Escape | Key::Back => {}
                     _ => self.overlay = Overlay::Delete { name, selected },
                 }
                 return true;
             }
             Overlay::Player(mut p) => {
-                if key == Key::Escape {
+                if matches!(key, Key::Escape | Key::Back) {
                     return true;
                 }
                 self.player_key(&mut p, key);
@@ -545,6 +548,7 @@ impl Recorder {
                 self.close();
                 return false;
             }
+            Key::Back => return false,
             Key::View => {
                 self.page = Page::Main;
                 self.listen();
@@ -569,7 +573,7 @@ impl Recorder {
     fn edit_key(&mut self, key: Key, selected: usize) {
         let rows = EDIT_ROWS;
         match key {
-            Key::Edit | Key::Escape => self.overlay = Overlay::None,
+            Key::Edit | Key::Escape | Key::Back => self.overlay = Overlay::None,
             Key::Down => self.overlay = Overlay::Edit { selected: (selected + 1) % rows },
             Key::Up => self.overlay = Overlay::Edit { selected: (selected + rows - 1) % rows },
             Key::Left | Key::Right if selected > 0 => {
@@ -787,7 +791,8 @@ fn main() -> Result<(), slint::PlatformError> {
         }
         let mut state = keyed.borrow_mut();
         if !state.key(pressed) {
-            let _ = slint::quit_event_loop();
+            // Escape is labelled Close wherever key() leaves it
+            flipctl_app::unused(pressed, flipctl_app::CLOSE);
             return;
         }
         apply(&ui, &state);

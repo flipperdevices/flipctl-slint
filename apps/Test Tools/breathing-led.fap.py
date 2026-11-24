@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # /// flipctl
 # name = "Breathing LED"
+# icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAAQ0lEQVR42r1RMRIAIAiC/v9nWpqsTnSQTVTuAACAJCHA5S4ym9vgi4zqJJkq2d7cg7hbXY/zj6z29E3YTXXeI8plH2z16zvZZLuxXwAAAABJRU5ErkJggg=="
 # status = true
 # ///
 """A breathing pattern on any combination of the four RGB LEDs.

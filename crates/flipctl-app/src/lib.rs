@@ -41,12 +41,16 @@ pub use flipper_ui::{dropdown, font, keyboard, paint, pixel, theme};
 pub use flipper_ui::{Ethernet, Rotate};
 
 pub mod app;
+pub mod ask;
+pub mod port;
 pub mod portrait;
 #[cfg(feature = "render")]
 pub mod render;
 pub use app::{
     choice, gauge, heading, item, pair, redraw, rule, text, App, Item, Page, Row, Text, Ui,
 };
+pub use ask::{claim, home, leave, type_text, Typing};
+pub use port::device_port_name;
 
 /// The touchpad and the motor, which a hosted app opens itself: the compositor has
 /// no pointer, so the pad reaches nobody unless somebody reads it.
@@ -104,8 +108,10 @@ pub fn picture(surface: &paint::Surface) -> slint::Image {
 ///
 /// What [`attach!`] does, for the closures it makes from the app's generated types:
 /// the status bar polled every second, Left and Right lit while held, a soft key shown
-/// pressed for `press_flash_ms` before `handler` sees it, and Escape closing when the
-/// handler leaves it. Keep the result: dropping it stops the status poll.
+/// pressed for `press_flash_ms` before `handler` sees it, and Escape and Back doing
+/// what [`unused`] says when the handler leaves them, with Escape taken to be Close:
+/// the page labels its own keys, so one that means something else by it handles it.
+/// Keep the result: dropping it stops the status poll.
 pub fn attach(
     set_slot: impl Fn(i32) + 'static,
     set_arrow: impl Fn(i32) + 'static,
@@ -124,13 +130,8 @@ pub fn attach(
     // link on and off for as long as the button is held.
     let up = Rc::new(RefCell::new(released));
     let act = move |key: Key| {
-        // `false` from the handler means "nothing more to do with this key", and Escape is
-        // the only key that reaches here meaning "leave": flipctl keeps Back to put the app
-        // in the background, and the rest are the app's own. Closing on any unclaimed key
-        // would make `_ => false` - the pattern this crate's own example teaches - quit the
-        // app on an arrow nobody bound.
-        if !(act.borrow_mut())(key) && key == Key::Escape {
-            let _ = slint::quit_event_loop();
+        if !(act.borrow_mut())(key) {
+            unused(key, CLOSE);
         }
     };
     let set_slot = Rc::new(set_slot);
@@ -160,6 +161,24 @@ pub fn attach(
         });
     }));
     Attached { _status: poll_status(set_status) }
+}
+
+/// The label that makes an unused Escape close the app.
+pub const CLOSE: &str = "Close";
+
+/// What Escape and Back do when the app has not used them, `escape` being what the
+/// Escape key is labelled: Escape closes the app when that is [`CLOSE`], and otherwise
+/// sends it to the background with flipctl showing its home screen. Back, with no step
+/// left to go back, sends it to the background. Any other key does nothing.
+pub fn unused(key: Key, escape: &str) {
+    match key {
+        Key::Escape if escape == CLOSE => {
+            let _ = slint::quit_event_loop();
+        }
+        Key::Escape => home(),
+        Key::Back => leave(),
+        _ => {}
+    }
 }
 
 /// What [`attach`] keeps running for the app.
@@ -285,18 +304,24 @@ macro_rules! main {
                     self.items.set_vec(
                         items
                             .iter()
-                            .map(|i| ListItem {
-                                label: shared(&i.label),
-                                tag: shared(&i.tag),
-                                status: shared(&i.status),
-                                icon: 0,
-                                picture: slint::Image::default(),
-                                frames: 1,
-                                chevrons: i.chevrons,
-                                dim: i.dim,
-                                value: shared(&i.value),
-                                at_start: i.at_start,
-                                at_end: i.at_end,
+                            .map(|i| {
+                                let bar = i.bar.map(|f| $crate::dropdown::bar(&i.status, f));
+                                ListItem {
+                                    label: shared(&i.label),
+                                    tag: shared(&i.tag),
+                                    status: shared(bar.as_ref().map_or(&i.status, |b| &b.text)),
+                                    icon: 0,
+                                    picture: slint::Image::default(),
+                                    frames: 1,
+                                    chevrons: i.chevrons,
+                                    dim: i.dim,
+                                    value: shared(&i.value),
+                                    at_start: i.at_start,
+                                    at_end: i.at_end,
+                                    bar: bar.is_some(),
+                                    bar_fill: bar.as_ref().map_or(0.0, |b| b.fill_w as f32),
+                                    bar_text_x: bar.as_ref().map_or(0.0, |b| b.text_x as f32),
+                                }
                             })
                             .collect::<Vec<_>>(),
                     );

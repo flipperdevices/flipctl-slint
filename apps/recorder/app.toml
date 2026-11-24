@@ -8,4 +8,5 @@
 name = "Voice recorder"
 icon = "assets/voice_recorder.png"
 wayland = "./target/release/recorder-app"
+folder = "Media"
 audio = true

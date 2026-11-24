@@ -24,10 +24,12 @@ from. Nothing is reimplemented and no token is retyped.
     app.run()
 
 A handler gets a key as it goes down and returns True when it used it; anything it
-leaves is the view's: Escape closes, Up and Down scroll or move a menu's cursor. Back
-is never seen here: it belongs to flipctl, which sends the app to the background.
-After every key the view is drawn again from its functions, and `every` draws it on a
-clock too.
+leaves is the view's: Escape closes when the first button says Close and otherwise
+sends the app to the background with flipctl showing its home screen (see `home`),
+Back sends it to the background (see `leave`), Up and Down scroll or move a menu's
+cursor. An app with views of its own takes Back on each but the first and shows the
+one before. After every key the view is drawn again from its functions, and `every`
+draws it on a clock too.
 
 An app that also has something to wait on hands `run` a coroutine, which the same
 loop drives: see `ping.fap.py`, which reads its replies off a socket and calls
@@ -46,11 +48,45 @@ import inspect
 import os
 import pathlib
 import re
+import socket
+import threading
 
 import slint
 
-__all__ = ["Detail", "Key", "Log", "Menu", "choice", "gauge", "heading", "item", "pair", "rule",
-           "text", "text_width", "theme", "wrap"]
+__all__ = ["Detail", "Key", "Log", "Menu", "choice", "gauge", "heading", "home", "item", "leave",
+           "pair", "rule", "text", "text_width", "theme", "wrap"]
+
+
+def leave() -> None:
+    """Go to the background, as Back does on an app's first view: flipctl shows the
+    screen the app was opened from, and the app keeps running. Run outside flipctl,
+    where there is nothing to go back to, the app closes instead."""
+    _away("/leave")
+
+
+def home() -> None:
+    """Go to the background as `leave` does, with flipctl showing its home screen: what
+    Escape does in a view whose first button is not Close."""
+    _away("/home")
+
+
+def _away(where: str) -> None:
+    path = os.environ.get("FLIPCTL_SOCKET")
+    if not path:
+        slint.quit_event_loop()
+        return
+
+    def ask():
+        try:
+            with socket.socket(socket.AF_UNIX) as s:
+                s.connect(path)
+                s.sendall(f"POST {where} HTTP/1.1\r\nHost: flipctl\r\n"
+                          "Content-Length: 0\r\n\r\n".encode())
+                s.recv(4096)
+        except OSError as e:
+            print(f"{where}: {e}", flush=True)
+
+    threading.Thread(target=ask, daemon=True).start()
 
 
 def _ui_dir() -> pathlib.Path:
@@ -414,8 +450,16 @@ class _View:
     def _press(self, key) -> None:
         used = self._handler(key) if self._handler else False
         if not used:
-            if key is Key.ESCAPE:
+            # What the key says it does: Close closes, and anything else is left to
+            # send the app to the background and the person home
+            if key is Key.ESCAPE and _buttons(self._buttons_given)[0] == "Close":
                 self.close()
+                return
+            if key is Key.ESCAPE:
+                home()
+                return
+            if key is Key.BACK:
+                leave()
                 return
             if key is Key.DOWN:
                 self._move(1)

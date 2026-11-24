@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # /// flipctl
 # name = "ETH LED"
+# icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAAUElEQVR42p2SUQrAMAxC+4b3v7L7WaGMVVb9CpiISrDt0WAe+kHaW3ev0aKxats6EQGYsxKZROuM9aGSJYBdbu3yvQWOrKaW9af6T77+1RY3hAg/92/4pe4AAAAASUVORK5CYII="
 # status = true
 # ///
 """The eth0 LED saying what the port is actually doing, in three states.

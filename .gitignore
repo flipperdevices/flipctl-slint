@@ -8,3 +8,4 @@ target/
 # Python bytecode from the host tools.
 __pycache__/
 *.pyc
+*.DS_store

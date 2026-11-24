@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # /// flipctl
 # name = "Ping"
+# icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAALUlEQVR42mNgoCX4////f6ppZiTVREZGRkbaO5ciPw68kxjJ0oQeslSN6MEDAD/LJ+MGFZ+HAAAAAElFTkSuQmCC"
 # status = true
 # ///
 """Ping, on the panel.

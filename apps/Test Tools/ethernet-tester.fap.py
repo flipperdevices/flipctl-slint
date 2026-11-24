@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # /// flipctl
 # name = "Ethernet Tester"
+# icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAAT0lEQVR42q2QQQoAIAgEHen/X95OQQgWWnNRWFZXsQ1JsgMAq/dMjDXi9oNT1Ki1N7aNoxK3dGs2aHQedd2amSXJOwMBvHLzMpWiPn17ZwKPNj/uT3g/3QAAAABJRU5ErkJggg=="
 # status = true
 # ///
 """A cable tester for both ports, and a loopback check between them.

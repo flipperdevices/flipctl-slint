@@ -5,5 +5,6 @@
 # panel instead and moves the curve under the D-pad, so a whole afternoon of
 # palette builds becomes a minute of looking.
 name = "Tone Lab"
+icon = "icon.png"
 wayland = "./target/release/tone-lab-app"
 folder = "Test Tools"

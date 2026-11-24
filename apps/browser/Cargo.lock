@@ -1193,6 +1193,7 @@ dependencies = [
 name = "flipper-ui"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "drm",
  "drm-ffi",
  "flipper-tokens",

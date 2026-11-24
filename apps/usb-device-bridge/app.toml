@@ -1,0 +1,12 @@
+# USB Device Bridge: a USB device plugged into the Flipper, passed through to the PC on
+# the device port with every transfer written down, used on this Flipper with its
+# traffic logged, or served to the network by USB/IP.
+#
+# The device and the device port are lent by flipctl (the usb/<port>, udc,
+# usbip-share and usbip-attach claims), so the app runs as the user and gives
+# everything back however it ends. Built for speed rather than size: the proxy
+# moves every byte the device and the PC exchange.
+name = "USB Device Bridge"
+wayland = "./target/release/usb-device-bridge-app"
+folder = "USB"
+icon = "icon.png"

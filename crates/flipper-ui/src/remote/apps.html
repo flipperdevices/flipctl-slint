@@ -1,7 +1,8 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Application Manager</title>
+<title>Flipper One App Manager</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAXElEQVR42u2WOw4AEBAFl4MrXJyGQuEvYWNey8bEvAiR32NqC8FLaA66cnZ2f469fQMAmFGHxw9OnUABAAAAAIBV+x9YfftRoKcDu52oOUeB3g70OjHqHAXPAZAIsokSNLNZ0wYAAAAASUVORK5CYII=">
 <style>
   :root {
     --ground: #14171C;
@@ -46,7 +47,18 @@
     flex: none; color: var(--dim); font-size: 11px;
     font-variant-numeric: tabular-nums;
   }
-  .where { display: block; color: var(--dim); font-size: 11px; }
+  /* A folder heads the apps filed in it, as it does on the panel, and folds them
+     away when pressed. */
+  li.folder {
+    cursor: pointer; user-select: none; background: var(--ground);
+    color: var(--dim); font-size: 12px; font-weight: 600; padding: 7px 14px;
+  }
+  li.folder:hover { color: var(--ink); }
+  li.folder .caret { flex: none; width: 10px; }
+  li.folder .count { color: var(--ink); font-weight: 400; }
+  li.in { padding-left: 34px; }
+  /* An installed app's own icon, the panel's 14px drawn at twice its size. */
+  .icon { flex: none; width: 28px; height: 28px; }
   /* Beside the name, in the dim tone the folder underneath already uses, so it reads
      as something about the app rather than part of what it is called. */
   .runtime {
@@ -121,16 +133,94 @@ function say(text, bad) {
   stat.className = bad ? 'bad' : '';
 }
 
+// The folder under ~/Apps an app is filed in, "" for the top: an installed app says
+// where it was found, an offered one where it would go.
+function folderOf(app) {
+  if (app.folder !== undefined) return app.folder;
+  return (app.location || '').replace(/^Apps\/?/, '');
+}
+
 // Case-insensitive, and over the folder as well as the name, so "test tools"
 // finds what is filed there and "runtime" finds both of them.
 function matches(app, needle) {
   if (!needle) return true;
-  const hay = (app.name + ' ' + (app.location || app.folder || '')).toLowerCase();
-  return hay.includes(needle);
+  return (app.name + ' ' + folderOf(app)).toLowerCase().includes(needle);
+}
+
+// Folders folded away, per list. Kept for as long as the page is open, so a redraw
+// after an install leaves them as they were.
+const folded = { installed: new Set(), offered: new Set() };
+
+// One list's rows the way the panel lays them out: its folders first, by name, each
+// heading its own apps, then the apps at the top. While a filter is typed every
+// folder with a match is open, since a match hidden in a closed folder finds nothing.
+function grouped(list, apps, filtering, make) {
+  const by = new Map();
+  for (const app of apps) {
+    const f = folderOf(app);
+    if (!by.has(f)) by.set(f, []);
+    by.get(f).push(app);
+  }
+  const names = [...by.keys()].filter((f) => f).sort((a, b) => a.localeCompare(b));
+  const rows = [];
+  for (const f of names) {
+    const open = filtering || !folded[list].has(f);
+    const head = document.createElement('li');
+    head.className = 'folder';
+    const caret = document.createElement('span');
+    caret.className = 'caret';
+    caret.textContent = open ? '\u25BE' : '\u25B8';
+    const n = document.createElement('span');
+    n.className = 'name';
+    n.textContent = f + ' ';
+    const c = document.createElement('span');
+    c.className = 'count';
+    c.textContent = by.get(f).length;
+    n.appendChild(c);
+    head.append(caret, n);
+    head.addEventListener('click', () => {
+      if (folded[list].has(f)) folded[list].delete(f); else folded[list].add(f);
+      render();
+    });
+    rows.push(head);
+    if (open) {
+      for (const app of by.get(f)) {
+        const li = make(app);
+        li.classList.add('in');
+        rows.push(li);
+      }
+    }
+  }
+  for (const app of by.get('') || []) rows.push(make(app));
+  return rows;
+}
+
+// The icon the panel draws on an app's row: the first frame of its strip, scaled by
+// whole pixels so the pixel art stays sharp, and inked in the page's text colour,
+// since an icon is only a shape. The slot is kept for an app without one, so the
+// names down the list stay in line.
+function icon(app) {
+  const c = document.createElement('canvas');
+  c.className = 'icon';
+  c.width = c.height = 28;
+  if (!app.icon) return c;
+  const img = new Image();
+  img.onload = () => {
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    g.drawImage(img, 0, 0, 14, 14, 0, 0, 28, 28);
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--ink');
+    g.fillRect(0, 0, 28, 28);
+  };
+  img.src = 'apps/icon?key=' + encodeURIComponent(app.key);
+  return c;
 }
 
 function row(app, tag, tagClass, actions) {
   const li = document.createElement('li');
+  // Only an installed app has one to show: the catalogue carries no icons
+  if (app.key !== undefined) li.appendChild(icon(app));
   const n = document.createElement('span');
   n.className = 'name';
   n.textContent = app.name;
@@ -141,13 +231,6 @@ function row(app, tag, tagClass, actions) {
     r.className = 'runtime';
     r.textContent = app.runtime;
     n.appendChild(r);
-  }
-  const where = app.location || app.folder;
-  if (where) {
-    const w = document.createElement('span');
-    w.className = 'where';
-    w.textContent = where;
-    n.appendChild(w);
   }
   const t = document.createElement('span');
   t.className = 'tag' + (tagClass ? ' ' + tagClass : '');
@@ -215,7 +298,7 @@ function render() {
   const installed = (latest.installed || []).filter((a) => matches(a, wantL));
   fill(
     el('installed'),
-    installed.map((a) =>
+    grouped('installed', installed, Boolean(wantL), (a) =>
       row(a, a.size, '', [
         { label: 'Run', doing: 'Starting', url: 'apps/run', body: { key: a.key }, watch: true },
       ].concat(a.shipped ? [] : [
@@ -230,7 +313,7 @@ function render() {
   const offered = (latest.offered || []).filter((a) => matches(a, wantR));
   fill(
     el('offered'),
-    offered.map((a) =>
+    grouped('offered', offered, Boolean(wantR), (a) =>
       row(a, a.installed ? 'installed' : a.size, a.installed ? 'have' : '',
         a.installed ? [] : [
           { label: 'Install', doing: 'Installing', url: 'apps/install', body: { path: a.path } },

@@ -6,6 +6,7 @@
 import { FlipperTheme } from "@theme";
 import { SelectorFrame, SoftBar } from "frame.slint";
 import { StatusBar, PanelStatus } from "statusbar.slint";
+import { SplitText } from "dropdown.slint";
 
 export struct ListItem {
     label: string,
@@ -38,6 +39,12 @@ export struct ListItem {
     // keeps its position either way; only the glyph goes.
     at_start: bool,
     at_end: bool,
+    // A level bar in place of the status, when `chevrons` is 0: the slider chip at
+    // the menu's own width, filled to `bar_fill` with `status` centred in it at
+    // `bar_text_x`, both worked out in `flipper_ui::dropdown::bar`.
+    bar: bool,
+    bar_fill: length,
+    bar_text_x: length,
 }
 
 // The "< value >" status of an adjustable row.
@@ -174,6 +181,9 @@ component MenuLine inherits Rectangle {
     in property <bool> at_start;
     in property <bool> at_end;
     in property <bool> dim;
+    in property <bool> bar;
+    in property <length> bar_fill;
+    in property <length> bar_text_x;
     // Pressed is the one state that overrides it: the row is filled with ink, and
     // grey on black is not a quieter label, it is an unreadable one.
     property <color> status_color: root.pressed
@@ -215,6 +225,8 @@ component MenuLine inherits Rectangle {
             : root.icon == 11 ? @image-url("../assets/icons/modem_5g.png")
             : root.icon == 12 ? @image-url("../assets/icons/wifi.png")
             : root.icon == 13 ? @image-url("../assets/icons/ethernet.png")
+            // A folder in the Apps list without an icon of its own.
+            : root.icon == 14 ? @image-url("../assets/icons/folder.png")
             : @image-url("../assets/icons/media.png");
         colorize: root.content;
     }
@@ -245,7 +257,7 @@ component MenuLine inherits Rectangle {
         color: root.pressed ? FlipperTheme.white : FlipperTheme.status_dim;
     }
 
-    if root.chevrons == 0: Text {
+    if root.chevrons == 0 && !root.bar: Text {
         // See the note in statusbar.slint: the prototype's textWidth is one less
         // than Slint's measured width.
         x: root.width - FlipperTheme.status_pad_r - (self.width - 1px);
@@ -254,6 +266,43 @@ component MenuLine inherits Rectangle {
         font-size: 16px;
         font-family: "Busy9px";
         color: root.status_color;
+    }
+
+    // A level: the slider chip's ground, its fill with square right corners until it
+    // is full, and the status inverting across the fill's edge.
+    property <length> bar_x: root.width - FlipperTheme.status_pad_r - FlipperTheme.menu_bar_w;
+
+    if root.chevrons == 0 && root.bar: SelectorFrame {
+        x: root.bar_x;
+        y: FlipperTheme.menu_bar_y;
+        frame_w: FlipperTheme.menu_bar_w;
+        frame_h: FlipperTheme.drop_chip_h;
+        filled: true;
+        stroke: false;
+        shadow: false;
+        fill_color: FlipperTheme.chip_fill;
+    }
+
+    if root.chevrons == 0 && root.bar: SelectorFrame {
+        x: root.bar_x;
+        y: FlipperTheme.menu_bar_y;
+        frame_w: root.bar_fill;
+        frame_h: FlipperTheme.drop_chip_h;
+        filled: true;
+        stroke: false;
+        shadow: false;
+        fill_color: FlipperTheme.black;
+        round_tr: root.bar_fill >= FlipperTheme.menu_bar_w;
+        round_br: root.bar_fill >= FlipperTheme.menu_bar_w;
+    }
+
+    if root.chevrons == 0 && root.bar: SplitText {
+        x: root.bar_x;
+        y: FlipperTheme.menu_bar_y;
+        chip_w: FlipperTheme.menu_bar_w;
+        text: root.status;
+        text_x: root.bar_text_x;
+        fill_w: root.bar_fill;
     }
 
     if root.chevrons > 0: ChevronStatus {
@@ -398,6 +447,9 @@ export component MenuBody inherits Rectangle {
             at_start: item.at_start;
             at_end: item.at_end;
             dim: item.dim;
+            bar: item.bar;
+            bar_fill: item.bar_fill;
+            bar_text_x: item.bar_text_x;
             arrow_pressed: i == root.selected ? root.arrow_pressed : 0;
         }
 

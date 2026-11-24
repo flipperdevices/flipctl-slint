@@ -4,6 +4,7 @@
 # point: a language costs a bundle in the folder, and flipctl knows nothing about
 # either of them. A script named `*.js` asks for `js` because that is its extension.
 name = "JavaScript Runtime"
+icon = "icon.png"
 provides = "js"
 wayland = "./AppRun"
 # Node is the device's own, as python3 is for the other runtime: what the bundle

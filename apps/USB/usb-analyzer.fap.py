@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # /// flipctl
 # name = "USB Analyzer"
+# icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAAS0lEQVR42r2SwQoAIAhDN///n9fVKDUp2sVAnk4NCCRJSGQZVMEp1IJ3gJwmq93KdmqLJH1MrR1v2Sej9/VWWXVeZuqe49nPMfzWANfiZ7AgIk9rAAAAAElFTkSuQmCC"
 # status = true
 # ///
 """Everything the kernel knows about what is in each USB port.

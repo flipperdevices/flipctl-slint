@@ -1,0 +1,6 @@
+# USB BT Keyboard Touchpad: the Flipper as a PC's keyboard, mouse and media keys, over the
+# USB-C port or Bluetooth.
+name = "USB BT Keyboard Touchpad"
+wayland = "./target/release/usb-keyboard-touchpad-app"
+folder = "USB"
+icon = "icon.png"

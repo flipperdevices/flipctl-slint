@@ -373,6 +373,16 @@ fn serve(
             "application/json; charset=utf-8",
             apps_json().as_bytes(),
         ),
+        // An installed app's icon, the PNG its row on the panel draws, by the key
+        // apps.json gave it. Revalidated rather than held: a redeployed app brings a
+        // new one under the same key.
+        ("GET", "/apps/icon") => {
+            let key = target.split_once("?key=").and_then(|(_, k)| crate::ipc::percent_decode(k));
+            match key.as_deref().and_then(app_icon) {
+                Some(png) => write_cached(&mut stream, "image/png", &png, 0),
+                None => write_response(&mut stream, "404 Not Found", "text/plain", b"no icon"),
+            }
+        }
         ("GET", "/diff") | ("GET", "/compare") => write_response(
             &mut stream,
             "200 OK",
@@ -455,6 +465,15 @@ fn serve(
 /// Written by hand rather than derived, which is how the manifests behind both of
 /// these are read too: the document is two fixed shapes, and deriving it would put
 /// the crate's only serialisation dependency here.
+/// The PNG an installed app draws on its row, found by its key. An icon is 14px
+/// wide and a strip of frames at most, so anything larger is not one.
+fn app_icon(key: &str) -> Option<Vec<u8>> {
+    const MOST: u64 = 64 * 1024;
+    let apps = crate::bundle::discover_all(&crate::bundle::roots());
+    let path = apps.iter().find(|a| a.key == key)?.icon_path()?;
+    (std::fs::metadata(&path).ok()?.len() <= MOST).then(|| std::fs::read(&path).ok())?
+}
+
 fn apps_json() -> String {
     use crate::app::human_size;
 
@@ -476,13 +495,14 @@ fn apps_json() -> String {
             at
         };
         out.push_str(&format!(
-            "{{\"name\":\"{}\",\"key\":\"{}\",\"location\":\"{}\",\"size\":\"{}\",\"runtime\":\"{}\",\"shipped\":{}}}",
+            "{{\"name\":\"{}\",\"key\":\"{}\",\"location\":\"{}\",\"size\":\"{}\",\"runtime\":\"{}\",\"shipped\":{},\"icon\":{}}}",
             escape(&app.name),
             escape(&app.key),
             escape(&at),
             escape(&human_size(app.footprint().total())),
             escape(app.tag()),
-            app.shipped()
+            app.shipped(),
+            app.icon_path().is_some_and(|p| p.is_file())
         ));
     }
     out.push_str("],\"offered\":[");

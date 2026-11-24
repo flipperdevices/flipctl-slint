@@ -10,4 +10,5 @@ name = "Internet radio"
 # selected, as the menu does with its own icons.
 icon = "assets/internet_radio_animated.png"
 wayland = "./target/release/radio-app"
+folder = "Media"
 audio = true

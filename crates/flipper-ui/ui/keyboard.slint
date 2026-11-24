@@ -292,6 +292,8 @@ export component TextInputBody inherits Rectangle {
     in property <length> cursor_dx;
     in property <bool> cursor_on;
     in property <bool> field_focused;
+    // False for a keyboard that types into something else, which has no field.
+    in property <bool> field_shown: true;
     // Non-empty refuses the commit and shows why.
     in property <string> warning;
     // The rest of a warning too long for one line.
@@ -352,7 +354,7 @@ export component TextInputBody inherits Rectangle {
     }
 
     // The field, sized to its text by the caller and centred here.
-    SelectorFrame {
+    if root.field_shown: SelectorFrame {
         x: root.field_x;
         y: root.field_y;
         frame_w: root.field_w;
@@ -363,7 +365,7 @@ export component TextInputBody inherits Rectangle {
         fill_color: FlipperTheme.disabled_bg;
         stroke: false;
     }
-    if root.field_focused: SelectorFrame {
+    if root.field_shown && root.field_focused: SelectorFrame {
         x: root.field_x - 1px;
         y: root.field_y - 1px;
         frame_w: root.field_w + 2px;
@@ -373,7 +375,7 @@ export component TextInputBody inherits Rectangle {
         filled: false;
         stroke: true;
     }
-    if root.field_focused: SelectorFrame {
+    if root.field_shown && root.field_focused: SelectorFrame {
         x: root.field_x;
         y: root.field_y;
         frame_w: root.field_w;
@@ -384,7 +386,7 @@ export component TextInputBody inherits Rectangle {
         stroke: true;
     }
 
-    Text {
+    if root.field_shown: Text {
         x: root.field_x + FlipperTheme.kb_input_pad;
         y: root.field_y
             + Math.floor((FlipperTheme.kb_input_h - FlipperTheme.kb_text_ink_h) / 2 / 1px) * 1px;
@@ -392,7 +394,7 @@ export component TextInputBody inherits Rectangle {
         font-size: 16px;
         color: FlipperTheme.black;
     }
-    if root.cursor_on: Rectangle {
+    if root.field_shown && root.cursor_on: Rectangle {
         x: root.field_x + FlipperTheme.kb_input_pad + root.cursor_dx;
         y: root.field_y
             + Math.floor((FlipperTheme.kb_input_h - FlipperTheme.kb_text_ink_h) / 2 / 1px) * 1px;

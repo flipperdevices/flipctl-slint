@@ -19,7 +19,7 @@
 #                                     (on its own: push them and build nothing)
 #   ./build_deploy.sh --app NAME      push only NAME, as --apps would: a bundle by its
 #                                     directory under apps/, a script by its path there
-#                                     ("Test Tools/ping.fap.py"). Repeatable
+#                                     ("Network/ping.fap.py"). Repeatable
 #   ./build_deploy.sh --no-run        build only, install nothing, restart nothing
 #   ./build_deploy.sh --status        report what is running, change nothing
 #
@@ -332,7 +332,7 @@ if [ "$RUN" = no ]; then
     exit 0
 fi
 
-ARGS="--remote 0.0.0.0:$PORT --assets $SHARE/assets/remote"
+ARGS="--remote [::]:$PORT --assets $SHARE/assets/remote"
 [ -n "$PEER" ] && ARGS="$ARGS --peer $PEER"
 if [ "$MODE" = panel ]; then
     # The panel is single-owner. cog holds card0 and has to let go first, and the
@@ -394,6 +394,12 @@ run "sudo tee /etc/udev/rules.d/70-flipctl-devices.rules >/dev/null && \
 run "sudo tee /etc/modules-load.d/flipctl-devices.conf >/dev/null && \
      sudo systemctl restart systemd-modules-load.service" \
     < "$SYSD/flipctl-devices.conf"
+# WirePlumber reads its rules when it starts, so it is restarted when this one changes
+run "f=/etc/wireplumber/wireplumber.conf.d/60-flipctl-uac2.conf; new=\$(cat); \
+     if [ \"\$new\" != \"\$(cat \"\$f\" 2>/dev/null)\" ]; then sudo mkdir -p \"\${f%/*}\" && \
+     printf '%s\n' \"\$new\" | sudo tee \"\$f\" >/dev/null && \
+     XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user try-restart wireplumber; fi" \
+    < "$SYSD/60-flipctl-uac2.conf"
 
 # The unit itself, where the machine has none. Stock profiles do not ship it -- it has
 # always been installed by hand -- so a deploy onto a freshly installed profile otherwise

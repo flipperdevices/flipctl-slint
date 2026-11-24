@@ -415,6 +415,16 @@ pub struct Placed {
     pub clip_h: i32,
 }
 
+/// What a keys-only keyboard was asked to type, for the app to send on.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Typed {
+    Text(String),
+    Backspace,
+    /// The ▲ and ▼ cells, which a field has no use for and an app may.
+    Up,
+    Down,
+}
+
 /// The text-input screen: a title, the field, the keyboard and the two tabs.
 pub struct TextInput {
     pub title: String,
@@ -445,6 +455,10 @@ pub struct TextInput {
     pub discard: Option<usize>,
     /// Where the finger went down, while one is down.
     tp: Option<Anchor>,
+    /// No field: every key is handed to the app as it is pressed, for a keyboard
+    /// that types into something else. The title line is the app's to use.
+    keys_only: bool,
+    typed: Vec<Typed>,
 }
 
 /// canvas.js drawKeyboard, the press flash on a cell.
@@ -535,7 +549,20 @@ impl TextInput {
             blink: std::time::Instant::now(),
             discard: None,
             tp: None,
+            keys_only: false,
+            typed: Vec::new(),
         }
+    }
+
+    /// A keyboard with no field, whose keys go to the app: [`TextInput::take_typed`]
+    /// has them. `title` is the line above the keys.
+    pub fn keys(title: &str) -> Self {
+        Self { keys_only: true, ..Self::new(title, "") }
+    }
+
+    /// What was typed since the last look, in order.
+    pub fn take_typed(&mut self) -> Vec<Typed> {
+        std::mem::take(&mut self.typed)
     }
 
     /// A touchpad report. Returns whether the finger crossed onto a different
@@ -577,6 +604,8 @@ impl TextInput {
         let target_across = steps(t.x - anchor.x, TP_X_UNITS_PER_STEP);
         let target_col = anchor.col + target_across;
 
+        // With no field, the top row is as far up as a stroke goes
+        let target_row = if self.keys_only { target_row.max(0) } else { target_row };
         if target_row < 0 {
             if self.focus == Focus::Field {
                 // Already up here: the column delta is a cursor delta.
@@ -710,6 +739,10 @@ impl TextInput {
     }
 
     fn insert(&mut self, s: &str) {
+        if self.keys_only {
+            self.typed.push(Typed::Text(s.to_string()));
+            return;
+        }
         let at = self.text.char_indices().nth(self.cursor).map_or(self.text.len(), |(i, _)| i);
         self.text.insert_str(at, s);
         self.cursor += s.chars().count();
@@ -717,6 +750,10 @@ impl TextInput {
     }
 
     fn backspace(&mut self) {
+        if self.keys_only {
+            self.typed.push(Typed::Backspace);
+            return;
+        }
         if self.cursor == 0 {
             return;
         }
@@ -752,6 +789,8 @@ impl TextInput {
                     Shift::Off
                 };
             }
+            Kind::NavUp if self.keys_only => self.typed.push(Typed::Up),
+            Kind::NavDown if self.keys_only => self.typed.push(Typed::Down),
             Kind::Lang | Kind::NavUp | Kind::NavDown => {}
             Kind::Backspace => self.backspace(),
             Kind::SwitchSym => {
@@ -880,7 +919,9 @@ impl TextInput {
                     FlipperKey::Left => self.move_to(self.row, (self.col + len - 1) % len),
                     FlipperKey::Right => self.move_to(self.row, (self.col + 1) % len),
                     FlipperKey::Up => {
-                        if self.row == 0 {
+                        if self.row == 0 && self.keys_only {
+                            // No field to go up to
+                        } else if self.row == 0 {
                             // Nothing above the top row but the field.
                             self.focus = Focus::Field;
                             self.cursor = self.text.chars().count();
@@ -1157,6 +1198,8 @@ pub struct View {
     pub cursor_dx: f32,
     pub cursor_on: bool,
     pub field_focused: bool,
+    /// False for a keys-only keyboard, which has no field to draw.
+    pub field_shown: bool,
     pub warning: String,
     pub cells: Vec<Placed>,
     pub chrome: (f32, f32, f32, f32),
@@ -1183,6 +1226,7 @@ impl TextInput {
             cursor_dx: fitted.cursor_dx as f32,
             cursor_on,
             field_focused: self.focus == Focus::Field,
+            field_shown: !self.keys_only,
             warning: warning.to_string(),
             cells: self.placed(),
             chrome: (cx as f32, cy as f32, cw as f32, ch as f32),
@@ -1192,5 +1236,28 @@ impl TextInput {
             tab_pressed: self.tab_pressed(),
             discard: self.discard.map_or(-1, |at| at as i32),
         }
+    }
+}
+
+#[cfg(test)]
+mod keys_only_tests {
+    use super::*;
+
+    /// A keys-only keyboard hands each key over instead of editing a field, and Up
+    /// from the top row stays on the keys.
+    #[test]
+    fn keys_go_to_the_app() {
+        let mut kb = TextInput::keys("USB-C1: connected");
+        let first = kb.cell(kb.row, kb.col).map(|c| c.text.to_string()).unwrap();
+        kb.key(FlipperKey::Ok, true);
+        kb.key(FlipperKey::Edit, true);
+        assert_eq!(kb.take_typed(), [Typed::Text(first), Typed::Backspace]);
+        assert_eq!(kb.text, "", "nothing kept");
+        assert!(kb.take_typed().is_empty(), "taken once");
+        kb.row = 0;
+        kb.key(FlipperKey::Up, true);
+        assert_eq!(kb.focus, Focus::Keys);
+        assert!(!kb.view("", false).field_shown);
+        assert!(TextInput::new("t", "").view("", false).field_shown);
     }
 }

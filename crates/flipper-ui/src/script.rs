@@ -91,10 +91,39 @@ pub fn read(
         path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let src = format!("{block}\nwayland = \"{name}\"\nruntime = \"{extension}\"\n");
     let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let app = app::parse_manifest(&src, fallback, group, dir, path.to_path_buf(), key.to_string())
-        .ok_or(Skip::NotOurs)?;
+    let mut app =
+        app::parse_manifest(&src, fallback, group, dir, path.to_path_buf(), key.to_string())
+            .ok_or(Skip::NotOurs)?;
+    unpack_icon(&mut app);
     crate::logline!("scripts        {key}: {}", app.name);
     Ok(app)
+}
+
+/// How an icon carried in the block itself starts.
+const EMBEDDED_PNG: &str = "data:image/png;base64,";
+
+/// An icon embedded in the block, decoded into the app's cache directory, where a
+/// bundle's icon goes too, so the rest of flipctl sees a file like any other. Written
+/// only when it changed, since the list's icon cache goes by the file's mtime. One
+/// that is not a PNG is no icon.
+fn unpack_icon(app: &mut AppEntry) {
+    use base64::Engine;
+
+    let Some(data) = app.icon.strip_prefix(EMBEDDED_PNG) else { return };
+    let decoded = base64::engine::general_purpose::STANDARD.decode(data.trim());
+    app.icon.clear();
+    let Some(bytes) = decoded.ok().filter(|b| b.starts_with(b"\x89PNG\r\n\x1a\n")) else {
+        crate::logline!("scripts        {}: the embedded icon is not a PNG", app.key);
+        return;
+    };
+    let dir = crate::bundle::cache_dir(&app.key);
+    let file = dir.join("icon.png");
+    if std::fs::read(&file).ok().as_deref() != Some(&bytes[..])
+        && std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, &bytes)).is_err()
+    {
+        return;
+    }
+    app.icon = file.to_string_lossy().into_owned();
 }
 
 /// The first `HEAD` bytes, as text.

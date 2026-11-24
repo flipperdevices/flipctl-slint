@@ -60,8 +60,9 @@ export struct DropItem {
 //
 // Two passes of the same string at the same place, each clipped to one side of
 // the fill's edge, so the eye reads one label that changes colour part way
-// through a glyph. A plain chip has no fill and takes only the black pass.
-component SplitText {
+// through a glyph. A plain chip has no fill and takes only the black pass. A menu
+// row's level bar is the same chip at a width of its own.
+export component SplitText {
     in property <string> text;
     // From the chip's left edge, which is this component's own left edge.
     in property <length> text_x;

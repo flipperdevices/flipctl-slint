@@ -407,7 +407,7 @@ impl App for Fpv {
             (View::Tune, Key::Up) => self.levels.brightness_by(1),
             (View::Tune, Key::Down) => self.levels.brightness_by(-1),
             (View::Tune, Key::Edit) => self.levels = Levels::DEFAULT,
-            (View::Tune, Key::Escape) => self.show(View::Setup),
+            (View::Tune, Key::Escape | Key::Back) => self.show(View::Setup),
             (View::Tune, _) => return false,
             (_, Key::View) if self.view != View::Setup => self.send(Command::Scan),
             (View::Video, Key::Left) => self.step(&s, -1),
@@ -423,7 +423,9 @@ impl App for Fpv {
                 self.show(View::Video);
             }
             (View::Setup, Key::Left | Key::Right | Key::Ok) => self.change(&s, ui.selected(), key),
-            (View::Channels | View::Info | View::Setup, Key::Escape) => self.show(View::Video),
+            (View::Channels | View::Info | View::Setup, Key::Escape | Key::Back) => {
+                self.show(View::Video)
+            }
             _ => return false,
         }
         true

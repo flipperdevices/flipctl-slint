@@ -8,9 +8,13 @@
 # Nothing is bundled with it: the app ships no media, so what it plays is whatever
 # you put on the device.
 name = "Video Player"
+icon = "icon.png"
 wayland = "./AppRun"
 apt = ["mpv"]
 # The sound server, and with it the sink pinned to the panel's speaker rather than
 # whatever the desktop last plugged in.
 audio = true
 folder = "Media"
+# Back sends it straight to the background: the program has no steps of its own
+# to go back through and cannot ask flipctl for the background itself.
+back_leaves = true

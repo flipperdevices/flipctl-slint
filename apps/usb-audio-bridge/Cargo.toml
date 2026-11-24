@@ -1,0 +1,28 @@
+[workspace]
+
+[package]
+name = "usb-audio-bridge-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+flipctl-app = { path = "../../crates/flipctl-app" }
+libc = "0.2"
+serde_json = "1"
+# MP3 for recordings, LAME built from source by `cc` and linked statically as the
+# voice recorder has it, so the binary still needs only libc, libm and libgcc_s.
+mp3lame-encoder = { version = "0.3", default-features = false, features = ["std"] }
+slint = { version = "1.17", default-features = false, features = [
+    "compat-1-2", "backend-winit-wayland", "renderer-software", "std" ] }
+
+[dev-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["render"] }
+
+[build-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
+
+[profile.release]
+opt-level = "z"
+strip = true

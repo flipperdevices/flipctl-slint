@@ -735,6 +735,15 @@ impl BootMenu {
 }
 
 impl BootMenu {
+    /// Whether nothing is running that leaving would hide the end of: no action in
+    /// its Busy popup and no boot or reboot under way. A popup that only shows or
+    /// asks something is left with the menu.
+    pub fn can_leave(&self) -> bool {
+        !matches!(self.popup, Some(Popup::Busy(..)))
+            && self.booting.is_none()
+            && self.rebooting.is_none()
+    }
+
     /// A key. Every one of them stops the countdown first: a person pressing buttons
     /// is not waiting for the default to be chosen for them.
     pub fn key(&mut self, event: KeyEvent) -> Outcome {
