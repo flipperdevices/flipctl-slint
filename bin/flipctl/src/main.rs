@@ -277,7 +277,10 @@ mod demo {
             .filter(|r| match r.act {
                 Act::Boot => flipper_ui::boot::available(),
                 Act::Apps | Act::Manager => can_host_apps(),
-                Act::Flipctl2 => flipper_ui::old_flipctl_loader::available(),
+                Act::Flipctl2 => {
+                    flipper_ui::settings::debug_mode()
+                        && flipper_ui::old_flipctl_loader::available()
+                }
                 Act::Sub(m) if std::ptr::eq(m, &LEDS) => flipper_ui::leds::available(),
                 _ => true,
             })
@@ -338,6 +341,9 @@ mod demo {
         /// Flip airplane mode. Responds to left, right and ok alike, because the
         /// prototype routes all three into `onToggle`.
         Airplane,
+        /// Flip debug mode, which shows Testing in the main menu. Saved, so it
+        /// survives a reboot.
+        DebugMode,
         /// The app list, which this binary discovers at startup rather than
         /// declaring in the table.
         Apps,
@@ -424,6 +430,8 @@ mod demo {
         UsbPower,
         /// An LED group's brightness, between chevrons.
         Led(Group),
+        /// `< ON >` / `< OFF >` for debug mode.
+        DebugMode,
     }
 
     pub struct Row {
@@ -491,6 +499,7 @@ mod demo {
             Row { label: "OS Profiles", icon: 0, frames: 1, stat: Stat::None, act: Act::Boot },
             Row { label: "Update FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Profile) },
             Row { label: "Reinstall FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
+            Row { label: "Debug Mode", icon: 0, frames: 1, stat: Stat::DebugMode, act: Act::DebugMode },
             Row { label: "Reboot", icon: 0, frames: 1, stat: Stat::None, act: Act::Reboot },
             Row { label: "Shutdown", icon: 0, frames: 1, stat: Stat::None, act: Act::Shutdown },
         ],
@@ -542,6 +551,9 @@ mod demo {
             Stat::None => String::new(),
             // MenuLine keys its chevron layout off this exact string.
             Stat::Airplane => if net.airplane { "< ON >" } else { "< OFF >" }.into(),
+            Stat::DebugMode => {
+                if flipper_ui::settings::debug_mode() { "< ON >" } else { "< OFF >" }.into()
+            }
             Stat::Wifi => {
                 if !net.wifi_enabled {
                     "OFF".into()
@@ -5166,6 +5178,36 @@ fn panel(
         }};
     }
 
+    // Flip a toggle row. Debug Mode adds or drops Testing in the main menu, so each
+    // level of the stack is pointed back at the row it had selected.
+    macro_rules! toggle {
+        ($row:expr) => {{
+            match $row.act {
+                demo::Act::DebugMode => {
+                    let held: Vec<_> = stack
+                        .iter()
+                        .map(|(menu, sel, _)| demo::rows(menu).get(*sel as usize).copied())
+                        .collect();
+                    let on = !flipper_ui::settings::debug_mode();
+                    flipper_ui::settings::set_debug_mode(on);
+                    eprintln!("settings       debug mode {}", if on { "on" } else { "off" });
+                    for ((menu, sel, scroll), row) in stack.iter_mut().zip(held) {
+                        let Some(row) = row else { continue };
+                        if let Some(at) =
+                            demo::rows(menu).iter().position(|r| std::ptr::eq(*r, row))
+                        {
+                            let moved = at as i32 - *sel;
+                            *sel += moved;
+                            *scroll = (*scroll + moved).max(0);
+                        }
+                    }
+                    demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
+                }
+                _ => net.set_airplane(!net_now.airplane),
+            }
+        }};
+    }
+
     // The home screen, from wherever we are: what Back would drop on the way out of
     // each screen, dropped at once, and the menu back to its top. Esc does this from
     // our own screens, and an app does it with `POST /home` for an Esc it leaves.
@@ -7313,7 +7355,7 @@ fn panel(
             let Some(row) = visible.get(selected as usize).copied() else {
                 continue;
             };
-            let is_toggle = matches!(row.act, demo::Act::Airplane);
+            let is_toggle = matches!(row.act, demo::Act::Airplane | demo::Act::DebugMode);
             let led = match row.act {
                 demo::Act::Led(group) => Some(group),
                 _ => None,
@@ -7350,7 +7392,7 @@ fn panel(
                 // The chevron flashes rather than the whole row: nothing is being
                 // opened, so the selector must not fill.
                 (true, FlipperKey::Left) | (true, FlipperKey::Right) if is_toggle => {
-                    net.set_airplane(!net_now.airplane);
+                    toggle!(row);
                     arrow = Some((
                         if event.key == FlipperKey::Left { 1 } else { 2 },
                         Instant::now() + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
@@ -7377,9 +7419,7 @@ fn panel(
                 (true, FlipperKey::Ok) | (true, FlipperKey::Run) if led.is_some() => {}
                 // A toggle flips on ok too, with no press flash and no scene
                 // change, matching the onToggle branch in submenu.js.
-                (true, FlipperKey::Ok) | (true, FlipperKey::Run) if is_toggle => {
-                    net.set_airplane(!net_now.airplane);
-                }
+                (true, FlipperKey::Ok) | (true, FlipperKey::Run) if is_toggle => toggle!(row),
                 (true, FlipperKey::Ok) | (true, FlipperKey::Run) => {
                     // The 30ms flash comes first and the row acts when it ends,
                     // so the inverted row is always drawn at least once.
@@ -8171,7 +8211,7 @@ fn panel(
                             }
                         }
                         // Changed in place by the key itself, with no flash to wait out.
-                        demo::Act::Airplane | demo::Act::Led(_) => {}
+                        demo::Act::Airplane | demo::Act::DebugMode | demo::Act::Led(_) => {}
                     }
                 }
             }

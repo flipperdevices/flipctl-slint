@@ -832,3 +832,9 @@ retransmits all 37152 bytes per commit, and the only advertised format is
 `XRGB8888`, so userspace expands greyscale to 32bpp and the kernel converts it
 straight back. Together these account for most of the ~4 ms of non-SPI commit
 time.
+
+## Debug Mode hides Testing, 2026-11-24
+
+Settings has a Debug Mode toggle, off by default, and the main menu shows Testing
+only while it is on. The prototype has neither. The value is saved as
+`debug_mode = true` in `~/.config/flipctl/settings.conf`, so it survives a reboot.

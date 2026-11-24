@@ -41,6 +41,7 @@ pub mod remote;
 pub mod route_watch;
 pub mod scale;
 pub mod script;
+pub mod settings;
 #[cfg(feature = "slint")]
 pub mod slint_render;
 pub mod status;
