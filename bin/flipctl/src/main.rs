@@ -344,12 +344,9 @@ mod demo {
         /// browser that draws that one. There is no way back from the panel,
         /// which is what makes it a testing row rather than a menu entry.
         Flipctl2,
-        /// A scene the prototype has and this port does not. Named so the dialog
-        /// can say which one, rather than the row silently doing nothing.
+        /// A row with nothing behind it yet. It says so, with its own name, rather
+        /// than silently doing nothing.
         Unported,
-        /// The prototype has no factory for this row either, so pressing it is a
-        /// no-op there too. Kept distinct from `Unported`: nothing is missing.
-        Nothing,
     }
 
     /// Which detail screen a row opens.
@@ -507,7 +504,7 @@ mod demo {
         rows: &[
             Row { label: "Desktop Computer", icon: 1, frames: 1, stat: Stat::None, act: Act::Unported },
             Row { label: "Apps", icon: 3, frames: 9, stat: Stat::None, act: Act::Apps },
-            Row { label: "Files", icon: 4, frames: 10, stat: Stat::None, act: Act::Nothing },
+            Row { label: "Files", icon: 4, frames: 10, stat: Stat::None, act: Act::Unported },
             Row { label: "Network", icon: 5, frames: 10, stat: Stat::None, act: Act::Sub(&NETWORK) },
             Row { label: "Testing: flipctl2", icon: 6, frames: 9, stat: Stat::None, act: Act::Flipctl2 },
             Row { label: "Settings", icon: 7, frames: 10, stat: Stat::None, act: Act::Sub(&SETTINGS) },
@@ -1982,7 +1979,7 @@ mod detail {
     /// modem5g.js, in its own row order: identity, signal, cell, then the link.
     fn modem_rows(m: &Modem) -> Vec<DetailRow> {
         if !m.available {
-            return vec![row("Modem", "Not available")];
+            return vec![row("Modem", "Not installed")];
         }
         let dash = |s: &str| if s.is_empty() { "--".to_string() } else { s.to_string() };
         // techLabel in the prototype uppercases whatever ModemManager reports.
@@ -5117,6 +5114,35 @@ fn panel(
         };
     }
 
+    // Open one of the detail screens from the menu row under the cursor.
+    macro_rules! open_detail {
+        ($which:expr) => {{
+            let which: demo::Detail = $which;
+            live = Some(detail::Live::open(which));
+            parked = None;
+            detail_offset = 0;
+            detail_qr = false;
+            // Build the rows now rather than waiting for the poller: its first fetch
+            // can equal the value the watch started with, in which case it never
+            // reports dirty and the previous screen's rows would stay.
+            detail_dirty = true;
+            applying = detail::Applying::No;
+            apply_rx = None;
+            // Push the crumb so the trail reads "> Settings > Battery info", which is
+            // what the prototype's stack-derived breadcrumb gives.
+            stack.last_mut().unwrap().1 = selected;
+            stack.last_mut().unwrap().2 = scroll;
+            let trail = demo::crumb(&stack, which.title());
+            screen.set_breadcrumb(trail.as_str().into());
+            screen.set_screen(if which == demo::Detail::Ethernet {
+                Screen::Ethernet
+            } else {
+                Screen::Detail
+            });
+            eprintln!("detail         {}", which.title());
+        }};
+    }
+
     // The home screen, from wherever we are: what Back would drop on the way out of
     // each screen, dropped at once, and the menu back to its top. Esc does this from
     // our own screens, and an app does it with `POST /home` for an Esc it leaves.
@@ -7419,12 +7445,7 @@ fn panel(
                     } else if slot == Some(4) && d.act == DialogAct::ClearAirplane {
                         net.set_airplane(false);
                         // menu.js proceeds to the action the dialog interrupted.
-                        dialog = Some(Dialog {
-                            lines: vec!["5G Modem".into(), "is not ported yet".into()],
-                            left: "Back",
-                            right: "",
-                            act: DialogAct::None,
-                        });
+                        open_detail!(demo::Detail::Modem);
                     } else if let DialogAct::Install(idx) = d.act {
                         // Confirmed, or backed out of. The queue is the runtime first
                         // and the app second, so a script is never on the device
@@ -8043,32 +8064,21 @@ fn panel(
                             press.cancel();
                             eprintln!("screen         apps");
                         }
-                        demo::Act::Detail(which) => {
-                            live = Some(detail::Live::open(*which));
-                            parked = None;
-                            detail_offset = 0;
-                            detail_qr = false;
-                            // Build the rows now rather than waiting for the
-                            // poller: its first fetch can equal the value the
-                            // watch started with, in which case it never reports
-                            // dirty and the previous screen's rows would stay.
-                            detail_dirty = true;
-                            applying = detail::Applying::No;
-                            apply_rx = None;
-                            // Push the crumb so the trail reads
-                            // "> Settings > Battery info", which is what the
-                            // prototype's stack-derived breadcrumb gives.
-                            stack.last_mut().unwrap().1 = selected;
-                            stack.last_mut().unwrap().2 = scroll;
-                            let trail = demo::crumb(&stack, which.title());
-                            screen.set_breadcrumb(trail.as_str().into());
-                            screen.set_screen(if *which == demo::Detail::Ethernet {
-                                Screen::Ethernet
-                            } else {
-                                Screen::Detail
+                        // The prototype blocks this row while airplane mode is on
+                        // and offers to turn it off, rather than opening a modem
+                        // whose radio is off.
+                        demo::Act::Detail(demo::Detail::Modem) if net_now.airplane => {
+                            dialog = Some(Dialog {
+                                lines: vec![
+                                    "To use 5G Modem you need".into(),
+                                    "to turn off Airplane mode".into(),
+                                ],
+                                left: "Cancel",
+                                right: "Turn off",
+                                act: DialogAct::ClearAirplane,
                             });
-                            eprintln!("detail         {}", which.title());
                         }
+                        demo::Act::Detail(which) => open_detail!(*which),
                         // The Wi-Fi page, with its two pollers. They start here and
                         // stop when the page is left, which is what wifi.js's
                         // enter() and exit() do: a scan list and the saved profiles
@@ -8125,25 +8135,11 @@ fn panel(
                             eprintln!("action         flipctl2");
                             flipper_ui::old_flipctl_loader::start();
                         }
-                        // The prototype blocks this row while airplane mode is on
-                        // and offers to turn it off, rather than failing silently.
-                        demo::Act::Unported if row.label == "5G Modem" && net_now.airplane => {
-                            dialog = Some(Dialog {
-                                lines: vec![
-                                    "To use 5G Modem you need".into(),
-                                    "to turn off Airplane mode".into(),
-                                ],
-                                left: "Cancel",
-                                right: "Turn off",
-                                act: DialogAct::ClearAirplane,
-                            });
-                        }
                         // Say so rather than doing nothing: a row that swallows
-                        // the key looks like a bug, and the prototype does have a
-                        // scene here.
+                        // the key looks like a bug.
                         demo::Act::Unported => {
                             dialog = Some(Dialog {
-                                lines: vec![row.label.into(), "is not ported yet".into()],
+                                lines: vec![row.label.into(), "Not implemented".into()],
                                 left: "Back",
                                 right: "",
                                 act: DialogAct::None,
@@ -8154,8 +8150,8 @@ fn panel(
                                 ask_usb_power!(port);
                             }
                         }
-                        // No factory in the prototype either.
-                        demo::Act::Nothing | demo::Act::Airplane | demo::Act::Led(_) => {}
+                        // Changed in place by the key itself, with no flash to wait out.
+                        demo::Act::Airplane | demo::Act::Led(_) => {}
                     }
                 }
             }
