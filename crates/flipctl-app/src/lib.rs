@@ -129,6 +129,10 @@ pub fn attach(
     // toggle could not stand in for it - the panel repeats a held key, so a toggle flips the
     // link on and off for as long as the button is held.
     let up = Rc::new(RefCell::new(released));
+    // Soft keys whose press flash has not fired yet, and whether the finger went up inside
+    // it. A tap can be shorter than the flash, and the release would otherwise reach the app
+    // before the press - so a held-means-something button ends up up before it was down.
+    let pending: Rc<RefCell<Vec<(Key, bool)>>> = Rc::new(RefCell::new(Vec::new()));
     let act = move |key: Key| {
         if !(act.borrow_mut())(key) {
             unused(key, CLOSE);
@@ -145,7 +149,21 @@ pub fn attach(
             });
         }
         if !down {
-            (up.borrow_mut())(key);
+            // A key still inside its flash has not acted yet, so the release waits for it
+            // and is delivered when the press is. Every other key is told at once.
+            let waiting = {
+                let mut waiting = pending.borrow_mut();
+                match waiting.iter_mut().find(|(k, _)| *k == key) {
+                    Some(entry) => {
+                        entry.1 = true;
+                        true
+                    }
+                    None => false,
+                }
+            };
+            if !waiting {
+                (up.borrow_mut())(key);
+            }
             return;
         }
         let Some(slot) = key.soft_slot() else {
@@ -153,11 +171,30 @@ pub fn attach(
             return;
         };
         set_slot(slot as i32);
-        let (set_slot, act) = (set_slot.clone(), act.clone());
+        {
+            // A repeated press is one press as far as this is concerned: the panel repeats a
+            // held key, and a second entry would act twice on it.
+            let mut waiting = pending.borrow_mut();
+            if !waiting.iter().any(|(k, _)| *k == key) {
+                waiting.push((key, false));
+            }
+        }
+        let (set_slot, act, up, pending) =
+            (set_slot.clone(), act.clone(), up.clone(), pending.clone());
         let flash = std::time::Duration::from_millis(theme::timing::PRESS_FLASH_MS as u64);
         slint::Timer::single_shot(flash, move || {
             set_slot(-1);
             act(key);
+            let early = {
+                let mut waiting = pending.borrow_mut();
+                match waiting.iter().position(|(k, _)| *k == key) {
+                    Some(i) => waiting.remove(i).1,
+                    None => false,
+                }
+            };
+            if early {
+                (up.borrow_mut())(key);
+            }
         });
     }));
     Attached { _status: poll_status(set_status) }

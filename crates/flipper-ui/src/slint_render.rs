@@ -106,31 +106,7 @@ impl Platform for FlipperSlintPlatform {
 /// re-transmitting an identical frame over SPI. `into` is reused across frames
 /// so the steady state allocates nothing.
 pub fn render_into(window: &MinimalSoftwareWindow, into: &mut Vec<Gray8>) -> Option<Rect> {
-    let size = window.size();
-    let (w, h) = (size.width as usize, size.height as usize);
-    into.resize(w * h, Gray8::WHITE);
-
-    let region = Rc::new(RefCell::new(None));
-    let taken = {
-        let region = region.clone();
-        window.draw_if_needed(|renderer| {
-            let damaged = renderer.render(into.as_mut_slice(), w);
-            let origin = damaged.bounding_box_origin();
-            let size = damaged.bounding_box_size();
-            *region.borrow_mut() = Some(Rect::new(
-                origin.x.max(0) as u16,
-                origin.y.max(0) as u16,
-                size.width as u16,
-                size.height as u16,
-            ));
-        })
-    };
-
-    if !taken {
-        return None;
-    }
-    let damage = *region.borrow();
-    damage
+    render_rotated_into(window, RenderingRotation::NoRotation, into)
 }
 
 /// Convenience wrapper for callers that want an owned frame and do not care about
@@ -214,6 +190,7 @@ pub fn render_rotated(
 /// the other way leaves the page upside down, which is how this direction was
 /// found. It is a rotation and not a transposition - a transposition mirrors the
 /// page and the text on it reads backwards.
+#[cfg(test)]
 pub fn turn_left(frame: &[Gray8], width: usize, height: usize) -> Vec<Gray8> {
     assert_eq!(frame.len(), width * height, "the frame is not width by height");
     let mut out = vec![Gray8::WHITE; width * height];
@@ -288,19 +265,6 @@ mod tests {
         render_into(&window, &mut buffer);
         assert_eq!(buffer.len(), (w * h) as usize, "the buffer is the window's, not the panel's");
     }
-}
-
-/// Render `window` and turn the frame a quarter turn left, as a panel-shaped one.
-///
-/// A portrait screen draws into a portrait window and turns the result on its
-/// way out. This is the whole of that in one call: the app gets the frame the
-/// panel wants and never sees the portrait buffer in between.
-pub fn render_turned(
-    window: &MinimalSoftwareWindow,
-    width: usize,
-    height: usize,
-) -> Option<Vec<Gray8>> {
-    render_frame(window).map(|frame| turn_left(&frame, width, height))
 }
 
 #[cfg(test)]
@@ -397,7 +361,7 @@ mod turned {
         let ui = Portrait::new().expect("the component");
         ui.show().expect("show");
 
-        let panel = render_turned(&window, PW as usize, PH as usize).expect("a frame");
+        let panel = render_rotated(&window, RenderingRotation::Rotate270).expect("a turned frame");
         assert_eq!(panel.len(), (PW * PH) as usize, "the turned frame is the panel's");
 
         // The page's right edge, x = 143, is the panel's top row after a turn.

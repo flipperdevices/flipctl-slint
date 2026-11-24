@@ -13,17 +13,6 @@ import { PanelFonts } from "fonts.slint";
 
 export { DropRow }
 
-// The numbers a 144-wide page needs that the panel's tokens cannot supply.
-//
-// A portrait page is `panel_height` across, and a chip measured from the panel is 180 wide
-// in a 144-wide page. The values here are the page's own: a chip two thirds of the width so
-// a title like "Audio out" still fits beside it, and the row's top far enough down to clear
-// the status strip and a title line.
-export global Portrait {
-    out property <length> chip_w: 62px;
-    out property <length> row_y: 40px;
-}
-
 export component PortraitRow inherits Window {
     // The panel read the long way up: the theme's two numbers, swapped.
     width: FlipperTheme.panel_h;
@@ -33,9 +22,15 @@ export component PortraitRow inherits Window {
     // The row the app would build in Rust and hand over.
     in property <DropRow> line;
 
+    // The chip's width on a page this narrow. A portrait page is `panel_h` across, and a
+    // chip measured from the panel is 180 wide - wider than the page itself - so the caller
+    // brings the page's own number. The theme's chip is the default, which is what a page
+    // of the panel's width wants.
+    in property <length> chip_w: FlipperTheme.drop_chip_w;
+
     DropLine {
         line: root.line;
-        chip_w: Portrait.chip_w;
+        chip_w: root.chip_w;
     }
 
     // The frame around the picked row: a one-pixel outline and its shadow, which is what
@@ -45,11 +40,13 @@ export component PortraitRow inherits Window {
     // two columns it keeps clear at either edge - the same relationship `DropLine` keeps
     // between its row and the window.
     if root.line.selected: SelectorFrame {
-        x: 2px;
-        y: Portrait.row_y - 3px;
-        frame_w: root.width - 4px;
+        // The frame sits on the row's own top, and the chip inside it at `drop_top_pad`:
+        // the relationship `DropLine` keeps, and the one the app's own pages draw with.
+        x: FlipperTheme.drop_selector_x;
+        y: root.line.y;
+        frame_w: root.width - 2 * FlipperTheme.drop_selector_x;
         frame_h: FlipperTheme.drop_selector_h;
-        radius: 3px;
+        // Radius left to the component's default, which is the selector's own token.
         filled: false;
         stroke: true;
         shadow: true;

@@ -146,9 +146,3 @@ required-features = ["tui"]
 name = "portrait_ui"
 required-features = ["screens"]
 
-# The font-size probe draws with the software renderer, so it needs the same gate the
-# other rendering tests take: without it a bare `--features remote` run compiles a test
-# that imports a module the build has configured out.
-[[test]]
-name = "big_text"
-required-features = ["screens"]

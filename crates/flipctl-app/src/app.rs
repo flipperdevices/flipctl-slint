@@ -370,6 +370,15 @@ pub struct Driver<A, S> {
     pub app: A,
     pub screen: S,
     states: Vec<(i32, &'static str, Ui)>,
+    /// Keys whose press flash has not fired yet, and whether the finger has already gone
+    /// inside that window.
+    ///
+    /// A soft key is shown pressed for `PRESS_FLASH_MS` before it acts, and a tap can be
+    /// shorter than that: the release then arrives while the press is still waiting. The
+    /// app has to be told in the order the person made the events, or a press-and-hold app
+    /// is left keyed with the button already up. So a release that lands in the window is
+    /// remembered here and delivered when the press is acted on.
+    pending: Vec<(Key, bool)>,
     /// The page last drawn, which a key acts on.
     current: (i32, &'static str),
     /// Items in the menu last drawn, which the cursor wraps round.
@@ -395,6 +404,7 @@ impl<A: App, S: Screen> Driver<A, S> {
             app,
             screen,
             states: Vec::new(),
+            pending: Vec::new(),
             current: (-1, ""),
             count: 0,
             closed: false,
@@ -488,9 +498,10 @@ impl<A: App, S: Screen> Driver<A, S> {
                 _ => 2,
             });
         }
-        // The finger has gone, so tell the app before this press-only path gives up on the
-        // key. A held push-to-talk is the case that needs it: `key` only ever saw presses, so
-        // the release never arrived and the link stayed keyed.
+        // The finger has gone. A key still inside its press flash has not acted yet, so
+        // the release waits for it: telling the app now would be a button going up before
+        // it went down. Everything else is told at once - a held push-to-talk is the case
+        // that needs it, since `key` only ever sees presses.
         if !down {
             self.key_up(key);
             return Press::Ignored;
@@ -500,10 +511,12 @@ impl<A: App, S: Screen> Driver<A, S> {
         }
         if let Some(slot) = key.soft_slot() {
             self.screen.set_pressed_slot(slot as i32);
+            self.await_flash(key);
             return Press::Flash;
         }
         if key == Key::Ok && self.current.0 == 2 {
             self.screen.set_row_pressed(true);
+            self.await_flash(key);
             return Press::Flash;
         }
         self.act(key);
@@ -515,6 +528,15 @@ impl<A: App, S: Screen> Driver<A, S> {
         self.screen.set_pressed_slot(-1);
         self.screen.set_row_pressed(false);
         self.act(key);
+        // A finger that went up during the flash is told now, so the app sees the press
+        // and then the release however short the tap was.
+        let early = match self.pending.iter().position(|(k, _)| *k == key) {
+            Some(i) => self.pending.remove(i).1,
+            None => false,
+        };
+        if early {
+            self.tell_up(key);
+        }
     }
 
     /// The key has come back up.
@@ -523,6 +545,15 @@ impl<A: App, S: Screen> Driver<A, S> {
     /// only tells the app the finger is gone, and every key gets it. A held push-to-talk
     /// needs it and a menu ignores it.
     pub fn key_up(&mut self, key: Key) {
+        if let Some(entry) = self.pending.iter_mut().find(|(k, _)| *k == key) {
+            entry.1 = true;
+            return;
+        }
+        self.tell_up(key);
+    }
+
+    /// The release, actually delivered.
+    fn tell_up(&mut self, key: Key) {
         if self.closed {
             return;
         }
@@ -530,6 +561,17 @@ impl<A: App, S: Screen> Driver<A, S> {
         let mut ui = *self.state(here);
         self.app.key_up(key, &mut ui);
         self.settle(here, ui);
+    }
+
+    /// Note that `key` is inside its press flash, so a release before the flash fires is
+    /// held rather than delivered straight away.
+    ///
+    /// A key that is already waiting is left alone: the panel repeats a held key, and a
+    /// second entry would act twice on one press.
+    fn await_flash(&mut self, key: Key) {
+        if !self.pending.iter().any(|(k, _)| *k == key) {
+            self.pending.push((key, false));
+        }
     }
 
     /// The clock [`App::every`] asked for.
@@ -782,6 +824,42 @@ mod tests {
         }
     }
 
+    /// A tap shorter than a press flash: the release arrives while the press is still
+    /// waiting, and the app has to be told in the order the finger made the events. Told
+    /// the other way round, a press-and-hold app is keyed with the button already up.
+    #[test]
+    fn a_release_inside_a_press_flash_waits_for_the_press() {
+        let mut d = driver(0, 4);
+        // The fifth soft key is Run, which the test app counts.
+        assert_eq!(d.key(Key::Run, true), Press::Flash, "a soft key flashes first");
+
+        d.key_up(Key::Run);
+        assert_eq!(d.app.runs, 0, "the press has not acted yet, so nothing is keyed");
+        assert!(
+            d.app.released.is_empty(),
+            "and the release has not been delivered either: that would be up before down"
+        );
+
+        // The flash ends, which is what acts on the press.
+        d.release(Key::Run);
+        assert_eq!(d.app.runs, 1, "the press acted");
+        assert_eq!(d.app.released, vec![Key::Run], "and the release followed it, in that order");
+    }
+
+    /// The same tap, with the finger still down when the flash ends: the release must not
+    /// be invented, and the app hears nothing until the key really goes up.
+    #[test]
+    fn a_press_held_past_its_flash_is_released_when_it_goes_up() {
+        let mut d = driver(0, 4);
+        assert_eq!(d.key(Key::Run, true), Press::Flash);
+        d.release(Key::Run);
+        assert_eq!(d.app.runs, 1, "the press acted");
+        assert!(d.app.released.is_empty(), "nothing has gone up yet");
+
+        d.key_up(Key::Run);
+        assert_eq!(d.app.released, vec![Key::Run], "and now it has");
+    }
+
     fn driver(kind: i32, n: usize) -> Driver<Test, Fake> {
         let test = Test {
             kind,
@@ -826,12 +904,16 @@ mod tests {
         assert_eq!(d.app.released, [Key::Ptt], "the release never reached the app");
     }
 
-    /// Every key gets its release, not only the one an app reacted to.
+    /// Every key gets its release, not only the one an app reacted to - whether it is
+    /// delivered at once, as for a plain key, or after the flash that a soft key acts on.
     #[test]
     fn every_key_gets_its_release() {
         let mut d = driver(0, 3);
         for key in [Key::Down, Key::Up, Key::Ptt, Key::Run] {
-            d.key(key, true);
+            if d.key(key, true) == Press::Flash {
+                // The flash ends and the press acts; the release follows it.
+                d.release(key);
+            }
             d.key(key, false);
         }
         assert_eq!(d.app.released, [Key::Down, Key::Up, Key::Ptt, Key::Run]);
