@@ -54,6 +54,11 @@ SIOCGIFADDR = 0x8915
 # which leaves the rest of it dark. That is the pause between breaths.
 MU, SIGMA_IN, SIGMA_OUT = 0.30, 0.10, 0.17
 
+# The fade out drops straight to dark from here, in perceived lightness. The LED's
+# last steps are too coarse to fade through: the lowest one still reads as a fifth
+# of full, so the fade would end on a jump anyway, at a level nobody chose.
+DROP = 0.30
+
 # The adjustable settings, each a list of the values the row steps through and the
 # unit it reads in. Floor is where the breath bottoms out instead of going dark: a
 # breath that reaches zero reads as the port dropping out and coming back, and a
@@ -195,6 +200,8 @@ class Lamp:
         if self.fading:
             self.through = 1.0 if fade <= 0 else min(1.0, self.through + FRAME / fade)
             self.level = self.came_from + (self.target - self.came_from) * self.through
+            if self.state == "dark" and self.level < DROP:
+                self.level, self.through = 0.0, 1.0
         elif self.state == "link":
             self.phase = (self.phase + FRAME / period) % 1.0
             # The floor lifts the whole breath rather than clipping its bottom, so
