@@ -19,6 +19,17 @@
 //! `{"text":"..."}`, or `{"text":null}` when they cancel. Only the app in front may
 //! ask, one at a time; any other request gets `409` with `{"error":"..."}`.
 //!
+//! An app that takes Back, and is on the step Back cannot go back from, asks for the
+//! background with
+//!
+//! ```text
+//! POST /leave HTTP/1.1
+//! ```
+//!
+//! and flipctl shows the screen the app was started from. `POST /home` is the same
+//! with the home screen instead, for an Esc the app leaves. Either gets `200` with
+//! `{}`, or `409` when it is not the app in front.
+//!
 //! Not the browser view's HTTP port: that is an optional feature bound on every
 //! interface with no authentication, and a request that runs a file is not something
 //! to hang off it.
@@ -60,6 +71,11 @@ pub enum Request {
     /// Type some text for the app `pid` belongs to. HTTP only, so answered with
     /// [`Pending::typed`] and [`Pending::refused`].
     Keyboard { title: String, text: String, pid: u32 },
+    /// The app `pid` belongs to asks to go to the background: for Back with no step
+    /// left to go back, or with `home` for an Esc it leaves, which shows the home
+    /// screen rather than the one the app was started from. HTTP only, answered with
+    /// [`Pending::done`] or [`Pending::refused`].
+    Leave { pid: u32, home: bool },
 }
 
 /// One line into a request: `ping`, or `open` and an absolute path.
@@ -106,7 +122,13 @@ impl Pending {
         let _ = crate::claim::reply(&mut self.stream, 200, "OK", &body);
     }
 
-    /// The keyboard cannot be put up for this request.
+    /// An HTTP request did what it asked.
+    pub fn done(mut self) {
+        let _ = crate::claim::reply(&mut self.stream, 200, "OK", "{}");
+    }
+
+    /// An HTTP request cannot be done: the keyboard cannot be put up, or the app
+    /// asking is not the one in front.
     pub fn refused(mut self, why: &str) {
         let _ = crate::claim::reply(&mut self.stream, 409, "Conflict", &crate::claim::error(why));
     }
@@ -163,8 +185,8 @@ fn accept_loop(listener: UnixListener, tx: Sender<Pending>) {
             // The reader may hold the headers already, so they go along with the line
             let rest = reader.buffer().to_vec();
             let path = line.split(' ').nth(1).unwrap_or("");
-            if path == "/keyboard" || path.starts_with("/keyboard?") {
-                match keyboard(&line, &rest, &stream) {
+            if matches!(path, "/keyboard" | "/leave" | "/home") || path.starts_with("/keyboard?") {
+                match from_app(&line, &rest, &stream) {
                     Ok(request) => {
                         if tx.send(Pending { request, stream }).is_err() {
                             return;
@@ -197,9 +219,9 @@ fn accept_loop(listener: UnixListener, tx: Sender<Pending>) {
     }
 }
 
-/// A `/keyboard` request into what it asks, its headers read so the answer is not
-/// sent over a request still arriving.
-fn keyboard(
+/// A `/keyboard`, `/leave` or `/home` request into what it asks, its headers read so the
+/// answer is not sent over a request still arriving.
+fn from_app(
     first: &str,
     rest: &[u8],
     stream: &UnixStream,
@@ -213,9 +235,14 @@ fn keyboard(
     }
     let mut parts = first.split(' ');
     if parts.next() != Some("POST") {
-        return Err((405, "Method Not Allowed", "the keyboard is a POST"));
+        return Err((405, "Method Not Allowed", "an app asks with a POST"));
     }
-    let query = parts.next().and_then(|p| p.split_once('?')).map_or("", |(_, q)| q);
+    let target = parts.next().unwrap_or("");
+    let pid = || peer_pid(stream).ok_or((500, "Internal Server Error", "who is asking"));
+    if target == "/leave" || target == "/home" {
+        return Ok(Request::Leave { pid: pid()?, home: target == "/home" });
+    }
+    let query = target.split_once('?').map_or("", |(_, q)| q);
     let (mut title, mut text) = (String::new(), String::new());
     for pair in query.split('&').filter(|p| !p.is_empty()) {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
@@ -226,8 +253,7 @@ fn keyboard(
             _ => return Err(bad),
         }
     }
-    let pid = peer_pid(stream).ok_or((500, "Internal Server Error", "who is asking"))?;
-    Ok(Request::Keyboard { title, text, pid })
+    Ok(Request::Keyboard { title, text, pid: pid()? })
 }
 
 /// `%XX` and `+` back into what they stand for.
@@ -290,7 +316,9 @@ pub fn send_to(path: &Path, request: &Request) -> Reply {
     let line = match request {
         Request::Ping => "ping".to_string(),
         Request::Open(path) => format!("open {}", path.display()),
-        Request::Keyboard { .. } => return Reply::Refused("not a line request".into()),
+        Request::Keyboard { .. } | Request::Leave { .. } => {
+            return Reply::Refused("not a line request".into())
+        }
     };
     if writeln!(stream, "{line}").and_then(|()| stream.flush()).is_err() {
         return Reply::NotRunning;
@@ -381,6 +409,52 @@ mod tests {
         stream.read_to_string(&mut answer).unwrap();
         assert!(answer.starts_with("HTTP/1.1 200 "), "{answer}");
         assert!(answer.ends_with("{\"text\":\"10.8.0.\\\"1\"}\n"), "{answer}");
+    }
+
+    /// An app asks for the background, and the asker's pid comes with it.
+    #[test]
+    fn an_app_asks_to_leave() {
+        let path =
+            std::env::temp_dir().join(format!("flipctl-ipc-leave-{}.sock", std::process::id()));
+        let mut listener = Listener::bind_at(path.clone()).expect("bind");
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .write_all(b"POST /leave HTTP/1.1\r\nHost: flipctl\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        let pending = loop {
+            if let Some(p) = listener.poll() {
+                break p;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(pending.request, Request::Leave { pid: std::process::id(), home: false });
+        pending.done();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200 "), "{answer}");
+        assert!(answer.ends_with("{}\n"), "{answer}");
+    }
+
+    /// The same for Esc, which lands on the home screen.
+    #[test]
+    fn an_app_asks_to_go_home() {
+        let path =
+            std::env::temp_dir().join(format!("flipctl-ipc-home-{}.sock", std::process::id()));
+        let mut listener = Listener::bind_at(path.clone()).expect("bind");
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .write_all(b"POST /home HTTP/1.1\r\nHost: flipctl\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        let pending = loop {
+            if let Some(p) = listener.poll() {
+                break p;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(pending.request, Request::Leave { pid: std::process::id(), home: true });
+        pending.done();
     }
 
     #[test]

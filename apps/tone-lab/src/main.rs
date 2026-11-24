@@ -366,10 +366,9 @@ fn main() -> Result<(), slint::PlatformError> {
         }
         let mut lab = pressed.borrow_mut();
         match key {
-            // Back, which flipctl keeps for itself when it hosts the app: hosted, this
-            // arm never runs and leaving is flipctl's.
+            // One screen, so Back has no step to go back and leaves.
             Key::Back => {
-                let _ = slint::quit_event_loop();
+                flipctl_app::leave();
                 return;
             }
             Key::Left => lab.chosen = (lab.chosen + lab.knobs.len() - 1) % lab.knobs.len(),

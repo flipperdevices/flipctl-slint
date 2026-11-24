@@ -22,10 +22,12 @@
 //     app.run();
 //
 // A handler gets a key as it goes down and returns true when it used it; anything it
-// leaves is the view's: Escape closes, Up and Down scroll or move a menu's cursor. Back
-// is never seen here: it belongs to flipctl, which sends the app to the background.
-// After every key the view is drawn again from its functions, and `every` draws it on
-// a clock too.
+// leaves is the view's: Escape closes when the first button says Close and otherwise
+// sends the app to the background with flipctl showing its home screen (see `home`),
+// Back sends it to the background (see `leave`), Up and Down scroll or move a menu's
+// cursor. An app with views of its own takes Back on each but the first and shows the
+// one before. After every key the view is drawn again from its functions, and `every`
+// draws it on a clock too.
 //
 // Node's own timers and promises keep running beside the window, since the binding
 // drives the loop through libuv: an app with something to wait on does it the usual
@@ -38,8 +40,35 @@
 "use strict";
 
 const fs = require("node:fs");
+const http = require("node:http");
 const path = require("node:path");
 const slint = require("slint-ui");
+
+// Go to the background, as Back does on an app's first view: flipctl shows the screen
+// the app was opened from, and the app keeps running. Run outside flipctl, where there
+// is nothing to go back to, the app closes instead.
+function leave() {
+    away("/leave");
+}
+
+// Go to the background as `leave` does, with flipctl showing its home screen: what
+// Escape does in a view whose first button is not Close.
+function home() {
+    away("/home");
+}
+
+function away(path) {
+    const socketPath = process.env.FLIPCTL_SOCKET;
+    if (!socketPath) {
+        slint.quitEventLoop();
+        return;
+    }
+    const headers = { Host: "flipctl", "Content-Length": 0 };
+    http.request({ socketPath, method: "POST", path, headers })
+        .on("response", (res) => res.resume())
+        .on("error", (e) => console.error(`${path}: ${e.message}`))
+        .end();
+}
 
 // Where the widget library, the theme and the fonts are. The runtime sets FLIPCTL_UI
 // to its own copy; the fallback is where an image that ships the sources would put
@@ -386,8 +415,18 @@ class View {
     press(key) {
         const used = this.handler ? this.handler(key) : false;
         if (!used) {
-            if (key === Key.Escape) {
+            // What the key says it does: Close closes, and anything else is left to
+            // send the app to the background and the person home
+            if (key === Key.Escape && buttons(this.buttons)[0] === "Close") {
                 this.close();
+                return;
+            }
+            if (key === Key.Escape) {
+                home();
+                return;
+            }
+            if (key === Key.Back) {
+                leave();
                 return;
             }
             if (key === Key.Down) {
@@ -497,7 +536,9 @@ module.exports = {
     detail: (options) => new Detail(options),
     gauge,
     heading,
+    home,
     item,
+    leave,
     log: (options) => new Log(options),
     menu: (options) => new Menu(options),
     pair,

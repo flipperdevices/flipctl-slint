@@ -766,7 +766,7 @@ impl App for Bridge {
     fn key(&mut self, key: Key, ui: &mut Ui) -> bool {
         if self.viewing {
             match key {
-                Key::Escape => {
+                Key::Escape | Key::Back => {
                     self.view(false);
                     return true;
                 }

@@ -3,7 +3,9 @@
 //!
 //! [`claim`] borrows hardware: the resource is the app's for as long as the stream it
 //! returns is open, and closing it, or dying, gives it back. [`type_text`] puts
-//! flipctl's own keyboard over the app and hands back what was typed.
+//! flipctl's own keyboard over the app and hands back what was typed. [`leave`] and
+//! [`home`] ask for the background, which is what Back does once the app has no step
+//! left and what an Esc the app does not use does.
 //!
 //! ```ignore
 //! // Asked from a key, then looked for each time the page is drawn
@@ -75,6 +77,31 @@ pub fn type_text(title: &str, text: &str) -> Typing {
         crate::redraw();
     });
     Typing { answer }
+}
+
+/// Go to the background, as Back does on an app's first step: flipctl puts back the
+/// screen the app was opened from, and the app keeps running. Run outside flipctl,
+/// where there is nothing to go back to, the app closes instead.
+pub fn leave() {
+    away("/leave");
+}
+
+/// Go to the background as [`leave`] does, but with flipctl showing its home screen:
+/// what Esc does in an app that has not made it anything else.
+pub fn home() {
+    away("/home");
+}
+
+fn away(path: &'static str) {
+    if std::env::var_os("FLIPCTL_SOCKET").is_none() {
+        let _ = slint::quit_event_loop();
+        return;
+    }
+    std::thread::spawn(move || {
+        if let Err((_, why)) = post(path) {
+            eprintln!("{path}: {why}");
+        }
+    });
 }
 
 /// One POST and its answer's first line of body, or the error flipctl gave with its

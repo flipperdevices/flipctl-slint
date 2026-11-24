@@ -264,9 +264,11 @@ pub trait App {
     fn buttons(&self) -> [&str; 5];
 
     /// A key as it goes down, after a soft key or a menu row has shown it pressed.
-    /// Return true for a key the app used; one it leaves keeps its default, Escape
-    /// closing and Up and Down scrolling or moving the cursor. Back never arrives:
-    /// flipctl keeps it to send the app to the background.
+    /// Return true for a key the app used; one it leaves keeps its default: Escape
+    /// closing when the first button says Close and otherwise sending the app to the
+    /// background with flipctl showing its home screen, Back sending it to the
+    /// background, and Up and Down scrolling or moving the cursor. An app with steps of its own takes Back on every one but
+    /// the first and goes back a step.
     fn key(&mut self, key: Key, ui: &mut Ui) -> bool {
         let _ = (key, ui);
         false
@@ -359,16 +361,54 @@ pub struct Driver<A, S> {
     /// Items in the menu last drawn, which the cursor wraps round.
     count: usize,
     closed: bool,
+    /// Back or Escape was left to its default, and flipctl has yet to be asked to
+    /// take the app to the background.
+    away: Option<Away>,
+}
+
+/// Where the app asks flipctl to put the person when it goes to the background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Away {
+    /// Back on the first step: the screen the app was started from.
+    Back,
+    /// An Escape the app does not use or label Close: the home screen.
+    Home,
 }
 
 impl<A: App, S: Screen> Driver<A, S> {
     pub fn new(app: A, screen: S) -> Self {
-        Self { app, screen, states: Vec::new(), current: (-1, ""), count: 0, closed: false }
+        Self {
+            app,
+            screen,
+            states: Vec::new(),
+            current: (-1, ""),
+            count: 0,
+            closed: false,
+            away: None,
+        }
     }
 
     /// Whether the app has closed, which the event loop then leaves.
     pub fn closed(&self) -> bool {
         self.closed
+    }
+
+    /// Whether Back or Escape asked for the background since the last look, and to
+    /// go where. Taken once.
+    pub fn take_away(&mut self) -> Option<Away> {
+        self.away.take()
+    }
+
+    /// Close, or ask flipctl for the background, as the last key left it.
+    fn settle_away(&mut self) {
+        if self.closed {
+            let _ = slint::quit_event_loop();
+        }
+        match self.take_away() {
+            Some(Away::Back) => crate::leave(),
+            Some(Away::Home) => crate::home(),
+            None => {}
+        }
     }
 
     fn state(&mut self, page: (i32, &'static str)) -> &mut Ui {
@@ -480,7 +520,11 @@ impl<A: App, S: Screen> Driver<A, S> {
         let mut ui = *self.state(here);
         if !self.app.key(key, &mut ui) {
             match key {
-                Key::Escape => ui.closing = true,
+                // What the key says it does: Close closes, and anything else is
+                // left to send the app to the background and the person home
+                Key::Escape if self.app.buttons()[0] == crate::CLOSE => ui.closing = true,
+                Key::Escape => self.away = Some(Away::Home),
+                Key::Back => self.away = Some(Away::Back),
                 Key::Down => self.step(&mut ui, 1),
                 Key::Up => self.step(&mut ui, -1),
                 _ => {}
@@ -556,15 +600,11 @@ where
             slint::Timer::single_shot(flash, move || {
                 if let Some(driver) = later.upgrade() {
                     driver.borrow_mut().release(key);
-                    if driver.borrow().closed() {
-                        let _ = slint::quit_event_loop();
-                    }
+                    driver.borrow_mut().settle_away();
                 }
             });
         }
-        if driver.borrow().closed() {
-            let _ = slint::quit_event_loop();
-        }
+        driver.borrow_mut().settle_away();
     }));
 
     let hooked = Rc::downgrade(&driver);
@@ -669,6 +709,8 @@ mod tests {
         runs: u32,
         picked: Option<usize>,
         closed: bool,
+        /// The first button's label.
+        escape: &'static str,
     }
 
     impl App for Test {
@@ -684,7 +726,7 @@ mod tests {
             }
         }
         fn buttons(&self) -> [&str; 5] {
-            ["Close", "", "", "", if self.runs > 0 { "Again" } else { "Run" }]
+            [self.escape, "", "", "", if self.runs > 0 { "Again" } else { "Run" }]
         }
         fn key(&mut self, key: Key, ui: &mut Ui) -> bool {
             match key {
@@ -700,7 +742,7 @@ mod tests {
     }
 
     fn driver(kind: i32, n: usize) -> Driver<Test, Fake> {
-        let test = Test { kind, n, runs: 0, picked: None, closed: false };
+        let test = Test { kind, n, runs: 0, picked: None, closed: false, escape: "Close" };
         let mut d = Driver::new(test, Fake::default());
         d.draw();
         d
@@ -792,6 +834,26 @@ mod tests {
         d.release(Key::Escape);
         assert!(d.closed() && d.app.closed);
         assert_eq!(d.key(Key::Run, true), Press::Ignored, "nothing after closing");
+    }
+
+    #[test]
+    fn escape_not_labelled_close_goes_home_without_closing() {
+        let mut d = driver(0, 3);
+        d.app.escape = "";
+        d.draw();
+        assert_eq!(d.key(Key::Escape, true), Press::Flash);
+        d.release(Key::Escape);
+        assert_eq!(d.take_away(), Some(Away::Home));
+        assert!(!d.closed() && !d.app.closed, "still running in the background");
+    }
+
+    #[test]
+    fn back_left_to_its_default_leaves_without_closing() {
+        let mut d = driver(0, 3);
+        assert_eq!(d.key(Key::Back, true), Press::Now);
+        assert_eq!(d.take_away(), Some(Away::Back));
+        assert_eq!(d.take_away(), None, "asked once");
+        assert!(!d.closed() && !d.app.closed, "still running in the background");
     }
 
     #[test]

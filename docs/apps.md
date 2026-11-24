@@ -28,9 +28,9 @@ flipctl's bar would cover whatever it drew there:
 ## Hello world
 
 The smallest whole app: a greeting, a counter Ok or Add raises, a gauge that fills as
-it goes, the real status bar, and Close to leave. Back is not the app's: flipctl takes
-it and sends the app to the background, where it keeps running. In Rust it has a
-second page, under Draw, that it paints itself. Every rule behind it is in the
+it goes, the real status bar, and Close to leave. In Rust it has a second page, under
+Draw, that it paints itself, and Back goes from there to the first page; on the first
+page Back sends the app to the background, where it keeps running. Every rule behind it is in the
 sections that follow; this is the shape to start from.
 
 ![Hello on the panel](inventory/hello-3x.png)
@@ -69,6 +69,9 @@ The whole of an app is the `App` trait:
             match key {
                 Key::Ok | Key::Run => self.presses += 1,
                 Key::View => self.canvas = !self.canvas,
+                // A step back from Draw; on the first page Back is left to send the app
+                // to the background
+                Key::Back if self.canvas => self.canvas = false,
                 _ => return false,
             }
             true
@@ -80,8 +83,16 @@ The whole of an app is the `App` trait:
 The page is drawn again from `page()` and `buttons()` after every key. `key()` gets a
 key as it goes down, after a soft key has been shown pressed for the moment flipctl's
 own screens show it, and returns true for one it used; the rest keep their defaults,
-Escape closing and Up and Down scrolling. The window, the status bar's poll and the
+described below, and Up and Down scrolling. The window, the status bar's poll and the
 keys' wiring are `main!`'s.
+
+Back is one step back: an app with steps of its own (a page opened from another, a
+picker, a dialog) takes it on each of them and leaves it on its first page, where it
+sends the app to the background and flipctl shows the screen it was started from.
+Escape, the first soft key, does what its label says. Left to its default it closes
+the app when the label is `Close`, and otherwise sends the app to the background with
+flipctl showing its home screen. The app keeps running in the background either way;
+only Close, or the app switcher, ends it.
 
 | `Page` | Shows |
 |---|---|
@@ -150,8 +161,8 @@ leaves both pages in `target/render` as PNGs to look at; the pictures above are 
 
 The same app as one file, with nothing to build, and with the rows page only. The
 script says what the rows are and what its keys do; the window, the page, scrolling,
-the press shown on a soft key and Escape closing come from the `flipctl` module its
-runtime carries. In Python, as `hello.fap.py`:
+the press shown on a soft key and what Escape and Back do by default come from the
+`flipctl` module its runtime carries. In Python, as `hello.fap.py`:
 
     #!/usr/bin/env python3
     # /// flipctl
@@ -223,9 +234,8 @@ In JavaScript, as `hello.fap.js`:
     app.run();
 
 A handler gets each key as it goes down and returns true for one it used; the rest
-keep their defaults, Escape closing and Up and Down scrolling. After every key the
-page is drawn again from `rows`. Back never reaches an app: flipctl takes it and sends
-the app to the background.
+keep their defaults, Escape and Back as in Rust and Up and Down scrolling. After
+every key the page is drawn again from `rows`.
 
 There are three views, and an app may have several, each shown with `show()` in the
 one window:
@@ -284,6 +294,7 @@ drops anything, and the scan runs in a unit that can reach the GPIO and the USB 
 | `apt` | Debian packages the app needs from the device. flipctl checks them with dpkg before the first launch and offers the install. |
 | `audio` | Links the PipeWire sockets into the app's runtime directory and pins the panel's sink. |
 | `status` | flipctl paints its own status strip over the app's frame, for a program that cannot draw one. An app on the framework draws the real bar itself and leaves this off. |
+| `back_leaves` | `true` has Back send the app straight to the background, for a program not written for the panel. Leave it out otherwise: the app gets Back, goes back a step through its own screens, and on its first one asks flipctl for the background with `POST /leave`, which the framework and the runtimes do for it. |
 | `rotate` | `"left"` or `"right"` for a portrait app. |
 | `env` | Extra environment, one `"KEY=value"` per entry. Applied last, so it overrides what the launch sets. |
 | `runtime` | The runtime this app is run through, e.g. `"py"`. A bundle declaring the same word in `provides` is the launcher that runs it. A script defaults to the runtime its extension implies. An app whose runtime nothing provides is listed and refused with a sentence naming it. |
@@ -486,7 +497,7 @@ What the crate gives the app:
 | `Shell` | The 256x144 window, the panel's fonts, and the keyboard wired up. Inherit it for a page of your own. Its `key` callback is still there for a page that forwards keys itself, as the older examples do. |
 | `AppKeys` | The same keys as a global, which `Shell` also feeds, with `pressed_slot` and `arrow_pressed` beside them. A page that binds the global needs no forwarding; the pages, `attach!` and the script runtimes all work this way. |
 | `PanelStatus` | A Slint global the status bar reads. Set it once and every bar in the app shows it. |
-| `Key::from_slint` | The panel's buttons by name. They arrive as ordinary keys: the D-pad as arrows, Ok as Return, Back as Backspace, and the five soft buttons as z x c v b. A hosted app never sees Back: flipctl keeps it to send the app to the background. Close is the first soft key, Escape. |
+| `Key::from_slint` | The panel's buttons by name. They arrive as ordinary keys: the D-pad as arrows, Ok as Return, Back as Backspace, and the five soft buttons as z x c v b. Close is the first soft key, Escape. |
 | `Key::soft_slot` | Which soft key was pressed, for the pressed state on the bar. |
 | `apply_status!` | Fills `PanelStatus` from a `StatusSource`, which reads sysfs. `main!` and `attach!` do this; an app has the same access flipctl does. |
 | `picture` | A `paint::Surface` as an image, for an app that draws pixels. |

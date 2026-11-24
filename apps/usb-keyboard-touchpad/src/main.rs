@@ -245,14 +245,16 @@ fn apply(ui: &AppWindow, s: &State) {
     ui.set_state(s.state.as_str().into());
 }
 
-/// One key. Returns false when the app should close.
+/// One key. Returns false for one left to `flipctl_app::unused`: Escape closes the
+/// app and Back sends it to the background.
 fn key(s: &mut State, key: Key, down: bool) -> bool {
     if !down {
         s.kb.release(key.flipper());
         return true;
     }
     match key {
-        Key::Escape => return false,
+        // Back is back, not the keyboard's backspace
+        Key::Escape | Key::Back => return false,
         Key::Ptt => {
             s.to_host = !s.to_host;
             s.stroke = None;
@@ -314,7 +316,8 @@ fn main() -> Result<(), slint::PlatformError> {
         });
         let mut s = keyed.borrow_mut();
         if !key(&mut s, pressed, down) {
-            let _ = slint::quit_event_loop();
+            // Escape is labelled Close wherever key() leaves it
+            flipctl_app::unused(pressed, flipctl_app::CLOSE);
             return;
         }
         apply(&ui, &s);

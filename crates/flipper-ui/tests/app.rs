@@ -102,6 +102,7 @@ fn a_bundle_is_read_without_being_run() {
     assert_eq!(a.wayland, "./AppRun");
     assert_eq!(a.apt, ["mpv"]);
     assert!(a.audio && a.status);
+    assert!(!a.back_leaves, "Back goes to an app unless it says otherwise");
     assert_eq!(a.size, Some((320, 200)));
     assert_eq!(a.rotate, app::Rotate::Left);
     assert_eq!(a.env, ["FOO=bar", "X=1"]);

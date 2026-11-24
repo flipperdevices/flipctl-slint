@@ -284,6 +284,8 @@ impl App for Bench {
 
     fn key(&mut self, key: Key, _: &mut Ui) -> bool {
         match (self.view, key) {
+            // Back leaves with the run still going rather than stopping it
+            (View::Results, Key::Back) if self.running() => return false,
             (View::Results, _) if self.running() => {
                 if key == Key::Escape {
                     self.stop();
@@ -295,7 +297,7 @@ impl App for Bench {
             (View::Disks, Key::Edit) => self.next_size(),
             (View::Disks, Key::View) if self.report.is_some() => self.view = View::Results,
             (View::Disks, Key::Run) if self.can_run() => self.start(),
-            (View::Results, Key::View) => {
+            (View::Results, Key::View | Key::Back) => {
                 self.view = View::Disks;
                 self.rescan();
             }

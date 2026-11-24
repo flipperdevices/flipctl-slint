@@ -358,8 +358,8 @@ fixed here, so the page has a row for where a take plays instead: the speaker,
 HDMI, DP or any other sink plugged in. It is the app's own choice, not the system
 default. The recording panel still names the folder.
 
-**Background recording needs nothing of the app.** Back never reaches it, so a take
-keeps running while the app is in the background. The prototype's status-bar dot
+**Background recording needs nothing of the app.** Back sends it to the background
+rather than closing it, so a take keeps running there. The prototype's status-bar dot
 for a background take is not ported. Close stops a running take and finishes the
 file rather than leaving it running.
 
@@ -657,6 +657,29 @@ export is 17 rows, the device is 14, and **14 is the decision**. The reference
 test therefore compares rows 0..3 exactly and then the border-column set, both of
 which are height independent; replace the reference with a 14-row export to
 compare the whole strip again.
+
+## Back is one step back and Esc goes home, 2026-11-24
+
+From the design's Back and Esc flow: Back goes back one step, through flipctl's
+menus to the home screen and through an app's own steps to its first. On that first
+step it sends the app to the background, never closing it, and flipctl shows the
+screen the app was opened from. Only the app switcher kills an app.
+
+flipctl used to keep Back and background the app from any step. Now it goes to the
+app, which goes back a step itself and asks for the background with `POST /leave`
+when it has none left; the framework and both runtimes do that for a Back the app
+leaves. A program that cannot ask (Doom, the mpv apps) says `back_leaves = true` in
+its manifest and keeps the old behaviour.
+
+Esc, the first soft key, goes straight to the home screen from any of flipctl's own
+screens, at any depth, dropping what Back would drop on the way out of each. It no
+longer steps back, so the slot is unlabelled on those screens rather than saying
+Back, and the App Manager's Close (which also took its card) is gone with it. A
+dialog and the keyboard keep their own first button, and nothing still running is
+left: a profile update, a dependency check, a boot menu action or a boot. In an app
+Esc is an ordinary soft key and does what the app labels it: an app whose first
+button says Close is closed by it, and one that leaves Esc unlabelled and unused goes
+to the background with flipctl showing its home screen (`POST /home`).
 
 ## The keyboard's touchpad, ported 2026-09-07
 

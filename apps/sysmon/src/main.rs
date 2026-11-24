@@ -632,10 +632,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let mut m = pressed.borrow_mut();
         let was = m.page;
         match key {
-            // Back, which flipctl keeps for itself when it hosts the app: hosted, this
-            // arm never runs and leaving is flipctl's.
+            // The pages are tabs rather than steps, so Back has none to go back.
             Key::Back => {
-                let _ = slint::quit_event_loop();
+                flipctl_app::leave();
                 return;
             }
             Key::Escape => m.page = Page::Cpu,

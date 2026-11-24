@@ -31,6 +31,9 @@ impl App for Hello {
         match key {
             Key::Ok | Key::Run => self.presses += 1,
             Key::View => self.canvas = !self.canvas,
+            // A step back from Draw; on the first page Back is left to send the app
+            // to the background
+            Key::Back if self.canvas => self.canvas = false,
             _ => return false,
         }
         true

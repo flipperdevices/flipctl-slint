@@ -48,7 +48,7 @@ pub mod render;
 pub use app::{
     choice, gauge, heading, item, pair, redraw, rule, text, App, Item, Page, Row, Text, Ui,
 };
-pub use ask::{claim, type_text, Typing};
+pub use ask::{claim, home, leave, type_text, Typing};
 pub use port::device_port_name;
 
 /// The touchpad and the motor, which a hosted app opens itself: the compositor has
@@ -107,8 +107,10 @@ pub fn picture(surface: &paint::Surface) -> slint::Image {
 ///
 /// What [`attach!`] does, for the closures it makes from the app's generated types:
 /// the status bar polled every second, Left and Right lit while held, a soft key shown
-/// pressed for `press_flash_ms` before `handler` sees it, and Escape closing when the
-/// handler leaves it. Keep the result: dropping it stops the status poll.
+/// pressed for `press_flash_ms` before `handler` sees it, and Escape and Back doing
+/// what [`unused`] says when the handler leaves them, with Escape taken to be Close:
+/// the page labels its own keys, so one that means something else by it handles it.
+/// Keep the result: dropping it stops the status poll.
 pub fn attach(
     set_slot: impl Fn(i32) + 'static,
     set_arrow: impl Fn(i32) + 'static,
@@ -120,8 +122,8 @@ pub fn attach(
     use std::rc::Rc;
     let act = Rc::new(RefCell::new(handler));
     let act = move |key: Key| {
-        if !(act.borrow_mut())(key) && key == Key::Escape {
-            let _ = slint::quit_event_loop();
+        if !(act.borrow_mut())(key) {
+            unused(key, CLOSE);
         }
     };
     let set_slot = Rc::new(set_slot);
@@ -150,6 +152,24 @@ pub fn attach(
         });
     }));
     Attached { _status: poll_status(set_status) }
+}
+
+/// The label that makes an unused Escape close the app.
+pub const CLOSE: &str = "Close";
+
+/// What Escape and Back do when the app has not used them, `escape` being what the
+/// Escape key is labelled: Escape closes the app when that is [`CLOSE`], and otherwise
+/// sends it to the background with flipctl showing its home screen. Back, with no step
+/// left to go back, sends it to the background. Any other key does nothing.
+pub fn unused(key: Key, escape: &str) {
+    match key {
+        Key::Escape if escape == CLOSE => {
+            let _ = slint::quit_event_loop();
+        }
+        Key::Escape => home(),
+        Key::Back => leave(),
+        _ => {}
+    }
 }
 
 /// What [`attach`] keeps running for the app.

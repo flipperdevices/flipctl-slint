@@ -88,6 +88,13 @@ pub struct AppEntry {
     /// than drawing a picture of one, and simply loses its top 13 pixels. An app on the
     /// framework fills the real bar in itself and leaves this off.
     pub status: bool,
+    /// Whether Back sends the app straight to the background, `back_leaves = true`.
+    ///
+    /// Off by default: an app gets Back, goes back a step itself and asks flipctl
+    /// for the background with `POST /leave` when there is none left. A program not
+    /// written for the panel cannot ask, so it turns this on and flipctl keeps Back
+    /// for itself, or the app would have no way out.
+    pub back_leaves: bool,
     /// Which way the app's picture is turned relative to the panel.
     ///
     /// The panel is landscape and some apps are drawn portrait, to be read with the
@@ -110,6 +117,12 @@ pub struct AppEntry {
 }
 
 impl AppEntry {
+    /// Whether Back goes to the app when it runs through `via`. A script's keys are
+    /// its launcher's code, so the launcher's manifest is the one that says.
+    pub fn takes_back(&self, via: Option<&AppEntry>) -> bool {
+        !via.unwrap_or(self).back_leaves
+    }
+
     /// The program to run and the arguments to pass it.
     ///
     /// Through a shell, because what runs is a command line: the bundle, quoted, or
@@ -405,6 +418,7 @@ pub fn parse_manifest(
         size: py_size(src, "size"),
         audio: py_bool(src, "audio").unwrap_or(false),
         status: py_bool(src, "status").unwrap_or(false),
+        back_leaves: py_bool(src, "back_leaves").unwrap_or(false),
         rotate: match py_string(src, "rotate").unwrap_or_default().as_str() {
             "left" => Rotate::Left,
             "right" => Rotate::Right,
@@ -805,6 +819,18 @@ mod tests {
             launcher_for(&[script.clone()], &script),
             Err("needs the python runtime, which is not installed".into())
         );
+    }
+
+    /// Back goes to a script when its launcher takes it, whatever the script says.
+    #[test]
+    fn a_script_takes_back_as_its_launcher_does() {
+        let python = AppEntry { provides: "python".into(), ..Default::default() };
+        let old = AppEntry { back_leaves: true, ..Default::default() };
+        let script = AppEntry { runtime: "python".into(), back_leaves: true, ..Default::default() };
+        assert!(script.takes_back(Some(&python)));
+        assert!(!AppEntry::default().takes_back(Some(&old)));
+        assert!(AppEntry::default().takes_back(None));
+        assert!(!old.takes_back(None));
     }
 
     /// A space in a file name stays inside one shell word, with or without a launcher.

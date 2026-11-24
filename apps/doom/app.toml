@@ -14,3 +14,6 @@ icon = "icon.png"
 wayland = "./AppRun"
 audio = true
 folder = "Games"
+# Back sends it straight to the background: the program has no steps of its own
+# to go back through and cannot ask flipctl for the background itself.
+back_leaves = true

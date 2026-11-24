@@ -1390,7 +1390,7 @@ mod detail {
                     // detail screen has no cursor, so two adjustable rows would have
                     // no way to say which one left and right are for.
                     let update = if u.chosen().is_some() { "Run" } else { "" };
-                    ["Back", "Channel", "", "", update]
+                    ["", "Channel", "", "", update]
                 }
                 // Nothing while it runs: leaving would hide a run that cannot be
                 // stopped, and powering off in the middle is what it warns about.
@@ -1398,7 +1398,7 @@ mod detail {
                 Live::Profile(p) if p.finished().is_some() => {
                     let reboot =
                         if matches!(p.finished(), Some(Step::Done(_))) { "Reboot" } else { "" };
-                    ["Back", "", "", "", reboot]
+                    ["", "", "", "", reboot]
                 }
                 Live::Profile(p) if !p.loading() => {
                     let channel = match (p.forced(), &p.only) {
@@ -1409,18 +1409,18 @@ mod detail {
                     };
                     let rollback = if p.kept().is_some() { "Rollback" } else { "" };
                     let update = if p.chosen().is_some() { "Update" } else { "" };
-                    ["Back", channel, "", rollback, update]
+                    ["", channel, "", rollback, update]
                 }
                 // A long page, read a section at a time, or taken away whole as a
                 // QR code.
                 Live::System(w) => {
                     let revisions = if w.get().install.is_empty() { "" } else { "Revisions" };
-                    ["Back", revisions, "", "QR", self.next_stop(offset).map_or("", |s| s.1)]
+                    ["", revisions, "", "QR", self.next_stop(offset).map_or("", |s| s.1)]
                 }
                 Live::Revisions(_) => {
-                    ["Back", "", "", "QR", self.next_stop(offset).map_or("", |s| s.1)]
+                    ["", "", "", "QR", self.next_stop(offset).map_or("", |s| s.1)]
                 }
-                _ => ["Back", "", "", "", ""],
+                _ => ["", "", "", "", ""],
             }
         }
 
@@ -2767,6 +2767,30 @@ struct WlApp {
     status: bool,
     /// Which edge is the app's own top, so the bar goes there rather than on ours.
     rotate: flipper_ui::Rotate,
+    /// Whether Back goes to the app, which asks for the background itself.
+    takes_back: bool,
+}
+
+/// Where flipctl goes when the app in front goes to the background.
+#[cfg(feature = "wayland")]
+#[derive(Clone, Copy)]
+enum Away {
+    /// Back on the app's first step: the screen it was started from.
+    Back,
+    /// AppSwitch: the deck, over the screen it was started from.
+    Deck,
+    /// An Esc the app left: the home screen.
+    Home,
+}
+
+#[cfg(feature = "wayland")]
+impl WlApp {
+    /// Whether `pid` is this app: the process started for it, or one under it, since
+    /// the program is a grandchild of that one in a bundle.
+    fn owns(&self, pid: u32) -> bool {
+        let started = self.session.pid();
+        pid == started || flipper_ui::app::ancestors(pid).contains(&started)
+    }
 }
 
 /// The arguments saved for `name`'s next start, taken so they go to that start only.
@@ -2890,6 +2914,7 @@ fn start_hosted(
                 size: (w, h),
                 status: entry.status,
                 rotate: entry.rotate,
+                takes_back: entry.takes_back(via),
             });
             Some(entry.name.clone())
         }
@@ -3539,14 +3564,11 @@ fn apply_manager(
     // not on. On Install there is nothing left to switch to, so the word changes
     // job: it moves to the last slot and becomes the action, the same one Ok does
     // on the selected row. Which list you are on is the trail's business, above.
-    let buttons: Vec<String> = if install {
-        ["Close", "", "", "", "Install"]
-    } else {
-        ["Close", "", "", "Install", "View"]
-    }
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
+    let buttons: Vec<String> =
+        if install { ["", "", "", "", "Install"] } else { ["", "", "", "Install", "View"] }
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
     let tab = if install { "Install" } else { "View" };
     apply_app_list(
         screen,
@@ -3914,7 +3936,7 @@ fn png(
                 let rows = manager_info_rows(app);
                 screen.set_detail_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
                 let remove = if app.shipped() { "" } else { "Uninstall" };
-                screen.set_detail_buttons(demo::labels(&["Back", "", "", "Run", remove]));
+                screen.set_detail_buttons(demo::labels(&["", "", "", "Run", remove]));
                 screen.set_breadcrumb(manager_info_trail(app).as_str().into());
                 screen.set_screen(Screen::ManagerInfo);
             }
@@ -3970,7 +3992,7 @@ fn png(
                 screen.set_detail_qr(
                     open.qr_lines().and_then(|l| detail::qr_image(&l)).unwrap_or_default(),
                 );
-                screen.set_detail_buttons(demo::labels(&["Back", "", "", "", ""]));
+                screen.set_detail_buttons(demo::labels(&["", "", "", "", ""]));
             } else {
                 screen.set_detail_buttons(demo::labels(
                     &open.buttons(&applying, select.unwrap_or(0)),
@@ -4609,6 +4631,12 @@ fn panel(
                 // succeeds: an app waiting on an install is something the user set
                 // going, and its card is how they get back to the question.
                 recents.open(&entry.name, flipper_ui::switcher::Kind::App);
+                // Where Back from the app, or from its install, comes back to: the
+                // step it was started from, which in the manager is the info page.
+                launched_from = match screen.get_screen() {
+                    from @ (Screen::Manager | Screen::ManagerInfo) => from,
+                    _ => Screen::Apps,
+                };
                 deps = Some(Deps::Checking(at, rx));
                 deps_log.clear();
                 deps_offset = 0;
@@ -5089,7 +5117,55 @@ fn panel(
         };
     }
 
+    // The home screen, from wherever we are: what Back would drop on the way out of
+    // each screen, dropped at once, and the menu back to its top. Esc does this from
+    // our own screens, and an app does it with `POST /home` for an Esc it leaves.
+    macro_rules! go_home {
+        () => {{
+            close_boot!();
+            live = None;
+            parked = None;
+            detail_qr = false;
+            eth_open = false;
+            eth_scroll = 0.0;
+            wifi_live = None;
+            wifi_op = None;
+            wifi_toast = None;
+            wifi_modal = wifi::Modal::None;
+            app_path.clear();
+            app_selected = 0;
+            app_scroll = 0;
+            mgr_info = None;
+            // An install keeps going and its card leads back to the log, as when Back
+            // leaves it; a finished one goes, with the card of a failure.
+            match deps.take() {
+                Some(stage @ Deps::Installing(..)) if !deps_detached => {
+                    deps = Some(stage);
+                    stash_front(&mut recents, pending_app!().map(str::to_string), &frame);
+                    deps_detached = true;
+                }
+                Some(Deps::Done(idx, Err(_))) if !deps_detached => {
+                    if let Some(entry) = apps.get(idx as usize) {
+                        recents.close(&entry.name);
+                    }
+                }
+                Some(Deps::Done(..)) if !deps_detached => {}
+                other => deps = other,
+            }
+            stack.truncate(1);
+            (_, selected, scroll) = stack[0];
+            demo::apply_menu(&screen, stack[0].0, &net_now);
+            screen.set_breadcrumb("".into());
+            screen.set_screen(Screen::Idle);
+            window.request_redraw();
+        }};
+    }
+
     loop {
+        // The app in front asked for the background: for Back on its first step, or,
+        // when true, for an Esc it left, which lands on the home screen.
+        #[cfg(feature = "wayland")]
+        let mut asked_leave: Option<bool> = None;
         // A desktop handing a bundle over: list it, start it or front it, and answer.
         // The reply says what was accepted, not what came of it: the outcome shows on
         // the panel as it does for a launch from the list.
@@ -5110,10 +5186,7 @@ fn panel(
                             .as_deref()
                             .filter(|_| wl_drawn && kb.is_none() && usb_ask.is_none())
                             .and_then(|name| wl_apps.iter().find(|a| a.name == name))
-                            .filter(|a| {
-                                let started = a.session.pid();
-                                pid == started || flipper_ui::app::ancestors(pid).contains(&started)
-                            });
+                            .filter(|a| a.owns(pid));
                         if let Some(app) = asker {
                             eprintln!("app            {} asks for text", app.name);
                             kb = Some(flipper_ui::keyboard::TextInput::new(&title, &text));
@@ -5133,6 +5206,28 @@ fn panel(
                     #[cfg(not(feature = "wayland"))]
                     {
                         let _ = (title, text, pid);
+                        req.refused("no app is in front");
+                    }
+                    continue;
+                }
+                flipper_ui::ipc::Request::Leave { pid, home } => {
+                    // Only from the app in front, the one the Back it answers went to.
+                    #[cfg(feature = "wayland")]
+                    {
+                        let asker = wl_front
+                            .as_deref()
+                            .and_then(|name| wl_apps.iter().find(|a| a.name == name))
+                            .filter(|a| a.owns(pid));
+                        if asker.is_some() {
+                            asked_leave = Some(home);
+                            req.done();
+                        } else {
+                            req.refused("only the app in front can leave");
+                        }
+                    }
+                    #[cfg(not(feature = "wayland"))]
+                    {
+                        let _ = (pid, home);
                         req.refused("no app is in front");
                     }
                     continue;
@@ -5497,15 +5592,9 @@ fn panel(
                     if let Some(entry) = apps.get(idx as usize) {
                         {
                             let _ = entry;
-                            // Back to whichever list started it. The manager starts
-                            // apps from an app's info page, and Back belongs on the
-                            // list rather than on the page it was pressed from.
-                            if matches!(screen.get_screen(), Screen::Manager | Screen::ManagerInfo)
-                            {
-                                launched_from = Screen::Manager;
+                            // Back comes back to where begin_app! said it was started.
+                            if matches!(launched_from, Screen::Manager | Screen::ManagerInfo) {
                                 mgr_dirty = true;
-                            } else {
-                                launched_from = Screen::Apps;
                             }
                             #[cfg(feature = "wayland")]
                             {
@@ -5798,23 +5887,30 @@ fn panel(
         }
 
         // The host compositor runs with no input devices at all: flipctl holds the
-        // buttons, so every press is forwarded, physical and simulated alike. That is
-        // the whole of the forwarding policy now, with no allowlist, no held-key rule
-        // and nothing to decide about what the kernel may already have delivered.
+        // buttons, so every press is forwarded, physical and simulated alike, but for
+        // AppSwitch, and Back to an app that does not take it. Those two are what
+        // sends an app to the background, and an app that takes Back asks for that
+        // itself when it has no step left to go back.
         // Not while the USB-C question is up: it has the panel and the keys.
         #[cfg(feature = "wayland")]
         if let Some(front) =
             wl_front.clone().filter(|_| usb_ask.is_none() && !matches!(kb_for, KbFor::App { .. }))
         {
-            let mut leave = None;
+            let mut leave = asked_leave.map(|home| if home { Away::Home } else { Away::Back });
+            let takes_back = wl_apps.iter().any(|a| a.name == front && a.takes_back);
             for event in pending_input.drain(..).chain(pending_remote.drain(..)) {
                 if keylog {
                     eprintln!("key            {:?} down={} to {front}", event.key, event.down);
                 }
                 match event.key {
-                    FlipperKey::Back | FlipperKey::AppSwitch => {
+                    FlipperKey::AppSwitch => {
                         if event.down {
-                            leave = Some(event.key == FlipperKey::AppSwitch);
+                            leave = Some(Away::Deck);
+                        }
+                    }
+                    FlipperKey::Back if !takes_back => {
+                        if event.down {
+                            leave.get_or_insert(Away::Back);
                         }
                     }
                     key => {
@@ -5996,23 +6092,33 @@ fn panel(
                 window.request_redraw();
             }
 
-            if let Some(deck) = leave {
+            if let Some(away) = leave {
                 // Left running, not stopped: an app in the background is the point of
                 // a switcher, and its output keeps drawing for its card.
                 eprintln!("app            {front} to the background");
+                // Released before it goes: the Back it asked to leave on is usually
+                // still down, and a release that came to us instead would leave the
+                // key held in the app, which its client repeats.
+                if let Some(app) = wl_apps.iter_mut().find(|a| a.name == front) {
+                    for key in wl_held.drain(..) {
+                        app.session.key(u32::from(key.to_evdev()), false);
+                    }
+                }
                 wl_front = None;
                 window.request_redraw();
-                if deck {
+                match away {
                     // The deck opens over the screen the app was started from, not
                     // over the app: Back from the deck is the way out, and it must
                     // not land back inside what it was opened over.
-                    before_switcher = launched_from;
-                    swallow_release = Some(FlipperKey::AppSwitch);
-                    switcher = Some(flipper_ui::switcher::Switcher::open(&recents, true));
-                    switch_dirty = true;
-                    screen.set_screen(Screen::Switcher);
-                } else {
-                    screen.set_screen(launched_from);
+                    Away::Deck => {
+                        before_switcher = launched_from;
+                        swallow_release = Some(FlipperKey::AppSwitch);
+                        switcher = Some(flipper_ui::switcher::Switcher::open(&recents, true));
+                        switch_dirty = true;
+                        screen.set_screen(Screen::Switcher);
+                    }
+                    Away::Back => screen.set_screen(launched_from),
+                    Away::Home => go_home!(),
                 }
             }
 
@@ -6347,6 +6453,36 @@ fn panel(
                 continue;
             }
 
+            // Esc goes home from any of our screens, at any depth, where Back goes one
+            // step. It drops at once what Back would drop on the way out of each. A
+            // dialog answers Esc with its own button, and nothing still running is
+            // left: a profile update, a dependency check, a boot menu action or a boot
+            // under way. Acted on at once:
+            // the slot carries no label, so there is no press to show first.
+            if event.key == FlipperKey::Escape
+                && dialog.is_none()
+                && matches!(
+                    screen.get_screen(),
+                    Screen::Menu
+                        | Screen::Detail
+                        | Screen::Ethernet
+                        | Screen::Wifi
+                        | Screen::Boot
+                        | Screen::Apps
+                        | Screen::AppLog
+                        | Screen::Manager
+                        | Screen::ManagerInfo
+                )
+                && !matches!(&live, Some(detail::Live::Profile(p)) if p.busy())
+                && !matches!(deps.as_ref().filter(|_| !deps_detached), Some(Deps::Checking(..)))
+                && (screen.get_screen() != Screen::Boot
+                    || boot.as_ref().is_some_and(|m| m.can_leave()))
+            {
+                go_home!();
+                eprintln!("screen         idle (esc)");
+                continue;
+            }
+
             // The dependency flow owns the keys while it is on screen. Its dialog
             // goes through the normal dialog path below; the log does not, because
             // it scrolls.
@@ -6378,7 +6514,7 @@ fn panel(
                                     &frame,
                                 );
                                 deps_detached = true;
-                                screen.set_screen(Screen::Apps);
+                                screen.set_screen(launched_from);
                                 eprintln!("app            left the install log; it keeps going");
                             }
                             _ => {}
@@ -6407,7 +6543,7 @@ fn panel(
                                     // than guess at what was needed.
                                     _ => {
                                         deps = None;
-                                        screen.set_screen(Screen::Apps);
+                                        screen.set_screen(launched_from);
                                     }
                                 }
                             }
@@ -6422,7 +6558,7 @@ fn panel(
                                         recents.close(&entry.name);
                                     }
                                 }
-                                screen.set_screen(Screen::Apps);
+                                screen.set_screen(launched_from);
                             }
                             // A successful install runs the app it was for.
                             FlipperKey::Ok | FlipperKey::Run if ok => {
@@ -6430,16 +6566,13 @@ fn panel(
                                 if let Some(entry) = apps.get(idx as usize) {
                                     {
                                         let _ = entry;
-                                        // Back to whichever list started it, which for
-                                        // the manager is the list and not the info page.
+                                        // Back comes back to where begin_app! said it
+                                        // was started, not to this log.
                                         if matches!(
-                                            screen.get_screen(),
+                                            launched_from,
                                             Screen::Manager | Screen::ManagerInfo
                                         ) {
-                                            launched_from = Screen::Manager;
                                             mgr_dirty = true;
-                                        } else {
-                                            launched_from = Screen::Apps;
                                         }
                                         #[cfg(feature = "wayland")]
                                         {
@@ -6486,7 +6619,11 @@ fn panel(
             // anything. Both buttons flash for 30ms before acting.
             if dialog.is_some() {
                 match event.key {
-                    FlipperKey::Escape | FlipperKey::Back => {
+                    // Not with no button to say so: that is a download showing its
+                    // progress, and it is still running.
+                    FlipperKey::Escape | FlipperKey::Back
+                        if !dialog.as_ref().unwrap().left.is_empty() =>
+                    {
                         press.button(FlipperKey::Escape, 0, Instant::now() + flash);
                     }
                     FlipperKey::Ok | FlipperKey::Run
@@ -6851,8 +6988,7 @@ fn panel(
             }
 
             // The app manager: two tabs on the soft keys, a list to walk, and the
-            // D-pad's Back to leave. The esc key is Install here rather than Back,
-            // which makes this the one screen where the two differ.
+            // D-pad's Back to leave.
             if screen.get_screen() == Screen::Manager {
                 // A notice is a row but not a choice, so the Install tab counts only
                 // what is actually on offer.
@@ -6871,12 +7007,6 @@ fn panel(
                     }
                     FlipperKey::Up if count > 0 => {
                         mgr_selected = (mgr_selected - 1).rem_euclid(count);
-                    }
-                    // Close leaves and takes the card with it, which is what makes
-                    // it different from Back: backing out of the manager is not
-                    // closing it, any more than backing out of an app stops the app.
-                    FlipperKey::Escape => {
-                        press.soft(FlipperKey::Escape, 0, Instant::now() + flash);
                     }
                     // A tab acts at once and flashes its own key: nothing is being
                     // opened, so there is no flash to wait out. Only from View:
@@ -6961,7 +7091,7 @@ fn panel(
                         press.soft(FlipperKey::Escape, 0, Instant::now() + flash);
                     }
                     // Starting the app is the info page's business now: the list
-                    // screen's five slots are spoken for by Close and the two tabs.
+                    // screen's slots are spoken for by the two tabs.
                     FlipperKey::Edit => {
                         press.soft(FlipperKey::Edit, 3, Instant::now() + flash);
                     }
@@ -7265,7 +7395,7 @@ fn panel(
                                         recents.close(&entry.name);
                                     }
                                 }
-                                screen.set_screen(Screen::Apps);
+                                screen.set_screen(launched_from);
                             }
                         }
                     } else if d.act == DialogAct::ForceUpdate {
@@ -7796,19 +7926,11 @@ fn panel(
                         screen.set_detail_at_start(false);
                         screen.set_detail_at_end(false);
                         let remove = if app.shipped() { "" } else { "Uninstall" };
-                        screen.set_detail_buttons(demo::labels(&["Back", "", "", "Run", remove]));
+                        screen.set_detail_buttons(demo::labels(&["", "", "", "Run", remove]));
                         screen.set_breadcrumb(manager_info_trail(app).as_str().into());
                         screen.set_screen(Screen::ManagerInfo);
                         eprintln!("screen         app manager: {}", app.name);
                     }
-                } else if key == FlipperKey::Escape && screen.get_screen() == Screen::Manager {
-                    // Close, which is the one that takes the card with it. Back
-                    // leaves the manager where it was, the way backing out of an app
-                    // leaves the app running.
-                    recents.close(MANAGER_TITLE);
-                    mgr_info = None;
-                    menu_again!();
-                    eprintln!("screen         menu (app manager closed)");
                 } else if key == FlipperKey::Edit && screen.get_screen() == Screen::ManagerInfo {
                     if let Some(at) = mgr_info {
                         let _ = begin_app!(at as i32);
@@ -8321,11 +8443,11 @@ fn panel(
             // word: Install again, not something called Retry.
             let again = matches!(&deps, Some(Deps::Done(_, Err(_)))) && deps_missing.is_some();
             screen.set_app_buttons(demo::labels(&if done {
-                ["Back", "", "", "", "Run"]
+                ["", "", "", "", "Run"]
             } else if again {
-                ["Back", "", "", "", "Install"]
+                ["", "", "", "", "Install"]
             } else {
-                ["Back", "", "", "", ""]
+                ["", "", "", "", ""]
             }));
             screen.set_screen(Screen::AppLog);
         }
@@ -8367,7 +8489,7 @@ fn panel(
                 screen.set_detail_asides(open.asides());
                 screen.set_detail_offset(detail_offset);
                 screen.set_detail_buttons(demo::labels(&if detail_qr {
-                    ["Back", "", "", "", ""]
+                    ["", "", "", "", ""]
                 } else {
                     open.buttons(&applying, detail_offset)
                 }));

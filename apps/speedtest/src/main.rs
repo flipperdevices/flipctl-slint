@@ -1142,7 +1142,8 @@ fn apply_kb(ui: &AppWindow, app: &App) {
     ui.set_kb_buttons(strings(&["Cancel", "", "", "", "Done"]));
 }
 
-/// One key. Returns false when the app should close.
+/// One key. Returns false for one left to `flipctl_app::unused`: Escape closes the
+/// app and Back sends it to the background.
 fn key(app: &mut App, key: Key, down: bool) -> bool {
     if let Some(field) = app.kb.as_mut() {
         if !down {
@@ -1271,7 +1272,8 @@ fn main() -> Result<(), slint::PlatformError> {
         });
         let mut app = keyed.borrow_mut();
         if !key(&mut app, pressed, down) {
-            let _ = slint::quit_event_loop();
+            // Escape is labelled Close wherever key() leaves it
+            flipctl_app::unused(pressed, flipctl_app::CLOSE);
             return;
         }
         apply(&ui, &app);
@@ -1782,7 +1784,7 @@ mod tests {
         assert!(key(&mut app, Key::Back, true), "back is not close from the results");
         assert!(!app.running());
         assert_eq!(app.page, Page::Settings);
-        assert!(!key(&mut app, Key::Back, true), "and close from the settings");
+        assert!(!key(&mut app, Key::Back, true), "and leave from the settings");
     }
 
     #[test]
