@@ -66,10 +66,11 @@ pub fn type_text(title: &str, text: &str) -> Typing {
     let path = format!("/keyboard?title={}&text={}", encode(title), encode(text));
     let (tx, answer) = channel();
     std::thread::spawn(move || {
-        let said = post(&path).map_err(|(_, why)| why).and_then(|(_, body)| match field(&body, "text") {
-            Some(text) => Ok(text),
-            None => Err(format!("flipctl said {body}")),
-        });
+        let said =
+            post(&path).map_err(|(_, why)| why).and_then(|(_, body)| match field(&body, "text") {
+                Some(text) => Ok(text),
+                None => Err(format!("flipctl said {body}")),
+            });
         let _ = tx.send(said);
         crate::redraw();
     });
@@ -98,10 +99,13 @@ fn post(path: &str) -> Result<(UnixStream, String), (Option<u16>, String)> {
     let body = body.trim_end().to_string();
     let code = status.split(' ').nth(1).and_then(|c| c.parse().ok());
     if code != Some(200) {
-        return Err((code, match field(&body, "error") {
-            Some(Some(why)) => why,
-            _ => status.trim().to_string(),
-        }));
+        return Err((
+            code,
+            match field(&body, "error") {
+                Some(Some(why)) => why,
+                _ => status.trim().to_string(),
+            },
+        ));
     }
     Ok((s, body))
 }

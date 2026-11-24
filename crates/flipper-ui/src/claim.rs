@@ -118,7 +118,9 @@ impl Resource {
         match self {
             Resource::Mt7921 => root(&format!("{MT7921_COMMON}{HOLD}"), &[]),
             Resource::Udc => root(&format!("{UDC}{UDC_CHECK}{GADGET_STOP}{UDC_HOLD}"), &[]),
-            Resource::Uac2 => root(&format!("{UAC2}{UAC2_CHECK}{GADGET_STOP}{SERIAL}{UAC2_HOLD}"), &[]),
+            Resource::Uac2 => {
+                root(&format!("{UAC2}{UAC2_CHECK}{GADGET_STOP}{SERIAL}{UAC2_HOLD}"), &[])
+            }
             Resource::Hid => root(&format!("{HID}{GADGET_STOP}{SERIAL}{HID_HOLD}"), &[]),
             Resource::BtHid => root(BT_HID_HOLD, &[]),
             Resource::Usb(port) => root(&format!("{SOCKET}{USB_HOLD}"), &[port]),
