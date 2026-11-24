@@ -529,7 +529,7 @@ mod demo {
             Row { label: "Apps", icon: 3, frames: 9, stat: Stat::None, act: Act::Apps },
             Row { label: "Files", icon: 4, frames: 10, stat: Stat::None, act: Act::Unported },
             Row { label: "Network", icon: 5, frames: 10, stat: Stat::None, act: Act::Sub(&NETWORK) },
-            Row { label: "Testing: flipctl2", icon: 6, frames: 9, stat: Stat::None, act: Act::Flipctl2 },
+            Row { label: "Testing", icon: 6, frames: 9, stat: Stat::None, act: Act::Flipctl2 },
             Row { label: "Settings", icon: 7, frames: 10, stat: Stat::None, act: Act::Sub(&SETTINGS) },
         ],
     };
