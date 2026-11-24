@@ -251,6 +251,26 @@ mod demo {
     /// opens an empty screen, or a list whose every row fails to start, is worse than
     /// no entry. Filtered in one place so the keys and the drawing agree: they index
     /// the same list.
+    /// What a row is called. The profile's own row takes the booted profile's kind,
+    /// which a clone or a kept build shares with the profile it came from; one of no
+    /// kind keeps the row's own label, as the prototype's menu.js does.
+    pub fn label(row: &Row) -> &'static str {
+        static PROFILE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+        if !matches!(row.act, Act::Profile) {
+            return row.label;
+        }
+        PROFILE.get_or_init(|| {
+            let booted = flipper_ui::status::booted_profile();
+            match flipper_ui::boot::icon_key(&booted, "") {
+                "media" => "TV Media Box",
+                "router" => "Router",
+                "minimal" => "Minimal",
+                "graphics" => "No Graphics",
+                _ => row.label,
+            }
+        })
+    }
+
     pub fn rows(menu: &'static Menu) -> Vec<&'static Row> {
         menu.rows
             .iter()
@@ -272,7 +292,7 @@ mod demo {
                 let (chevrons, value) = chevrons_of(&status);
                 let (at_start, at_end) = row_ends(&r.stat);
                 ListItem {
-                    label: r.label.into(),
+                    label: label(r).into(),
                     // A menu row is a place, not an app: nothing runs it.
                     tag: Default::default(),
                     status: status.as_str().into(),
@@ -347,6 +367,9 @@ mod demo {
         /// A row with nothing behind it yet. It says so, with its own name, rather
         /// than silently doing nothing.
         Unported,
+        /// The booted profile's own row, named for the profile (see [`label`]).
+        /// Nothing behind it yet in any of them, so it says so as `Unported` does.
+        Profile,
     }
 
     /// Which detail screen a row opens.
@@ -502,7 +525,7 @@ mod demo {
     pub static MAIN: Menu = Menu {
         title: "",
         rows: &[
-            Row { label: "Desktop Computer", icon: 1, frames: 1, stat: Stat::None, act: Act::Unported },
+            Row { label: "Desktop Computer", icon: 1, frames: 1, stat: Stat::None, act: Act::Profile },
             Row { label: "Apps", icon: 3, frames: 9, stat: Stat::None, act: Act::Apps },
             Row { label: "Files", icon: 4, frames: 10, stat: Stat::None, act: Act::Unported },
             Row { label: "Network", icon: 5, frames: 10, stat: Stat::None, act: Act::Sub(&NETWORK) },
@@ -8137,9 +8160,9 @@ fn panel(
                         }
                         // Say so rather than doing nothing: a row that swallows
                         // the key looks like a bug.
-                        demo::Act::Unported => {
+                        demo::Act::Unported | demo::Act::Profile => {
                             dialog = Some(Dialog {
-                                lines: vec![row.label.into(), "Not implemented".into()],
+                                lines: vec![demo::label(row).into(), "Not implemented".into()],
                                 left: "Back",
                                 right: "",
                                 act: DialogAct::None,
