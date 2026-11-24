@@ -5987,8 +5987,6 @@ fn panel(
                             leave.get_or_insert(Away::Back);
                         }
                     }
-                        }
-                    }
                     key => {
                         if let Some(app) = wl_apps.iter_mut().find(|a| a.name == front) {
                             // A portrait app's directions are its own: the compositor turns
