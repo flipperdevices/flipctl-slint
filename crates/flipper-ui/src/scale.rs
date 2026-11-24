@@ -154,17 +154,22 @@ pub fn fit_from_xrgb(
     };
     let (ox, oy) = ((dw - w) / 2, (dh - h) / 2);
 
-    // Where a pixel of the fitted, turned image comes from in the capture. A quarter turn
-    // maps the capture's top edge onto one of the image's sides, so one axis is read
-    // backwards; `left` says which side, exactly as `turn_from_xrgb` does.
+    // Where a pixel of the fitted, turned image comes from in the capture. This is the
+    // inverse of the mapping `turn_from_xrgb` writes with, and it has to be exactly that:
+    // a turned fit and a turned copy of the same capture must put every pixel in the same
+    // place, or a portrait app that names a size of its own comes out 180 degrees from the
+    // status strip and the d-pad around it.
+    //
+    // The direct turn is `(x, y) -> (y, dh - 1 - x)` for `left`, and
+    // `(x, y) -> (dw - 1 - y, x)` for right. Inverting either gives what follows.
     let sample = |ix: u32, iy: u32| -> (u32, u32) {
         match turn {
             None => (ix, iy),
             Some(left) => {
                 if left {
-                    (iy, src_h - 1 - ix)
-                } else {
                     (src_w - 1 - iy, ix)
+                } else {
+                    (iy, src_h - 1 - ix)
                 }
             }
         }
@@ -300,10 +305,26 @@ mod tests {
         assert_eq!(filled(&straight), vec![0, 1], "unturned: one row, two wide");
         assert_eq!(filled(&turned), vec![0, 2], "turned: one column, two tall");
 
-        // And it is a rotation rather than a relabelling: the dark source pixel (luma 0)
-        // ends at the top of the column, and the light one at its bottom.
-        assert_eq!(turned[0].0, 0, "the top of the turned column is the dark pixel");
-        assert_eq!(turned[2].0, 255, "and the bottom is the light one");
+        // And it is a rotation rather than a relabelling. Which end the dark pixel lands
+        // on is not a free choice: it is what `turn_from_xrgb` does to the same capture,
+        // where a left turn sends source `(x, y)` to `(y, dh - 1 - x)` - so the light pixel
+        // that was on the right comes up at the top of the column.
+        assert_eq!(turned[0].0, 255, "the top of the turned column is the light pixel");
+        assert_eq!(turned[2].0, 0, "and the bottom is the dark one");
+
+        // The two paths must agree, or a size-naming portrait app comes out 180 degrees
+        // from its own chrome. A 2x1 capture turned is 1x2, so a 1x2 destination is the one
+        // shape where the fit and the whole turn cover exactly the same pixels and can be
+        // compared without a letterbox in between.
+        let mut whole = grey(&[128; 2]);
+        super::turn_from_xrgb(&src, 8, true, 2, 1, &mut whole, true);
+        let mut exact = grey(&[128; 2]);
+        fit_from_xrgb(&src, 8, true, 2, 1, &mut exact, 1, 2, Some(true));
+        assert_eq!(
+            exact.iter().map(|p| p.0).collect::<Vec<_>>(),
+            whole.iter().map(|p| p.0).collect::<Vec<_>>(),
+            "a turned fit must land where the turned copy does"
+        );
     }
 
     /// A portrait app's frame is the panel's size the other way up, so the turn is a

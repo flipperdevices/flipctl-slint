@@ -6324,13 +6324,16 @@ fn panel(
             // the keyboard's own. Done and Cancel answer the app.
             #[cfg(feature = "wayland")]
             if matches!(kb_for, KbFor::App { .. }) {
-                if !event.down && wl_held.contains(&event.key) {
-                    wl_held.retain(|k| *k != event.key);
+                if !event.down {
                     let front = wl_front.as_deref();
                     if let Some(app) = wl_apps.iter_mut().find(|a| Some(a.name.as_str()) == front) {
-                        app.session.key(u32::from(event.key.to_evdev()), false);
+                        let sent = app.rotate.turn_key(event.key);
+                        if wl_held.contains(&sent) {
+                            wl_held.retain(|k| *k != sent);
+                            app.session.key(u32::from(sent.to_evdev()), false);
+                            continue;
+                        }
                     }
-                    continue;
                 }
                 let Some(input) = kb.as_mut() else { continue };
                 if !event.down {
