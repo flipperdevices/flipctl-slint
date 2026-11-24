@@ -50,7 +50,7 @@ use std::time::Duration;
 use flipper_ui::status::{Status, StatusSource};
 use flipper_ui::theme::{count, timing};
 
-use crate::Key;
+use crate::{Flashes, Key};
 
 /// What a page shows. The app returns one from [`App::page`] each time it is drawn.
 pub struct Page {
@@ -370,15 +370,9 @@ pub struct Driver<A, S> {
     pub app: A,
     pub screen: S,
     states: Vec<(i32, &'static str, Ui)>,
-    /// Keys whose press flash has not fired yet, and whether the finger has already gone
-    /// inside that window.
-    ///
-    /// A soft key is shown pressed for `PRESS_FLASH_MS` before it acts, and a tap can be
-    /// shorter than that: the release then arrives while the press is still waiting. The
-    /// app has to be told in the order the person made the events, or a press-and-hold app
-    /// is left keyed with the button already up. So a release that lands in the window is
-    /// remembered here and delivered when the press is acted on.
-    pending: Vec<(Key, bool)>,
+    /// The keys inside a soft key's press flash, kept the same way [`attach`](crate::attach)
+    /// keeps them: one press, one action, and the release after the press it belongs to.
+    flashes: Flashes,
     /// The page last drawn, which a key acts on.
     current: (i32, &'static str),
     /// Items in the menu last drawn, which the cursor wraps round.
@@ -404,7 +398,7 @@ impl<A: App, S: Screen> Driver<A, S> {
             app,
             screen,
             states: Vec::new(),
-            pending: Vec::new(),
+            flashes: Flashes::default(),
             current: (-1, ""),
             count: 0,
             closed: false,
@@ -511,13 +505,11 @@ impl<A: App, S: Screen> Driver<A, S> {
         }
         if let Some(slot) = key.soft_slot() {
             self.screen.set_pressed_slot(slot as i32);
-            self.await_flash(key);
-            return Press::Flash;
+            return self.flash_press(key);
         }
         if key == Key::Ok && self.current.0 == 2 {
             self.screen.set_row_pressed(true);
-            self.await_flash(key);
-            return Press::Flash;
+            return self.flash_press(key);
         }
         self.act(key);
         Press::Now
@@ -528,13 +520,10 @@ impl<A: App, S: Screen> Driver<A, S> {
         self.screen.set_pressed_slot(-1);
         self.screen.set_row_pressed(false);
         self.act(key);
-        // A finger that went up during the flash is told now, so the app sees the press
-        // and then the release however short the tap was.
-        let early = match self.pending.iter().position(|(k, _)| *k == key) {
-            Some(i) => self.pending.remove(i).1,
-            None => false,
-        };
-        if early {
+        // A finger that went up during the flash is told now, so the app sees the press and
+        // then the release however short the tap was. One still on the key is told when it
+        // comes up, by `key_up` - there is nothing left for it to wait on.
+        if self.flashes.gone(key) {
             self.tell_up(key);
         }
     }
@@ -545,11 +534,9 @@ impl<A: App, S: Screen> Driver<A, S> {
     /// only tells the app the finger is gone, and every key gets it. A held push-to-talk
     /// needs it and a menu ignores it.
     pub fn key_up(&mut self, key: Key) {
-        if let Some(entry) = self.pending.iter_mut().find(|(k, _)| *k == key) {
-            entry.1 = true;
-            return;
+        if !self.flashes.up(key) {
+            self.tell_up(key);
         }
-        self.tell_up(key);
     }
 
     /// The release, actually delivered.
@@ -563,14 +550,13 @@ impl<A: App, S: Screen> Driver<A, S> {
         self.settle(here, ui);
     }
 
-    /// Note that `key` is inside its press flash, so a release before the flash fires is
-    /// held rather than delivered straight away.
-    ///
-    /// A key that is already waiting is left alone: the panel repeats a held key, and a
-    /// second entry would act twice on one press.
-    fn await_flash(&mut self, key: Key) {
-        if !self.pending.iter().any(|(k, _)| *k == key) {
-            self.pending.push((key, false));
+    /// The press a soft-key flash is armed for: `Flash` for the first, `Ignored` for a repeat
+    /// of the same press, which arms nothing and acts nothing.
+    fn flash_press(&mut self, key: Key) -> Press {
+        if self.flashes.down(key) {
+            Press::Flash
+        } else {
+            Press::Ignored
         }
     }
 
@@ -889,6 +875,38 @@ mod tests {
         assert_eq!(seen(&d, |s| s.slot), -1);
         assert_eq!(d.app.runs, 1);
         assert_eq!(seen(&d, |s| s.buttons[4].clone()), "Again", "drawn again after the key");
+    }
+
+    /// The panel repeats a held key. A repeat is the same press - one flash, one action, one
+    /// release - or the app is left keyed with the button already up.
+    #[test]
+    fn a_held_soft_key_is_one_press() {
+        let mut d = driver(0, 4);
+        assert_eq!(d.key(Key::Run, true), Press::Flash);
+        assert_eq!(d.key(Key::Run, true), Press::Ignored, "a repeat arms nothing");
+        assert_eq!(d.key(Key::Run, true), Press::Ignored);
+
+        d.key_up(Key::Run);
+        d.release(Key::Run);
+        assert_eq!(d.app.runs, 1, "one held key is one press");
+        assert_eq!(d.app.released, [Key::Run], "and it is released once");
+    }
+
+    /// A second tap inside the flash is the same press too: the first tap's flash is still
+    /// armed, so the second only puts the finger back on the key.
+    #[test]
+    fn a_second_tap_inside_the_flash_is_the_same_press() {
+        let mut d = driver(0, 4);
+        assert_eq!(d.key(Key::Run, true), Press::Flash);
+        d.key_up(Key::Run);
+        assert_eq!(d.key(Key::Run, true), Press::Ignored, "no second flash");
+
+        d.release(Key::Run);
+        assert_eq!(d.app.runs, 1, "one action for the burst");
+        assert_eq!(d.app.released, [], "the finger is still down, so nothing is released");
+
+        d.key_up(Key::Run);
+        assert_eq!(d.app.released, [Key::Run], "the release arrives when the finger goes");
     }
 
     /// A held key's release has to reach the app: push-to-talk is exactly that.

@@ -104,6 +104,59 @@ pub fn picture(surface: &paint::Surface) -> slint::Image {
     slint::Image::from_rgb8(buffer)
 }
 
+/// The keys inside a soft key's press flash, and whether the finger is still on them.
+///
+/// A soft key is shown pressed for `PRESS_FLASH_MS` before it acts, so a tap shorter than the
+/// flash leaves its release queued behind a press that has not happened yet - told the other
+/// way round, a press-and-hold app is keyed with the button already up. And the panel repeats
+/// a held key, so a flash is armed once per press and not once per event: a second timer would
+/// act after the first had already handed its release over.
+///
+/// Both key paths keep the same queue - [`attach`] and [`app::Driver`](crate::app::Driver) -
+/// so neither has its own idea of when a press begins and ends.
+#[derive(Default)]
+pub(crate) struct Flashes {
+    keys: Vec<(Key, bool)>,
+}
+
+impl Flashes {
+    /// The key is going down; `true` when this press should arm a flash.
+    ///
+    /// A key already inside one is the panel repeating a held key, or a second tap, and either
+    /// way it is the same press: it only puts the finger back down.
+    pub fn down(&mut self, key: Key) -> bool {
+        match self.keys.iter_mut().find(|(k, _)| *k == key) {
+            Some(entry) => {
+                entry.1 = true;
+                false
+            }
+            None => {
+                self.keys.push((key, true));
+                true
+            }
+        }
+    }
+
+    /// The key came up; `true` when it was inside a flash, so its release waits for the press.
+    pub fn up(&mut self, key: Key) -> bool {
+        match self.keys.iter_mut().find(|(k, _)| *k == key) {
+            Some(entry) => {
+                entry.1 = false;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The flash fired; `true` when the finger had gone, so the release is due now.
+    pub fn gone(&mut self, key: Key) -> bool {
+        match self.keys.iter().position(|(k, _)| *k == key) {
+            Some(i) => !self.keys.remove(i).1,
+            None => false,
+        }
+    }
+}
+
 /// The keys and the status bar, wired to a page of the app's own.
 ///
 /// What [`attach!`] does, for the closures it makes from the app's generated types:
@@ -129,10 +182,7 @@ pub fn attach(
     // toggle could not stand in for it - the panel repeats a held key, so a toggle flips the
     // link on and off for as long as the button is held.
     let up = Rc::new(RefCell::new(released));
-    // Soft keys whose press flash has not fired yet, and whether the finger went up inside
-    // it. A tap can be shorter than the flash, and the release would otherwise reach the app
-    // before the press - so a held-means-something button ends up up before it was down.
-    let pending: Rc<RefCell<Vec<(Key, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+    let flashes = Rc::new(RefCell::new(Flashes::default()));
     let act = move |key: Key| {
         if !(act.borrow_mut())(key) {
             unused(key, CLOSE);
@@ -149,19 +199,9 @@ pub fn attach(
             });
         }
         if !down {
-            // A key still inside its flash has not acted yet, so the release waits for it
-            // and is delivered when the press is. Every other key is told at once.
-            let waiting = {
-                let mut waiting = pending.borrow_mut();
-                match waiting.iter_mut().find(|(k, _)| *k == key) {
-                    Some(entry) => {
-                        entry.1 = true;
-                        true
-                    }
-                    None => false,
-                }
-            };
-            if !waiting {
+            // A key still inside its flash has not acted yet, so its release waits for the
+            // press; every other key is told at once.
+            if !flashes.borrow_mut().up(key) {
                 (up.borrow_mut())(key);
             }
             return;
@@ -171,28 +211,19 @@ pub fn attach(
             return;
         };
         set_slot(slot as i32);
-        {
-            // A repeated press is one press as far as this is concerned: the panel repeats a
-            // held key, and a second entry would act twice on it.
-            let mut waiting = pending.borrow_mut();
-            if !waiting.iter().any(|(k, _)| *k == key) {
-                waiting.push((key, false));
-            }
+        // One press, one flash: a repeat is the same press and arms nothing.
+        if !flashes.borrow_mut().down(key) {
+            return;
         }
-        let (set_slot, act, up, pending) =
-            (set_slot.clone(), act.clone(), up.clone(), pending.clone());
+        let (set_slot, act, up, flashes) =
+            (set_slot.clone(), act.clone(), up.clone(), flashes.clone());
         let flash = std::time::Duration::from_millis(theme::timing::PRESS_FLASH_MS as u64);
         slint::Timer::single_shot(flash, move || {
             set_slot(-1);
             act(key);
-            let early = {
-                let mut waiting = pending.borrow_mut();
-                match waiting.iter().position(|(k, _)| *k == key) {
-                    Some(i) => waiting.remove(i).1,
-                    None => false,
-                }
-            };
-            if early {
+            // A finger that has already gone is told now, after the press it belongs to; one
+            // still on the key is told when it comes up, on the path above.
+            if flashes.borrow_mut().gone(key) {
                 (up.borrow_mut())(key);
             }
         });
