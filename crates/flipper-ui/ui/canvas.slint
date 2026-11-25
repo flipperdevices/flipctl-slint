@@ -39,6 +39,11 @@ export component CanvasBody inherits Rectangle {
     in property <string> access_tech: PanelStatus.access_tech;
     in property <int> modem_quality: PanelStatus.modem_quality;
     in property <[CanvasText]> texts;
+    // White over the status bar, 0 to 1: the app's own modal scrim reaching the bar.
+    in property <float> status_scrim;
+    // Drawn over the status bar and its scrim: the part of a modal the app paints that
+    // reaches over the bar. Transparent elsewhere.
+    in property <image> overlay;
     in property <[string]> buttons;
     in property <int> pressed_slot: -1;
 
@@ -68,6 +73,25 @@ export component CanvasBody inherits Rectangle {
         modem_available: root.modem_available;
         access_tech: root.access_tech;
         modem_quality: root.modem_quality;
+    }
+
+    if root.status_bar && root.status_scrim > 0: Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: FlipperTheme.status_bar_h;
+        background: FlipperTheme.white;
+        opacity: root.status_scrim;
+    }
+
+    if root.status_bar: Image {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        source: root.overlay;
+        image-fit: fill;
+        image-rendering: pixelated;
     }
 
     for label in root.texts: Text {

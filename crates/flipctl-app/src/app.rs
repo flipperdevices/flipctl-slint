@@ -60,10 +60,25 @@ pub struct Page {
 
 /// The kinds of page, one per body in `pages.slint`.
 pub enum Body {
-    Detail { rows: Vec<Row>, fit_gauges: bool },
-    Menu { items: Vec<Item> },
-    Log { title: String, lines: Vec<String> },
-    Canvas { picture: slint::Image, texts: Vec<Text> },
+    Detail {
+        rows: Vec<Row>,
+        fit_gauges: bool,
+    },
+    Menu {
+        items: Vec<Item>,
+    },
+    Log {
+        title: String,
+        lines: Vec<String>,
+    },
+    /// `dim` is the white composited over the status bar, 0 to 255, and `over` what is
+    /// drawn above the bar.
+    Canvas {
+        picture: slint::Image,
+        texts: Vec<Text>,
+        dim: u8,
+        over: Option<slint::Image>,
+    },
 }
 
 impl Page {
@@ -88,7 +103,25 @@ impl Page {
     /// A picture the app paints, the whole panel as `paint::Surface::panel()` makes it,
     /// with text drawn over it in the panel's fonts.
     pub fn canvas(picture: slint::Image, texts: Vec<Text>) -> Self {
-        Self::of(Body::Canvas { picture, texts })
+        Self::of(Body::Canvas { picture, texts, dim: 0, over: None })
+    }
+
+    /// Dim the status bar over a canvas, for a modal the app paints: `alpha` of white
+    /// over it, as the app's own scrim puts over the rest.
+    pub fn dim_status(mut self, alpha: u8) -> Self {
+        if let Body::Canvas { dim, .. } = &mut self.body {
+            *dim = alpha;
+        }
+        self
+    }
+
+    /// Draw `image` over the status bar, for a modal that reaches over it: what
+    /// [`overlay`](crate::overlay) makes, transparent where the bar should show.
+    pub fn over_status(mut self, image: slint::Image) -> Self {
+        if let Body::Canvas { over, .. } = &mut self.body {
+            *over = Some(image);
+        }
+        self
     }
 
     /// Size a gauge around its own label rather than the column flipctl's screens use.
@@ -188,6 +221,8 @@ pub struct Item {
     pub at_end: bool,
     /// A level bar in place of the status, filled to this fraction (0 to 1).
     pub bar: Option<f32>,
+    /// A 14px icon ahead of the label, see [`crate::icon`].
+    pub icon: Option<slint::Image>,
 }
 
 /// A menu row with its label, built on with [`Item::status`] or [`Item::toggle`] and
@@ -237,6 +272,13 @@ impl Item {
     /// A short word drawn right after the label.
     pub fn tag(mut self, tag: impl Into<String>) -> Self {
         self.tag = tag.into();
+        self
+    }
+
+    /// An icon ahead of the label, 14px square, drawn in the row's text colour so it
+    /// inverts with the row.
+    pub fn icon(mut self, icon: slint::Image) -> Self {
+        self.icon = Some(icon);
         self
     }
 }
@@ -336,7 +378,13 @@ pub trait Screen {
     fn set_menu(&self, items: &[Item], selected: usize, scroll: usize);
     fn set_row_pressed(&self, pressed: bool);
     fn set_log(&self, title: &str, lines: &[String], total: usize, offset: usize);
-    fn set_canvas(&self, picture: &slint::Image, texts: &[Text]);
+    fn set_canvas(
+        &self,
+        picture: &slint::Image,
+        texts: &[Text],
+        dim: u8,
+        over: Option<&slint::Image>,
+    );
     fn set_pressed_slot(&self, slot: i32);
     fn set_arrow_pressed(&self, arrow: i32);
     fn set_status(&self, status: &Status);
@@ -458,7 +506,9 @@ impl<A: App, S: Screen> Driver<A, S> {
                 let shown = &lines[offset..lines.len().min(offset + visible)];
                 self.screen.set_log(title, shown, lines.len(), offset);
             }
-            Body::Canvas { picture, texts } => self.screen.set_canvas(picture, texts),
+            Body::Canvas { picture, texts, dim, over } => {
+                self.screen.set_canvas(picture, texts, *dim, over.as_ref())
+            }
         }
         self.screen.set_buttons(self.app.buttons());
     }
@@ -692,7 +742,7 @@ mod tests {
             let mut s = self.0.borrow_mut();
             (s.lines, s.total, s.offset) = (lines.to_vec(), total, offset);
         }
-        fn set_canvas(&self, _: &slint::Image, _: &[Text]) {}
+        fn set_canvas(&self, _: &slint::Image, _: &[Text], _: u8, _: Option<&slint::Image>) {}
         fn set_pressed_slot(&self, slot: i32) {
             self.0.borrow_mut().slot = slot;
         }

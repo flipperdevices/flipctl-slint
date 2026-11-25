@@ -103,6 +103,30 @@ pub fn picture(surface: &paint::Surface) -> slint::Image {
     slint::Image::from_rgb8(buffer)
 }
 
+/// A row icon from 14 lines of 14 characters, `#` where it is drawn. Only its shape
+/// counts: the row colours it, black or inverted.
+pub fn icon(rows: &[&str; 14]) -> slint::Image {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(14, 14);
+    for (i, px) in buffer.make_mut_slice().iter_mut().enumerate() {
+        let on = rows[i / 14].as_bytes().get(i % 14) == Some(&b'#');
+        *px = slint::Rgba8Pixel { r: 0, g: 0, b: 0, a: if on { 255 } else { 0 } };
+    }
+    slint::Image::from_rgba8(buffer)
+}
+
+/// The pixels of `surface` that `keep` picks, transparent elsewhere: what a canvas puts
+/// over the status bar with [`Page::over_status`].
+pub fn overlay(surface: &paint::Surface, keep: impl Fn(u16, u16) -> bool) -> slint::Image {
+    let (w, h) = (surface.width(), surface.height());
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(u32::from(w), u32::from(h));
+    for (i, (px, grey)) in buffer.make_mut_slice().iter_mut().zip(surface.pixels()).enumerate() {
+        let (x, y) = ((i % usize::from(w)) as u16, (i / usize::from(w)) as u16);
+        let a = if keep(x, y) { 255 } else { 0 };
+        *px = slint::Rgba8Pixel { r: grey.0, g: grey.0, b: grey.0, a };
+    }
+    slint::Image::from_rgba8(buffer)
+}
+
 /// The keys and the status bar, wired to a page of the app's own.
 ///
 /// What [`attach!`] does, for the closures it makes from the app's generated types:
@@ -298,7 +322,7 @@ macro_rules! main {
                                     tag: shared(&i.tag),
                                     status: shared(bar.as_ref().map_or(&i.status, |b| &b.text)),
                                     icon: 0,
-                                    picture: slint::Image::default(),
+                                    picture: i.icon.clone().unwrap_or_default(),
                                     frames: 1,
                                     chevrons: i.chevrons,
                                     dim: i.dim,
@@ -324,8 +348,16 @@ macro_rules! main {
                     self.page.set_total(total as i32);
                     self.page.set_log_offset(offset as i32);
                 }
-                fn set_canvas(&self, picture: &slint::Image, texts: &[$crate::Text]) {
+                fn set_canvas(
+                    &self,
+                    picture: &slint::Image,
+                    texts: &[$crate::Text],
+                    dim: u8,
+                    over: Option<&slint::Image>,
+                ) {
                     self.page.set_picture(picture.clone());
+                    self.page.set_status_scrim(f32::from(dim) / 255.0);
+                    self.page.set_overlay(over.cloned().unwrap_or_default());
                     self.texts.set_vec(
                         texts
                             .iter()
