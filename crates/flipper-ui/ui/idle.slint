@@ -150,6 +150,7 @@ export component IdleBody inherits Rectangle {
     in property <bool> wifi_connected: PanelStatus.wifi_connected;
     in property <int> wifi_quality: PanelStatus.wifi_quality;
     in property <int> ethernet: PanelStatus.ethernet;
+    in property <bool> recording: PanelStatus.recording;
     in property <bool> modem_available: PanelStatus.modem_available;
     in property <string> access_tech: PanelStatus.access_tech;
     in property <int> modem_quality: PanelStatus.modem_quality;
@@ -189,6 +190,7 @@ export component IdleBody inherits Rectangle {
         wifi_connected: root.wifi_connected;
         wifi_quality: root.wifi_quality;
         ethernet: root.ethernet;
+        recording: root.recording;
         modem_available: root.modem_available;
         access_tech: root.access_tech;
         modem_quality: root.modem_quality;

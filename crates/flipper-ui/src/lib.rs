@@ -40,6 +40,7 @@ pub mod profile_update;
 pub mod remote;
 pub mod route_watch;
 pub mod scale;
+pub mod screen_rec;
 pub mod script;
 pub mod settings;
 #[cfg(feature = "slint")]

@@ -30,6 +30,9 @@
 //! with the home screen instead, for an Esc the app leaves. Either gets `200` with
 //! `{}`, or `409` when it is not the app in front.
 //!
+//! The app in front asks for the panel's frames with `POST /screen-record`, and is
+//! sent to the background as it is answered: see `screen_rec` for the stream.
+//!
 //! Not the browser view's HTTP port: that is an optional feature bound on every
 //! interface with no authentication, and a request that runs a file is not something
 //! to hang off it.
@@ -76,6 +79,9 @@ pub enum Request {
     /// screen rather than the one the app was started from. HTTP only, answered with
     /// [`Pending::done`] or [`Pending::refused`].
     Leave { pid: u32, home: bool },
+    /// The app `pid` belongs to asks for the panel's frames. HTTP only, answered with
+    /// [`Pending::stream`] or [`Pending::refused`].
+    ScreenRecord { pid: u32 },
 }
 
 /// One line into a request: `ping`, or `open` and an absolute path.
@@ -125,6 +131,16 @@ impl Pending {
     /// An HTTP request did what it asked.
     pub fn done(mut self) {
         let _ = crate::claim::reply(&mut self.stream, 200, "OK", "{}");
+    }
+
+    /// The connection, once told a stream of frames follows.
+    pub fn stream(mut self) -> io::Result<UnixStream> {
+        write!(
+            self.stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n"
+        )?;
+        self.stream.flush()?;
+        Ok(self.stream)
     }
 
     /// An HTTP request cannot be done: the keyboard cannot be put up, or the app
@@ -185,7 +201,9 @@ fn accept_loop(listener: UnixListener, tx: Sender<Pending>) {
             // The reader may hold the headers already, so they go along with the line
             let rest = reader.buffer().to_vec();
             let path = line.split(' ').nth(1).unwrap_or("");
-            if matches!(path, "/keyboard" | "/leave" | "/home") || path.starts_with("/keyboard?") {
+            if matches!(path, "/keyboard" | "/leave" | "/home" | "/screen-record")
+                || path.starts_with("/keyboard?")
+            {
                 match from_app(&line, &rest, &stream) {
                     Ok(request) => {
                         if tx.send(Pending { request, stream }).is_err() {
@@ -219,8 +237,8 @@ fn accept_loop(listener: UnixListener, tx: Sender<Pending>) {
     }
 }
 
-/// A `/keyboard`, `/leave` or `/home` request into what it asks, its headers read so the
-/// answer is not sent over a request still arriving.
+/// A `/keyboard`, `/leave`, `/home` or `/screen-record` request into what it asks,
+/// its headers read so the answer is not sent over a request still arriving.
 fn from_app(
     first: &str,
     rest: &[u8],
@@ -241,6 +259,9 @@ fn from_app(
     let pid = || peer_pid(stream).ok_or((500, "Internal Server Error", "who is asking"));
     if target == "/leave" || target == "/home" {
         return Ok(Request::Leave { pid: pid()?, home: target == "/home" });
+    }
+    if target == "/screen-record" {
+        return Ok(Request::ScreenRecord { pid: pid()? });
     }
     let query = target.split_once('?').map_or("", |(_, q)| q);
     let (mut title, mut text) = (String::new(), String::new());
@@ -316,7 +337,7 @@ pub fn send_to(path: &Path, request: &Request) -> Reply {
     let line = match request {
         Request::Ping => "ping".to_string(),
         Request::Open(path) => format!("open {}", path.display()),
-        Request::Keyboard { .. } | Request::Leave { .. } => {
+        Request::Keyboard { .. } | Request::Leave { .. } | Request::ScreenRecord { .. } => {
             return Reply::Refused("not a line request".into())
         }
     };
@@ -455,6 +476,36 @@ mod tests {
         };
         assert_eq!(pending.request, Request::Leave { pid: std::process::id(), home: true });
         pending.done();
+    }
+
+    /// A recording is answered with a stream rather than a body: the 200 and its
+    /// headers, then whatever flipctl writes until it closes.
+    #[test]
+    fn an_app_asks_for_the_screen() {
+        let path =
+            std::env::temp_dir().join(format!("flipctl-ipc-rec-{}.sock", std::process::id()));
+        let mut listener = Listener::bind_at(path.clone()).expect("bind");
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .write_all(
+                b"POST /screen-record HTTP/1.1\r\nHost: flipctl\r\nContent-Length: 0\r\n\r\n",
+            )
+            .unwrap();
+        let pending = loop {
+            if let Some(p) = listener.poll() {
+                break p;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(pending.request, Request::ScreenRecord { pid: std::process::id() });
+        let mut back = pending.stream().unwrap();
+        back.write_all(b"frames").unwrap();
+        drop(back);
+        let mut said = String::new();
+        stream.read_to_string(&mut said).unwrap();
+        assert!(said.starts_with("HTTP/1.1 200 OK\r\n"), "{said}");
+        assert!(said.ends_with("\r\n\r\nframes"), "{said}");
     }
 
     #[test]

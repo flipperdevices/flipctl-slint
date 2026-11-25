@@ -4979,6 +4979,9 @@ fn panel(
     // can be turned the same way and still want their own.
     #[cfg(feature = "wayland")]
     let mut strip_for: Option<(String, flipper_ui::Rotate)> = None;
+    // The app recording the panel, while one is: every frame committed goes to it too.
+    #[cfg(feature = "wayland")]
+    let mut rec_tap: Option<flipper_ui::screen_rec::Tap> = None;
     // What a canvas app costs, per second while one is sending. The pixels arrive in
     // the panel's own format, are expanded to RGB for Slint and reduced again on the
     // way out, and the question is what that is worth.
@@ -5323,6 +5326,41 @@ fn panel(
                     }
                     continue;
                 }
+                flipper_ui::ipc::Request::ScreenRecord { pid } => {
+                    // From the app in front, which goes to the background as it is
+                    // answered so that what it records is the screen underneath.
+                    #[cfg(feature = "wayland")]
+                    {
+                        let asker = wl_front
+                            .as_deref()
+                            .filter(|_| rec_tap.is_none())
+                            .and_then(|name| wl_apps.iter().find(|a| a.name == name))
+                            .filter(|a| a.owns(pid))
+                            .map(|a| a.name.clone());
+                        match asker {
+                            Some(name) => match req
+                                .stream()
+                                .and_then(|s| flipper_ui::screen_rec::Tap::new(s, name.clone()))
+                            {
+                                Ok(tap) => {
+                                    eprintln!("app            {name} records the panel");
+                                    rec_tap = Some(tap);
+                                    asked_leave = Some(false);
+                                    screen.set_recording(true);
+                                    strip_for = None;
+                                }
+                                Err(e) => eprintln!("app            {name} cannot record: {e}"),
+                            },
+                            None => req.refused("only the app in front can record, one at a time"),
+                        }
+                    }
+                    #[cfg(not(feature = "wayland"))]
+                    {
+                        let _ = pid;
+                        req.refused("no app is in front");
+                    }
+                    continue;
+                }
             };
             if !demo::can_host_apps() {
                 req.err("cannot host apps");
@@ -5359,6 +5397,22 @@ fn panel(
                 Opened::Queued => req.ok(&format!("queued {name}")),
                 Opened::Starting => req.ok(&format!("starting {name}")),
                 Opened::Refused => req.err(&format!("{name} cannot start; the panel says why")),
+            }
+        }
+
+        // A recording ends when its app hangs up or quits. Its app coming back to the
+        // front holds it, before that app's first frame is committed, so the recorder
+        // never films itself.
+        #[cfg(feature = "wayland")]
+        if let Some(tap) = rec_tap.as_mut() {
+            let quit = !wl_apps.iter().any(|a| a.name == tap.owner());
+            if quit || tap.over() {
+                eprintln!("app            {} stops recording the panel", tap.owner());
+                rec_tap = None;
+                screen.set_recording(false);
+                strip_for = None;
+            } else {
+                tap.front(wl_front.as_deref());
             }
         }
 
@@ -6059,6 +6113,9 @@ fn panel(
                         {
                             eprintln!("app            frame not shown: {e}");
                         }
+                    }
+                    if let Some(tap) = rec_tap.as_mut() {
+                        tap.frame(Some(&front), ready, PANEL_W, PANEL_H);
                     }
                     // The browser view shows the panel, so it gets the same frame, and
                     // only while somebody is looking.
@@ -9033,6 +9090,10 @@ fn panel(
                 if !app_owns_panel {
                     sink.commit(composed, damage)?;
                 }
+            }
+            #[cfg(feature = "wayland")]
+            if let Some(tap) = rec_tap.as_mut().filter(|_| !app_owns_panel) {
+                tap.frame(wl_front.as_deref(), &frame, PANEL_W, PANEL_H);
             }
             #[cfg(feature = "remote")]
             if let Some(view) = web.as_mut() {
