@@ -6,7 +6,7 @@ toolkit under the GNU General Public License v3.0 (we hold no separate Slint
 license agreement), **the distributed binary as a whole is licensed under
 GPL-3.0-only**. All sources remain publicly buildable.
 
-The panel's three pixel fonts are not crates and are not covered here: they live
+The panel's pixel fonts are not crates and are not covered here: they live
 in `third_party/flipctl-fonts`, each with its own license, and HaxrCorp 4090 in
 particular is CC BY-SA 3.0 rather than MIT.
 

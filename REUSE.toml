@@ -10,7 +10,7 @@ version = 1
 # Because the binary links Slint under GPL-3.0, the distributed binary as a whole
 # is GPL-3.0-only; our own source stays MIT (GPL-compatible).
 #
-# The three pixel fonts in third_party/flipctl-fonts are vendored files here
+# The pixel fonts in third_party/flipctl-fonts are vendored files here
 # rather than a submodule, so they are annotated below, each under its own terms.
 # One of them, HaxrCorp 4090, is CC BY-SA 3.0: the Rust glyph table generated from
 # it carries those terms too, which is why src/font/title.rs is not MIT.
@@ -102,6 +102,18 @@ precedence = "override"
 SPDX-FileCopyrightText = "JapanYoshi; 2026 Flipper Devices Inc. (FlipCTL glyphs)"
 SPDX-License-Identifier = "Unlicense"
 
+# helvb08: u8g2's helvB08, from the X11 Adobe Helvetica Bold bitmap, with FlipCTL
+# glyphs. Its permissive Adobe/DEC terms have no SPDX identifier, hence the LicenseRef.
+# The Wi-Fi Scanner's headings are set in it.
+[[annotations]]
+path = [
+    "third_party/flipctl-fonts/helvb08-FlipCTL/**",
+    "crates/flipper-ui/src/font/helvb08.rs",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "1984, 1987 Adobe Systems Incorporated; 1988, 1991 Digital Equipment Corporation; 2026 Flipper Devices Inc. (FlipCTL glyphs)"
+SPDX-License-Identifier = "LicenseRef-X11-Adobe-DEC"
+
 # Freedoom's PLAYPAL, and the palette derived from it. The project licenses that
 # lump and COLORMAP separately from the rest of its art, because they descend from
 # id Software's originals rather than from the project's own drawing. Tone Lab
@@ -139,3 +151,4 @@ path = ["apps/speedtest/iperf3-servers.tsv"]
 precedence = "override"
 SPDX-FileCopyrightText = "R0GGER and the contributors to https://github.com/R0GGER/public-iperf3-servers"
 SPDX-License-Identifier = "MIT"
+

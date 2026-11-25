@@ -1,0 +1,40 @@
+helvb08 (FlipCTL)
+=================
+
+This font is based on `u8g2_font_helvB08_tf` from the
+[u8g2](https://github.com/olikraus/u8g2) project, which is itself derived from
+the X11 **Adobe Helvetica Bold** bitmap font:
+
+    -Adobe-Helvetica-Bold-R-Normal--11-80-100-100-P-60-ISO10646-1
+
+Flipper Devices added extra glyphs (the FlipCTL additions). The whole thing is
+distributed under the original X11-style Adobe/DEC permissive license, which
+allows use, modification, distribution and sale — commercial use included —
+provided the copyright notices are kept.
+
+    Original bitmap : Adobe Systems Incorporated (1984, 1987)
+                      Digital Equipment Corporation (1988, 1991)
+    Source          : u8g2 (olikraus/u8g2), font u8g2_font_helvB08_tf
+    FlipCTL glyphs  : Flipper Devices Inc., 2026
+
+SPDX / reference: X11-Style (Adobe-DEC)
+https://scancode-licensedb.aboutcode.org/x11-adobe-dec.html
+
+----------------------------------------------------------------------------
+
+Copyright (c) 1984, 1987 Adobe Systems Incorporated. All Rights Reserved.
+Copyright (c) 1988, 1991 Digital Equipment Corporation. All Rights Reserved.
+
+Adobe is a trademark of Adobe Systems Incorporated which may be registered in
+certain jurisdictions. Permission to use these trademarks is hereby granted only
+in association with the images described in this file.
+
+Permission to use, copy, modify, distribute and sell this software and its
+documentation for any purpose and without fee is hereby granted, provided that
+the above copyright notices appear in all copies and that both those copyright
+notices and this permission notice appear in supporting documentation, and that
+the names of Adobe Systems and Digital Equipment Corporation not be used in
+advertising or publicity pertaining to distribution of the software without
+specific, written prior permission. Adobe Systems and Digital Equipment
+Corporation make no representations about the suitability of this software for
+any purpose. It is provided "as is" without express or implied warranty.
