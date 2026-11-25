@@ -1,0 +1,15 @@
+# Wi-Fi Scanner: how busy a nearby network is and who is using it, read from the air.
+#
+# The onboard Wi-Fi is borrowed from flipctl (the wifi-monitor claim) in monitor mode
+# and moved into a network namespace of the app's own, so the app tunes and captures
+# without root and the kernel hands the radio back however the app ends. It only
+# listens: nothing is transmitted and nothing is decrypted.
+#
+# `audio` is what earns it the sound server: Locate beeps faster as the signal grows,
+# on the speaker flipctl pins the app to, and changes nothing about the system's sound.
+name = "Wi-Fi Scanner"
+icon = "icon.png"
+wayland = "./target/release/wifi-scanner-app"
+folder = "Network"
+apt = ["ieee-data"]
+audio = true

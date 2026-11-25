@@ -1,0 +1,138 @@
+# Makers that put essentially one kind of device on Wi-Fi, by how the IEEE OUI
+# registry (Debian's ieee-data) spells them, and that kind. A registered name matches
+# when it starts with the prefix at a word boundary, ignoring case; the first match
+# wins, so a company's specific line comes before its general one. A maker of several
+# kinds (Apple, Samsung, Google, Amazon, Sony, TP-Link, Huawei Technologies, ASUS) is
+# left out on purpose: its MAC says nothing about which.
+#
+# prefix	kind
+
+# Phones
+Huawei Device	Phone
+GUANGDONG OPPO MOBILE	Phone
+vivo Mobile	Phone
+Realme	Phone
+OnePlus	Phone
+HMD Global	Phone
+TECNO MOBILE	Phone
+Infinix	Phone
+ITEL MOBILE	Phone
+HTC Corporation	Phone
+Motorola Mobility	Phone
+Xiaomi Communications	Phone
+Beijing Xiaomi Mobile Software	Phone
+Nothing Technology	Phone
+Fairphone	Phone
+LG Electronics (Mobile Communications)	Phone
+
+# PCs: Wi-Fi cards and laptop makers, and desktop boards
+Intel Corporate	Laptop
+AzureWave	Laptop
+Liteon	Laptop
+LITE-ON	Laptop
+Rivet Networks	Laptop
+Dell Inc	Laptop
+LCFC	Laptop
+Wistron Corporation	Laptop
+Micro-Star	Laptop
+CLEVO	Laptop
+Framework Computer	Laptop
+COMPAL INFORMATION	Laptop
+Raspberry Pi	Computer
+GIGA-BYTE	Computer
+ASRock	Computer
+Elitegroup	Computer
+
+# TVs and boxes
+LG Electronics	TV
+TCL King	TV
+HISENSE VISUAL	TV
+Hisense broadband	Media Player
+Vizio	TV
+SHENZHEN CHUANGWEI-RGB	TV
+Skyworth Digital	Media Player
+SKY UK	Media Player
+Roku	Media Player
+
+# Sound
+Sonos, Inc	Speaker
+Bose Corporation	Speaker
+GN Audio	Headphones
+Sennheiser	Headphones
+
+# Cameras and doorbells
+Hangzhou Hikvision	Camera
+Zhejiang Dahua	Camera
+Hangzhou Huacheng	Camera
+Hangzhou Ezviz	Camera
+Ring LLC	Camera
+Wyze Labs	Camera
+Arlo Technology	Camera
+Reolink	Camera
+Amcrest	Camera
+Shanghai Imilab	Camera
+GoPro	Camera
+
+# Printers. HP's laptops carry Intel or Realtek cards; its own OUIs on Wi-Fi are
+# printers, and the Enterprise half is Aruba's access points, under Routers.
+Hewlett Packard Enterprise	Router
+HP Inc	Printer
+Hewlett Packard	Printer
+CANON INC	Printer
+Seiko Epson	Printer
+XEROX	Printer
+Brother Industries	Printer
+LEXMARK	Printer
+KYOCERA Document	Printer
+KONICA MINOLTA	Printer
+RICOH	Printer
+
+# Games
+Nintendo	Game Console
+Sony Interactive	Game Console
+Valve Corporation	Game Console
+Oculus	Game Console
+Meta Platforms Technologies	Game Console
+
+# Wearables
+Fitbit	Watch
+Garmin	Watch
+Polar Electro	Watch
+Anhui Huami	Watch
+
+# Smart home: Wi-Fi modules, appliances, lights, thermostats, robots
+Espressif	IoT
+Tuya	IoT
+Beken	IoT
+Beijing Xiaomi Electronics	IoT
+Lumi United	IoT
+iRobot	IoT
+Beijing Roborock	IoT
+Dreame	IoT
+Midea	IoT
+Haier	IoT
+BSH Hausgeraete	IoT
+BSH Hausgeräte	IoT
+Signify	IoT
+Philips Lighting	IoT
+WiZ	IoT
+Nest Labs	IoT
+ecobee	IoT
+tado	IoT
+Resideo	IoT
+Chamberlain	IoT
+
+# Routers, access points and modems: on Wi-Fi as a client, a repeater or mesh node
+Routerboard	Router
+Ubiquiti	Router
+NETGEAR	Router
+AVM	Router
+Technicolor	Router
+Sagemcom	Router
+ARRIS	Router
+Ubee	Router
+Zyxel	Router
+DrayTek	Router
+Cisco Meraki	Router
+Ruckus	Router
+Compal Broadband	Router

@@ -34,6 +34,8 @@ So, in the terms the rest of the org states this in:
 - **Unlicense**: the Born2bSportyV2 font
 - **LicenseRef-X11-Adobe-DEC**: the helvb08 font (Adobe/DEC's permissive X11-style
   terms), and the glyph table generated from it
+- **Apache-2.0**: the Wi-Fi Scanner's device signature table, generated from
+  Google's wifi_taxonomy database
 
 ## Layout
 

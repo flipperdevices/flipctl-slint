@@ -47,6 +47,13 @@ chip_fill    = "#e5e5e5"   # MenuDropdownLine CHIP_FILL
 pick_rule    = "#999999"   # internet_radio.js dropdown item divider
 # A hosted app's title bar, under the status bar and the full width of the panel.
 app_bar      = "#d9d9d9"   # internet_radio.js title header fill
+# The Wi-Fi Scanner's list and card, from its Figma frames: secondary text and the
+# security pill, a weak signal's arcs and bars, the card's alternate rows, and the
+# grey the list fades to under the soft keys.
+scan_text    = "#696969"   # Wi-Fi Scanner subline, note, pill, card label
+scan_weak    = "#b3b3b3"   # Wi-Fi Scanner signal arc and bar beyond the level
+scan_stripe  = "#f5f5f5"   # Wi-Fi Scanner card alternate row
+scan_fade    = "#bbbbbb"   # Wi-Fi Scanner list fade under the soft keys
 chevron_flash = "#222222"   # MenuLine < > arrow tap flash
 popup_edge    = "#d0d0d0"   # drawPopupLeft shadow edge
 keycap_dim    = "#888888"   # keyboard language-switcher label

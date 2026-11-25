@@ -1,0 +1,28 @@
+[workspace]
+
+[package]
+name = "wifi-scanner-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+flipctl-app = { path = "../../crates/flipctl-app" }
+flipper-ui = { path = "../../crates/flipper-ui", default-features = false }
+libc = "0.2"
+# Locate's beep, over the sound server's PulseAudio socket; pure Rust, as the radio
+# and the recorder use it.
+pulseaudio = { version = "0.3", default-features = false }
+slint = { version = "1.17", default-features = false, features = [
+    "compat-1-2", "backend-winit-wayland", "renderer-software", "std" ] }
+
+[dev-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["render"] }
+
+[build-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
+
+[profile.release]
+opt-level = "z"
+strip = true
