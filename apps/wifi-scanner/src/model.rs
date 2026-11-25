@@ -287,9 +287,9 @@ impl Model {
     /// those are many of the frames, and leaving them out starved the reading.
     fn sample(&mut self, h: &Header, phy: &Phy) {
         let (Some(t), Some(dbm)) = (self.target, phy.signal) else { return };
-        // An AP by its beacons only: sent at one power and rate, where its data frames
-        // vary by several dB with the rate they are sent at
-        let beacon = h.kind == dot11::MGMT && h.sub == dot11::BEACON;
+        // An AP by its beacons and probe responses only: sent at one power and rate,
+        // where its data frames vary by several dB with the rate they are sent at
+        let beacon = h.kind == dot11::MGMT && matches!(h.sub, dot11::BEACON | dot11::PROBE_RESP);
         if h.a2 == Some(t) && (t != self.bssid || beacon) {
             self.samples.push_back((self.now, dbm));
             while self.samples.front().is_some_and(|(at, _)| self.now - at > LOCATE_US) {

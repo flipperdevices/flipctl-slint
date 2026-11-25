@@ -11,5 +11,4 @@ name = "Wi-Fi Scanner"
 icon = "icon.png"
 wayland = "./target/release/wifi-scanner-app"
 folder = "Network"
-apt = ["ieee-data"]
 audio = true

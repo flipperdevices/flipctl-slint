@@ -1,0 +1,6 @@
+IEEE does not assert any copyright in the OUI Public Listing or attempt to restrict
+distribution of the listing in any way. The IEEE Registration Authority does, however,
+strongly encourage those who use the list to obtain it directly from IEEE (and to
+update it on a regular basis) to ensure the integrity of the information.
+
+(As stated for the listing in Debian's ieee-data package, debian/copyright.)

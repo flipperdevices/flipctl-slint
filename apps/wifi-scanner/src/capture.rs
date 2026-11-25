@@ -203,7 +203,7 @@ pub fn run(iface: &str) -> ! {
             say(&mut out, SURVEY, &s).unwrap_or_else(|e| gone(e));
         }
         // Often enough that Locate follows a walk; a pipe write is cheap
-        if got <= 0 || flushed.elapsed() >= Duration::from_millis(25) {
+        if got <= 0 || flushed.elapsed() >= Duration::from_millis(10) {
             out.flush().unwrap_or_else(|e| gone(e));
             flushed = Instant::now();
         }

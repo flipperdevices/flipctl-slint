@@ -841,7 +841,7 @@ impl App for Wifi {
     fn every(&self) -> Option<Duration> {
         // Quick enough for the dots while the first scan runs
         if self.view == View::Locate {
-            return Some(Duration::from_millis(100));
+            return Some(Duration::from_millis(50));
         }
         let waiting = self.view == View::List
             && self.scanning()

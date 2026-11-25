@@ -159,3 +159,11 @@ path = ["apps/wifi-scanner/src/taxonomy.rs"]
 precedence = "override"
 SPDX-FileCopyrightText = "2015 Google Inc."
 SPDX-License-Identifier = "Apache-2.0"
+
+# The Wi-Fi Scanner's vendor table, made by apps/wifi-scanner/tools/oui.py from the
+# IEEE OUI registry, in which IEEE asserts no copyright.
+[[annotations]]
+path = ["apps/wifi-scanner/oui.tsv"]
+precedence = "override"
+SPDX-FileCopyrightText = "IEEE Registration Authority"
+SPDX-License-Identifier = "LicenseRef-IEEE-OUI-Public-Listing"

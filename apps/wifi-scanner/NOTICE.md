@@ -12,3 +12,7 @@ used under the Apache License 2.0. It was changed: each signature is cut into it
 probe and association halves, kept only where a half names one device and carries HT
 capabilities, and stored as a hash with the device's name and a kind of our own. The
 license text is in `LICENSES/Apache-2.0.txt`.
+
+The vendor names, `oui.tsv`, are the IEEE OUI registry (MA-L) as of 2026-06-25, made
+by `tools/oui.py` from the copy in Debian's ieee-data 20260625. IEEE does not assert
+any copyright in the OUI Public Listing or restrict its distribution.

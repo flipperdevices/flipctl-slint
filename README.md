@@ -36,6 +36,8 @@ So, in the terms the rest of the org states this in:
   terms), and the glyph table generated from it
 - **Apache-2.0**: the Wi-Fi Scanner's device signature table, generated from
   Google's wifi_taxonomy database
+- **LicenseRef-IEEE-OUI-Public-Listing**: the Wi-Fi Scanner's vendor table, the IEEE
+  OUI registry, in which IEEE asserts no copyright
 
 ## Layout
 

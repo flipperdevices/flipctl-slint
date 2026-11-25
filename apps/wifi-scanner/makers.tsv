@@ -1,5 +1,5 @@
 # Makers that put essentially one kind of device on Wi-Fi, by how the IEEE OUI
-# registry (Debian's ieee-data) spells them, and that kind. A registered name matches
+# registry (oui.tsv) spells them, and that kind. A registered name matches
 # when it starts with the prefix at a word boundary, ignoring case; the first match
 # wins, so a company's specific line comes before its general one. A maker of several
 # kinds (Apple, Samsung, Google, Amazon, Sony, TP-Link, Huawei Technologies, ASUS) is

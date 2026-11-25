@@ -13,6 +13,7 @@ pub const ASSOC_RESP: u8 = 1;
 pub const REASSOC_REQ: u8 = 2;
 pub const REASSOC_RESP: u8 = 3;
 pub const PROBE_REQ: u8 = 4;
+pub const PROBE_RESP: u8 = 5;
 pub const BEACON: u8 = 8;
 pub const DISASSOC: u8 = 10;
 pub const DEAUTH: u8 = 12;

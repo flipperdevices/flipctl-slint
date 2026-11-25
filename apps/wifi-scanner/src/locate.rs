@@ -1,6 +1,6 @@
 //! Locate: one station's signal, read fast enough to walk towards it. A large dBm
 //! figure over the last second, the best seen, a level bar, and the strongest reading
-//! of each fifth of a second across the graph.
+//! of each tenth of a second across the graph.
 
 use flipctl_app::font::{ascii, TITLE};
 use flipctl_app::paint::Surface;
@@ -19,14 +19,14 @@ const MIN_SAMPLES: usize = 5;
 const REACH_US: u64 = 1_000_000;
 /// The beep moves in steps of this many dB, and only once the signal is this far past
 /// the middle of its step, so it holds still while the Flipper does.
-const STEP_DB: f32 = 4.0;
-const HOLD_DB: f32 = 4.5;
+const STEP_DB: f32 = 3.0;
+const HOLD_DB: f32 = 3.5;
 /// Nothing for this long and the figure goes dim and the beep stops. A client asleep in
 /// power save says nothing for a second or more at a time, and stopping at once made
 /// the beep stutter; the "ago" line still says when it was last heard.
 const HEARD_US: u64 = 3_000_000;
 /// One graph column.
-const BIN_US: u64 = 200_000;
+const BIN_US: u64 = 100_000;
 /// The level bar and the graph run from this weak to this strong.
 const FLOOR: f32 = -100.0;
 const CEILING: f32 = -20.0;
@@ -154,7 +154,7 @@ pub fn page(m: &Model, name: &str) -> Page {
         s.rect(left + 2, bar_y + 2, w, 5, tone);
     }
 
-    // Strongest of each fifth of a second, newest at the right
+    // Strongest of each tenth of a second, newest at the right
     let h = bottom - graph_top;
     s.frame(left, graph_top, right - left + 1, h, color::DIVIDER);
     let inner = h - 2;
@@ -172,7 +172,7 @@ mod tests {
     use crate::model::tests::{data, AP, STA};
 
     #[test]
-    fn the_last_second_the_best_and_one_column_a_fifth() {
+    fn the_last_second_the_best_and_one_column_a_tenth() {
         let mut m = Model::new(AP);
         m.locate(Some(STA));
         // Uplink frames at -60 for two seconds, then one at -40 now
@@ -183,7 +183,7 @@ mod tests {
         let r = reading(&m, 30);
         assert_eq!(r.best, r.last.map(|(_, d)| d));
         assert!(r.now.is_some());
-        assert_eq!(r.bins.iter().filter(|b| b.is_some()).count(), 10);
+        assert_eq!(r.bins.iter().filter(|b| b.is_some()).count(), 20);
         // A frame from someone else is not the target's
         let before = m.samples.len();
         let f = data(false, 0, 10, 0);
@@ -194,11 +194,11 @@ mod tests {
     #[test]
     fn the_beep_holds_its_step_through_jitter_and_moves_on_a_change() {
         let mut s = Steady::default();
-        let first = s.update(Some(-61.0));
-        for d in [-59.0, -63.0, -64.0, -58.5, -62.0] {
+        let first = s.update(Some(-60.0));
+        for d in [-57.0, -63.0, -62.5, -58.0, -61.0] {
             assert_eq!(s.update(Some(d)), first, "{d}");
         }
-        assert_ne!(s.update(Some(-52.0)), first);
+        assert_ne!(s.update(Some(-56.0)), first);
         assert_eq!(s.update(None), None);
     }
 

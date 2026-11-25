@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn wifi_taxonomy's signature database into the Wi-Fi Scanner's lookup table.
 
-    tools/wifi-taxonomy-to-rust.py WIFI_TAXONOMY_CHECKOUT > apps/wifi-scanner/src/taxonomy.rs
+    apps/wifi-scanner/tools/taxonomy.py WIFI_TAXONOMY_CHECKOUT > apps/wifi-scanner/src/taxonomy.rs
 
 The database (github.com/NetworkDeviceTaxonomy/wifi_taxonomy, taxonomy/wifi.py, Apache-2.0)
 keys each device by its probe and association request signatures together. The app
