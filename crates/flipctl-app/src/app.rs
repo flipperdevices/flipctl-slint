@@ -43,7 +43,7 @@
 //! window. The types Slint generates belong to the app's crate, so the one piece that
 //! touches them, [`Screen`], is written by the macro.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -317,7 +317,8 @@ pub trait App {
     }
 
     /// How often to call [`App::tick`] and draw, for an app showing something that
-    /// changes on its own.
+    /// changes on its own. Asked again after every key, tick and redraw, so a page
+    /// that wants a faster clock than the rest can have one while it is shown.
     fn every(&self) -> Option<Duration> {
         None
     }
@@ -634,11 +635,38 @@ where
     A: App + 'static,
     S: Screen + 'static,
 {
-    let every = app.every();
     let driver = Rc::new(RefCell::new(Driver::new(app, screen)));
     driver.borrow_mut().draw();
 
+    let clock = Rc::new(slint::Timer::default());
+    let every = Rc::new(Cell::new(None));
+    let tick: Rc<dyn Fn()> = {
+        let (ticked, timer, every) = (Rc::downgrade(&driver), Rc::downgrade(&clock), every.clone());
+        Rc::new(move || {
+            let (Some(driver), Some(timer)) = (ticked.upgrade(), timer.upgrade()) else {
+                return;
+            };
+            driver.borrow_mut().tick();
+            if driver.borrow().closed() {
+                let _ = slint::quit_event_loop();
+            }
+            retime(&driver, &timer, &every, None);
+        })
+    };
+    let retimed = {
+        let (driver, clock, every, tick) =
+            (Rc::downgrade(&driver), Rc::downgrade(&clock), every.clone(), tick.clone());
+        move || {
+            if let (Some(driver), Some(clock)) = (driver.upgrade(), clock.upgrade()) {
+                retime(&driver, &clock, &every, Some(&tick));
+            }
+        }
+    };
+    let retimed = Rc::new(retimed);
+    retimed();
+
     let keys = Rc::downgrade(&driver);
+    let after_key = retimed.clone();
     bind(Box::new(move |text, down| {
         let (Some(driver), Some(key)) = (keys.upgrade(), Key::from_slint(text)) else {
             return;
@@ -647,22 +675,28 @@ where
         if press == Press::Flash {
             let later = Rc::downgrade(&driver);
             let flash = Duration::from_millis(timing::PRESS_FLASH_MS as u64);
+            let after_flash = after_key.clone();
             slint::Timer::single_shot(flash, move || {
                 if let Some(driver) = later.upgrade() {
                     driver.borrow_mut().release(key);
                     driver.borrow_mut().settle_away();
                 }
+                after_flash();
             });
         }
         driver.borrow_mut().settle_away();
+        drop(driver);
+        after_key();
     }));
 
     let hooked = Rc::downgrade(&driver);
+    let after_redraw = retimed.clone();
     REDRAW.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(move || {
             if let Some(driver) = hooked.upgrade() {
                 driver.borrow_mut().draw();
             }
+            after_redraw();
         }));
     });
 
@@ -676,20 +710,31 @@ where
         }
     });
 
-    let clock = slint::Timer::default();
-    if let Some(every) = every {
-        let ticked = Rc::downgrade(&driver);
-        clock.start(slint::TimerMode::Repeated, every, move || {
-            if let Some(driver) = ticked.upgrade() {
-                driver.borrow_mut().tick();
-                if driver.borrow().closed() {
-                    let _ = slint::quit_event_loop();
-                }
-            }
-        });
-    }
-
     run()
+}
+
+/// Start, change or stop the clock to what [`App::every`] asks for now. `tick` is
+/// needed only to start a stopped clock, which the tick itself never has to.
+fn retime<A: App, S: Screen>(
+    driver: &RefCell<Driver<A, S>>,
+    clock: &slint::Timer,
+    every: &Cell<Option<Duration>>,
+    tick: Option<&Rc<dyn Fn()>>,
+) {
+    let want = driver.borrow().app.every();
+    if want == every.get() {
+        return;
+    }
+    match (want, tick) {
+        (None, _) => clock.stop(),
+        (Some(w), _) if clock.running() => clock.set_interval(w),
+        (Some(w), Some(tick)) => {
+            let tick = tick.clone();
+            clock.start(slint::TimerMode::Repeated, w, move || tick());
+        }
+        (Some(_), None) => return,
+    }
+    every.set(want);
 }
 
 #[cfg(test)]
