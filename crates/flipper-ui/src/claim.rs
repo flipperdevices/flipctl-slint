@@ -15,6 +15,7 @@
 //! | Resource | Lent | Given back |
 //! |---|---|---|
 //! | `mt7921` | the onboard Wi-Fi chip, driverless, for an SDR app | both drivers, rfkill as found |
+//! | `wifi-monitor` | the onboard Wi-Fi in monitor mode, moved into the asking process's own network namespace, where it tunes and captures without root | a managed interface, which NetworkManager takes up again |
 //! | `udc` | the device side of the main USB-C, as /dev/raw-gadget | the boot gadget, started again |
 //! | `uac2` | the same port as a USB sound card, 48 kHz stereo both ways, its ALSA card `UAC2Gadget` | the boot gadget, started again |
 //! | `bt-hid` | the Bluetooth radio, powered and pairable, for an app to be a Bluetooth keyboard through BlueZ | powered, pairable, blocked and named as found |
@@ -46,6 +47,10 @@ static OUT: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 #[derive(Debug, PartialEq)]
 enum Resource {
     Mt7921,
+    /// The onboard Wi-Fi in monitor mode, lent to the process with this pid by moving
+    /// it into that process's network namespace. The pid is the asker's own, read from
+    /// the socket, never from the request.
+    WifiMonitor(u32),
     Udc,
     /// The device port as a USB sound card.
     Uac2,
@@ -72,6 +77,7 @@ impl Resource {
             |prefix: &str| name.strip_prefix(prefix).filter(|p| is_port(p)).map(String::from);
         match name {
             MT7921 => Some(Resource::Mt7921),
+            "wifi-monitor" => Some(Resource::WifiMonitor(0)),
             "udc" => Some(Resource::Udc),
             "uac2" => Some(Resource::Uac2),
             "hid" => Some(Resource::Hid),
@@ -85,6 +91,7 @@ impl Resource {
     fn name(&self) -> String {
         match self {
             Resource::Mt7921 => MT7921.into(),
+            Resource::WifiMonitor(_) => "wifi-monitor".into(),
             Resource::Udc => "udc".into(),
             Resource::Uac2 => "uac2".into(),
             Resource::Hid => "hid".into(),
@@ -99,13 +106,14 @@ impl Resource {
     fn lock(&self) -> String {
         match self {
             Resource::Uac2 | Resource::Hid => Resource::Udc.name(),
+            Resource::WifiMonitor(_) => MT7921.into(),
             _ => self.name(),
         }
     }
 
     fn busy(&self) -> &'static str {
         match self {
-            Resource::Mt7921 => "the Wi-Fi chip is in use",
+            Resource::Mt7921 | Resource::WifiMonitor(_) => "the Wi-Fi chip is in use",
             Resource::Udc | Resource::Uac2 | Resource::Hid => "the USB-C device port is in use",
             Resource::BtHid => "Bluetooth is lent out already",
             Resource::Usb(_) => "that USB device is in use",
@@ -117,6 +125,9 @@ impl Resource {
     fn hold(&self) -> Result<(), String> {
         match self {
             Resource::Mt7921 => root(&format!("{MT7921_COMMON}{HOLD}"), &[]),
+            Resource::WifiMonitor(pid) => {
+                root(&format!("{MONITOR_COMMON}{MONITOR_HOLD}"), &[&pid.to_string()])
+            }
             Resource::Udc => root(&format!("{UDC}{UDC_CHECK}{GADGET_STOP}{UDC_HOLD}"), &[]),
             Resource::Uac2 => {
                 root(&format!("{UAC2}{UAC2_CHECK}{GADGET_STOP}{SERIAL}{UAC2_HOLD}"), &[])
@@ -132,6 +143,7 @@ impl Resource {
     fn release(&self) -> Result<(), String> {
         match self {
             Resource::Mt7921 => root(&format!("{MT7921_COMMON}{RELEASE}"), &[]),
+            Resource::WifiMonitor(_) => root(&format!("{MONITOR_COMMON}{MONITOR_RELEASE}"), &[]),
             Resource::Udc => root(&format!("{UDC}{UDC_RELEASE}{GADGET_START}"), &[]),
             Resource::Uac2 => root(&format!("{UAC2}{UAC2_RELEASE}{GADGET_START}"), &[]),
             Resource::Hid => root(&format!("{HID}{HID_RELEASE}{GADGET_START}"), &[]),
@@ -206,6 +218,68 @@ modprobe btusb
 was=$(cat $STATE 2>/dev/null || echo 0)
 rm -f $STATE
 [ "$was" = 1 ] || echo 0 > $RFK/soft
+exit 0
+"#;
+
+const MONITOR_COMMON: &str = r#"
+DEV=/sys/bus/usb/devices/2-1.1
+STATE=/run/flipctl-wifi-monitor.state
+"#;
+
+/// Put the onboard Wi-Fi into monitor mode and move its phy into the network namespace
+/// of process `$2`, which then has CAP_NET_ADMIN over it from its own user namespace
+/// and needs no root to tune or capture. NetworkManager is told to let go first. The
+/// interface, phy and pid are kept for the release.
+///
+/// A firmware scan leaves the receive filter dropping unicast between other stations,
+/// and a kernel without "wifi: mt76: mt7921: let monitors see other stations' unicast"
+/// (https://lore.kernel.org/r/20261026220346.601314-1-lucid_duck@justthetip.ca) keeps
+/// it that way in monitor mode. That bit (DROP_OTHER_UC, 18 of MT_WF_RFCR) is cleared
+/// here through the driver's debugfs when it is set. regidx is written before regval is
+/// read: a read of chip address 0 hangs the USB bus.
+const MONITOR_HOLD: &str = r#"
+[ -e /run/udev/rules.d/79-mt7921-sdr.rules ] && { echo "held by mt7921-sdr-hold"; exit 1; }
+W=
+chip=$(readlink -f $DEV)
+for n in /sys/class/net/*; do
+    case $(readlink -f "$n/device") in "$chip"/*) W=${n##*/} ;; esac
+done
+[ -n "$W" ] || { echo "no onboard Wi-Fi"; exit 1; }
+PHY=$(basename "$(readlink "/sys/class/net/$W/phy80211")")
+echo "$W $PHY $2" > $STATE
+nmcli dev set "$W" managed no >/dev/null 2>&1
+ip link set "$W" down
+iw dev "$W" set type monitor || { echo "the Wi-Fi has no monitor mode"; exit 1; }
+iw dev "$W" set monitor fcsfail control otherbss
+ip link set "$W" up || { echo "the Wi-Fi did not come up"; exit 1; }
+D=/sys/kernel/debug/ieee80211/$PHY/mt76
+if echo $((0x820e5000)) > "$D/regidx" 2>/dev/null; then
+    v=$(cat "$D/regval")
+    [ $((v >> 18 & 1)) = 0 ] || echo $((v & ~0x40000)) > "$D/regval"
+fi
+iw phy "$PHY" set netns "$2" || { echo "the Wi-Fi could not be lent"; exit 1; }
+exit 0
+"#;
+
+/// Wait for the phy to come home, which the kernel does when the borrower's namespace
+/// goes, on a work queue of its own that can take several seconds. A borrower still
+/// alive with its claim closed is made to hand it back. The
+/// interface is made again rather than set back to managed: NetworkManager drops a
+/// device that leaves the namespace and does not take up the same one returning, but
+/// takes a new one as it would at boot.
+const MONITOR_RELEASE: &str = r#"
+[ -e $STATE ] || exit 0
+read -r W PHY PID < $STATE
+i=0
+until iw phy "$PHY" info >/dev/null 2>&1; do
+    [ $i = 10 ] && [ -d "/proc/$PID" ] && nsenter -t "$PID" -n iw phy "$PHY" set netns 1
+    [ $i -lt 150 ] || { echo "the Wi-Fi did not come back"; exit 1; }
+    sleep 0.2
+    i=$((i + 1))
+done
+iw dev "$W" del 2>/dev/null
+iw phy "$PHY" interface add "$W" type managed || { echo "the Wi-Fi interface was not made again"; exit 1; }
+rm -f $STATE
 exit 0
 "#;
 
@@ -548,6 +622,9 @@ pub fn recover() {
         if std::path::Path::new("/run/udev/rules.d/79-flipctl-mt7921.rules").exists() {
             left.push(Resource::Mt7921);
         }
+        if std::path::Path::new("/run/flipctl-wifi-monitor.state").exists() {
+            left.push(Resource::WifiMonitor(0));
+        }
         if std::path::Path::new("/run/flipctl-udc.unit").exists() {
             left.push(Resource::Udc);
         }
@@ -616,11 +693,17 @@ fn handle(first: &str, rest: &[u8], mut stream: UnixStream) -> std::io::Result<(
     let Some(asked) = path.strip_prefix("/claim/") else {
         return reply(&mut stream, 404, "Not Found", &error("no such endpoint"));
     };
-    let Some(resource) = Resource::parse(asked) else {
+    let Some(mut resource) = Resource::parse(asked) else {
         return reply(&mut stream, 404, "Not Found", &error("no such resource"));
     };
     if method != "POST" {
         return reply(&mut stream, 405, "Method Not Allowed", &error("a claim is a POST"));
+    }
+    if let Resource::WifiMonitor(pid) = &mut resource {
+        match borrower(&stream) {
+            Ok(asker) => *pid = asker,
+            Err(why) => return reply(&mut stream, 403, "Forbidden", &error(why)),
+        }
     }
     let name = resource.name();
     let lock = resource.lock();
@@ -646,12 +729,44 @@ fn handle(first: &str, rest: &[u8], mut stream: UnixStream) -> std::io::Result<(
         while stream.read(&mut sink)? > 0 {}
         Ok::<(), std::io::Error>(())
     })();
+    // Closed before the release: the asker's end of it pins the network namespace it
+    // was made in, which a wifi-monitor release waits on
+    drop((reader, stream));
     crate::logline!("claim          {name} giving back");
     if let Err(e) = resource.release() {
         crate::logline!("claim          {name} release: {e}");
     }
     OUT.lock().unwrap().remove(&lock);
     held
+}
+
+/// The process at the other end of `stream`, if it may borrow the Wi-Fi: this user's,
+/// and in a network namespace of its own, since moving the phy into ours would lend it
+/// to everything here.
+fn borrower(stream: &UnixStream) -> Result<u32, &'static str> {
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let got = unsafe {
+        libc::getsockopt(
+            std::os::fd::AsRawFd::as_raw_fd(stream),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    if got != 0 || cred.pid <= 0 {
+        return Err("who is asking is unknown");
+    }
+    if cred.uid != unsafe { libc::getuid() } {
+        return Err("only this user's apps can borrow the Wi-Fi");
+    }
+    let ns = |pid: &str| std::fs::read_link(format!("/proc/{pid}/ns/net")).ok();
+    match (ns(&cred.pid.to_string()), ns("self")) {
+        (Some(theirs), Some(ours)) if theirs != ours => Ok(cred.pid as u32),
+        (Some(_), Some(_)) => Err("ask from a network namespace of your own"),
+        _ => Err("who is asking is unknown"),
+    }
 }
 
 pub(crate) fn error(why: &str) -> String {
@@ -756,6 +871,10 @@ mod tests {
             ("GET /claim/uac2 HTTP/1.1", "405"),
             ("GET /claim/hid HTTP/1.1", "405"),
             ("GET /claim/usb/1-1.2 HTTP/1.1", "405"),
+            ("GET /claim/wifi-monitor HTTP/1.1", "405"),
+            ("POST /claim/wifi-monitor/1 HTTP/1.1", "404"),
+            // The test's own end shares this process's network namespace
+            ("POST /claim/wifi-monitor HTTP/1.1", "403"),
         ] {
             let (mut a, b) = UnixStream::pair().unwrap();
             a.write_all(b"Host: flipctl\r\n\r\n").unwrap();
