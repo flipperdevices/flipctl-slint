@@ -310,6 +310,33 @@ impl Grab {
         Ok(true)
     }
 
+    /// Read and dispatch whatever the compositor has sent, without waiting.
+    ///
+    /// For the time an app spends in the background, when nothing is being captured.
+    /// The compositor goes on talking to this connection all the same: every output
+    /// is re-moded as apps come and go, and a copy left in flight completes. Left
+    /// unread for minutes, those fill the socket, and the compositor drops a client
+    /// it cannot write to. The app then loses its keys and its picture at once: it
+    /// comes back to the front showing whatever it last drew, and nothing reaches it.
+    fn drain(&mut self) -> io::Result<()> {
+        self.conn.flush().map_err(io::Error::other)?;
+        if let Some(guard) = self.conn.prepare_read() {
+            let mut fd = libc::pollfd {
+                fd: {
+                    use std::os::fd::AsRawFd;
+                    self.conn.as_fd().as_raw_fd()
+                },
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if unsafe { libc::poll(&mut fd, 1, 0) } > 0 {
+                guard.read().map_err(io::Error::other)?;
+            }
+        }
+        self.queue.dispatch_pending(&mut self.state).map_err(io::Error::other)?;
+        Ok(())
+    }
+
     /// Capture as soon as the app draws something new, or give up at `timeout`.
     ///
     /// This is a frame callback rather than a poll: the compositor holds the copy
@@ -938,20 +965,32 @@ fn read_frames(mut grab: Grab, frames: Arc<Frames>) {
         if frames.stop.load(Ordering::Acquire) {
             return;
         }
-        let (streaming, once) = {
-            let Ok(mut want) = frames.want.lock() else {
-                return;
-            };
-            while !want.streaming && !want.once && !frames.stop.load(Ordering::Acquire) {
-                let Ok((guard, _)) = frames.woken.wait_timeout(want, Duration::from_millis(200))
+        // Nothing wanted: sleep, but keep reading the connection while asleep (see
+        // `Grab::drain`), or a long stay in the background costs the app its link.
+        let (streaming, once) = loop {
+            {
+                let Ok(mut want) = frames.want.lock() else {
+                    return;
+                };
+                if want.streaming || want.once || frames.stop.load(Ordering::Acquire) {
+                    let asked = (want.streaming, want.once);
+                    want.once = false;
+                    break asked;
+                }
+                let Ok((mut want, _)) = frames.woken.wait_timeout(want, Duration::from_millis(200))
                 else {
                     return;
                 };
-                want = guard;
+                if want.streaming || want.once || frames.stop.load(Ordering::Acquire) {
+                    let asked = (want.streaming, want.once);
+                    want.once = false;
+                    break asked;
+                }
             }
-            let asked = (want.streaming, want.once);
-            want.once = false;
-            asked
+            if let Err(e) = grab.drain() {
+                eprintln!("wl: capture stopped while in the background: {e}");
+                return;
+            }
         };
         if frames.stop.load(Ordering::Acquire) {
             return;
