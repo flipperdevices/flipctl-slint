@@ -11,10 +11,15 @@
 # The image's own rustc has to satisfy slint 1.17's 1.92 minimum, which every current
 # release does. What it links against is Debian's aarch64 glibc, so the binary asks
 # for symbols up to GLIBC_2.39 and the device's trixie provides 2.41.
+#
+# g++ is for the apps that compile C++ into themselves: Screen Recorder builds OpenH264
+# from source and links its runtime statically, so its binary needs no more than a C
+# one does.
 FROM rust:latest
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+ && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+        libc6-dev-arm64-cross \
  && rm -rf /var/lib/apt/lists/*
 RUN rustup target add aarch64-unknown-linux-gnu
 
