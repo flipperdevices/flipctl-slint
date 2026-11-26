@@ -172,6 +172,7 @@ Switches read from the environment, all off unless set:
 #[cfg(feature = "slint")]
 mod demo {
     use flipper_ui::leds::Group;
+    use flipper_ui::net_leds::Param;
     use flipper_ui::ui::{ListItem, Root};
 
     pub fn labels(list: &[&str]) -> slint::ModelRc<slint::SharedString> {
@@ -282,6 +283,7 @@ mod demo {
                         && flipper_ui::old_flipctl_loader::available()
                 }
                 Act::Sub(m) if std::ptr::eq(m, &LEDS) => flipper_ui::leds::available(),
+                Act::Anim(_) | Act::AnimReset => flipper_ui::settings::debug_mode(),
                 _ => true,
             })
             .collect()
@@ -366,6 +368,10 @@ mod demo {
         UsbPower,
         /// One LED group's brightness, which left and right step.
         Led(Group),
+        /// One timing of the network LEDs' animation, which left and right step.
+        Anim(Param),
+        /// Every animation timing back to its default.
+        AnimReset,
         /// Hand the panel to the flipctl2 prototype: stop this build, start the
         /// browser that draws that one. There is no way back from the panel,
         /// which is what makes it a testing row rather than a menu entry.
@@ -430,6 +436,8 @@ mod demo {
         UsbPower,
         /// An LED group's brightness, between chevrons.
         Led(Group),
+        /// An animation timing, between chevrons.
+        Anim(Param),
         /// `< ON >` / `< OFF >` for debug mode.
         DebugMode,
     }
@@ -505,14 +513,20 @@ mod demo {
         ],
     };
 
-    /// The brightness of each LED group the MCU drives. The prototype has none.
+    /// The brightness of the MCU's Link and Power LED groups. The prototype has none.
+    /// Debug mode adds the network LEDs' animation timings.
     #[rustfmt::skip]
     pub static LEDS: Menu = Menu {
         title: "LED Brightness",
         rows: &[
             Row { label: "Link", icon: 0, frames: 1, stat: Stat::Led(Group::Link), act: Act::Led(Group::Link) },
             Row { label: "Power", icon: 0, frames: 1, stat: Stat::Led(Group::Power), act: Act::Led(Group::Power) },
-            Row { label: "Wattmeter", icon: 0, frames: 1, stat: Stat::Led(Group::Wattmeter), act: Act::Led(Group::Wattmeter) },
+            Row { label: "Fade In", icon: 0, frames: 1, stat: Stat::Anim(Param::FadeIn), act: Act::Anim(Param::FadeIn) },
+            Row { label: "Breathe", icon: 0, frames: 1, stat: Stat::Anim(Param::Breathe), act: Act::Anim(Param::Breathe) },
+            Row { label: "Floor", icon: 0, frames: 1, stat: Stat::Anim(Param::Floor), act: Act::Anim(Param::Floor) },
+            Row { label: "Solid", icon: 0, frames: 1, stat: Stat::Anim(Param::Solid), act: Act::Anim(Param::Solid) },
+            Row { label: "Fade Out", icon: 0, frames: 1, stat: Stat::Anim(Param::FadeOut), act: Act::Anim(Param::FadeOut) },
+            Row { label: "Reset to Defaults", icon: 0, frames: 1, stat: Stat::None, act: Act::AnimReset },
         ],
     };
 
@@ -573,6 +587,7 @@ mod demo {
             Stat::Led(group) => flipper_ui::leds::read(*group)
                 .map(|v| format!("< {} >", flipper_ui::leds::label(v)))
                 .unwrap_or_default(),
+            Stat::Anim(p) => format!("< {} >", flipper_ui::net_leds::label(*p)),
         }
     }
 
@@ -584,6 +599,7 @@ mod demo {
                 Some(v) => (v == 0, v == u8::MAX),
                 None => (false, false),
             },
+            Stat::Anim(p) => flipper_ui::net_leds::ends(*p),
             _ => (false, false),
         }
     }
@@ -596,6 +612,15 @@ mod demo {
     /// The main menu shows none, matching the prototype: its MenuScene has no
     /// button bar at all, and only its power-off modal puts anything there.
     pub const SOFT_LABELS: [&str; 5] = ["", "", "", "", ""];
+
+    /// A menu's soft keys with `row` selected: Play on an LED animation timing,
+    /// which shows the effect it adjusts, and none elsewhere.
+    pub fn menu_labels(row: Option<&Row>) -> [&'static str; 5] {
+        match row.map(|r| &r.act) {
+            Some(Act::Anim(_)) => ["", "", "", "", "Play"],
+            _ => SOFT_LABELS,
+        }
+    }
 }
 
 /// The five detail screens: their pollers and their row builders.
@@ -4216,6 +4241,12 @@ fn panel(
     let mut pad =
         if headless || wayland { None } else { flipper_ui::evdev::TouchpadSource::open().ok() };
     let mut buzz = if headless || wayland { None } else { flipper_ui::haptic::Haptic::open().ok() };
+    // The LEDs are ours for the life of the process, on the same terms: the group
+    // settings first, since the network LEDs' colours are worked out under them.
+    if !headless && !wayland {
+        flipper_ui::leds::restore();
+        flipper_ui::net_leds::start();
+    }
 
     // The browser view is a second sink over the same frames and a second source
     // of the same key events, so nothing downstream can tell a remote click from
@@ -4847,6 +4878,8 @@ fn panel(
 
     let flash = Duration::from_millis(timing::PRESS_FLASH_MS as u64);
     let mut press = Flash::default();
+    // The menu's soft key labels as last drawn, which follow the selected row.
+    let mut menu_labels_shown = demo::SOFT_LABELS;
     // Which soft slot is showing its pressed state, and what to do when the flash
     // ends. The prototype flashes first and acts after: `btn.press()`, then a 30ms
     // timer calls `release()` and the handler. Acting immediately would switch the
@@ -6527,12 +6560,15 @@ fn panel(
             // proves the labels line up with the hardware instead of us
             // assuming it.
             let slot = FlipperKey::SOFT_ROW.iter().position(|k| *k == event.key);
+            let menu_labels = demo::menu_labels(
+                demo::rows(stack.last().unwrap().0).get(selected as usize).copied(),
+            );
             match slot {
-                Some(i) if demo::SOFT_LABELS[i].is_empty() => {
+                Some(i) if menu_labels[i].is_empty() => {
                     eprintln!("key {} -> slot {i}, no label", event.key.name())
                 }
                 Some(i) => {
-                    eprintln!("key {} -> slot {i} \"{}\"", event.key.name(), demo::SOFT_LABELS[i])
+                    eprintln!("key {} -> slot {i} \"{}\"", event.key.name(), menu_labels[i])
                 }
                 None => eprintln!("key {}", event.key.name()),
             }
@@ -6545,8 +6581,7 @@ fn panel(
 
             // A labelled soft key must do something, or the label is a lie.
             let on_menu_now = screen.get_screen() == Screen::Menu;
-            let labels: &[&str; 5] =
-                if on_menu_now { &demo::SOFT_LABELS } else { &demo::IDLE_LABELS };
+            let labels: &[&str; 5] = if on_menu_now { &menu_labels } else { &demo::IDLE_LABELS };
             let labelled_soft = slot.is_some_and(|i| !labels[i].is_empty());
 
             // Tab belongs to the system, not to whatever is in front. It is
@@ -7417,6 +7452,10 @@ fn panel(
                 demo::Act::Led(group) => Some(group),
                 _ => None,
             };
+            let anim = match row.act {
+                demo::Act::Anim(p) => Some(p),
+                _ => None,
+            };
 
             match (on_menu_now, event.key) {
                 // Back leaves the menu rather than the program: the menu is not
@@ -7474,6 +7513,20 @@ fn panel(
                     }
                 }
                 (true, FlipperKey::Ok) | (true, FlipperKey::Run) if led.is_some() => {}
+                (true, FlipperKey::Left) | (true, FlipperKey::Right) if anim.is_some() => {
+                    let up = event.key == FlipperKey::Right;
+                    if flipper_ui::net_leds::step(anim.unwrap(), up) {
+                        arrow = Some((
+                            if up { 2 } else { 1 },
+                            Instant::now() + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
+                        ));
+                        demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
+                    }
+                }
+                (true, FlipperKey::Ok) if anim.is_some() => {}
+                (true, FlipperKey::Run) if anim.is_some() => {
+                    press.soft(FlipperKey::Run, 4, Instant::now() + flash)
+                }
                 // A toggle flips on ok too, with no press flash and no scene
                 // change, matching the onToggle branch in submenu.js.
                 (true, FlipperKey::Ok) | (true, FlipperKey::Run) if is_toggle => toggle!(row),
@@ -8102,6 +8155,16 @@ fn panel(
                 } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Idle {
                     screen.set_screen(Screen::Menu);
                     eprintln!("screen         menu");
+                } else if key == FlipperKey::Run
+                    && slot == Some(4)
+                    && screen.get_screen() == Screen::Menu
+                {
+                    let visible = demo::rows(stack.last().unwrap().0);
+                    if let Some(demo::Act::Anim(p)) = visible.get(selected as usize).map(|r| &r.act)
+                    {
+                        eprintln!("action         led preview {}", p.label());
+                        flipper_ui::net_leds::preview(*p);
+                    }
                 } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Menu {
                     let visible = demo::rows(stack.last().unwrap().0);
                     let Some(row) = visible.get(selected as usize).copied() else {
@@ -8268,7 +8331,15 @@ fn panel(
                             }
                         }
                         // Changed in place by the key itself, with no flash to wait out.
-                        demo::Act::Airplane | demo::Act::DebugMode | demo::Act::Led(_) => {}
+                        demo::Act::Airplane
+                        | demo::Act::DebugMode
+                        | demo::Act::Led(_)
+                        | demo::Act::Anim(_) => {}
+                        demo::Act::AnimReset => {
+                            flipper_ui::net_leds::reset();
+                            eprintln!("action         led animation defaults");
+                            demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
+                        }
                     }
                 }
             }
@@ -8924,6 +8995,12 @@ fn panel(
 
         screen.set_selected(selected);
         screen.set_scroll(scroll);
+        let want_labels =
+            demo::menu_labels(demo::rows(stack.last().unwrap().0).get(selected as usize).copied());
+        if want_labels != menu_labels_shown {
+            screen.set_menu_buttons(demo::labels(&want_labels));
+            menu_labels_shown = want_labels;
+        }
         // A dialog's press flash belongs to its own button, so the row underneath
         // must not fill at the same time.
         screen.set_pressed(press.row_pressed());

@@ -34,13 +34,23 @@ pub fn debug_mode() -> bool {
 /// this session and says so on stderr.
 pub fn set_debug_mode(on: bool) {
     debug_flag().store(on, Ordering::Relaxed);
+    set(DEBUG_MODE, if on { "true" } else { "false" });
+}
+
+/// The saved value for `key`, if any.
+pub fn get(key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(path()?).ok()?;
+    value(&text, key).map(str::to_string)
+}
+
+/// Save `val` for `key`. A failed save says so on stderr.
+pub fn set(key: &str, val: &str) {
     let Some(path) = path() else {
-        eprintln!("settings       no HOME, debug mode not saved");
+        eprintln!("settings       no HOME, {key} not saved");
         return;
     };
     let old = std::fs::read_to_string(&path).unwrap_or_default();
-    let text = with_value(&old, DEBUG_MODE, if on { "true" } else { "false" });
-    if let Err(e) = write(&path, &text) {
+    if let Err(e) = write(&path, &with_value(&old, key, val)) {
         eprintln!("settings       {}: {e}", path.display());
     }
 }

@@ -43,8 +43,9 @@ device so it can be tried before the image carries it; the image is where they b
   `fusermount3`. Without it flipctl still runs bundles, unpacking each into `/tmp`
   per launch, and says so in the log (`no fusermount3, extracting instead`).
 - `70-flipctl-devices.rules` in `/etc/udev/rules.d/`: GPIO and SPI nodes to the
-  `gpio` group, USB devices to `plugdev`.
-- `flipctl.sysusers.conf` as `/etc/sysusers.d/flipctl.conf`: the `gpio` group. The
+  `gpio` group, USB devices to `plugdev`, the network LEDs' attributes to `leds`.
+- `flipctl.sysusers.conf` as `/etc/sysusers.d/flipctl.conf`: the `gpio` and `leds`
+  groups. The
   unit names it in `SupplementaryGroups`, and a unit naming a missing group does not
   start.
 - `flipctl-devices.conf` in `/etc/modules-load.d/`: `usbserial`, `cdc-acm`, `spidev`,

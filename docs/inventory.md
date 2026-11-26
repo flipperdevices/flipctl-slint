@@ -160,8 +160,9 @@ written, detached and optimistic like the radio toggles.
 
 **No touchpad scroll on the settings page, and no LED.** The prototype drags that
 modal with `/api/touchpad/xy` and pulses the Wi-Fi LED blue while a join runs.
-Neither source exists on this side: flipctl has no touchpad input path, and the
-LEDs are driven by the prototype's server. Keys scroll it instead.
+flipctl has no touchpad input path, so keys scroll it instead. The LEDs are
+flipctl's now (see "The network LEDs" below), but a join has no LED of its own:
+the Wi-Fi LED breathes from association until there is an address.
 
 One prototype bug is not reproduced. The connect prompt keeps its keyboard on
 screen under a wash while nmcli works; here the page comes back with the spinner
@@ -561,12 +562,53 @@ from the device tree's capability sets in sysfs.
 ## LED brightness, added 2026-11-12
 
 The prototype has no LED settings. LED Brightness under Settings, after USB-C1 power
-out, opens a menu level with one row per MCU LED group: Link, Power and Wattmeter.
+out, opens a menu level with one row per MCU LED group flipctl sets: Link and Power.
+The wattmeter group is the MCU's own and has no row.
 Each shows its group setting between chevrons, and left and right step it through
 Off, 5% and then tenths to 100%. A press is written at once, off the render loop,
-through sudo, since the nodes are root's. The MCU keeps the setting in flash and its
-own menu can change it, so a row reads the MCU's value back rather than caching it.
+through sudo, since the nodes are root's, and saved in `settings.conf`; flipctl puts
+the saved value, or 50%, back on the MCU when it starts. The MCU keeps the setting in
+flash and its own menu can change it, so a row reads the MCU's value back rather than
+caching it.
 The level is hidden on a kernel without the driver's group attributes.
+
+## The network LEDs, 2026-11-26
+
+The prototype's server drives the four RGB LEDs from its own state: Wi-Fi blinks
+500/500 on the timer trigger while a join is in flight and is solid cyan once
+connected, an Ethernet LED is solid lime while nmcli says its port is connected, and
+Link is blue when the Testing scene turns it on through `/api/led/link`. The image
+meanwhile put eth0, eth1 and Wi-Fi on the netdev trigger, which only knows carrier.
+
+The port takes all four for the life of the process (`src/net_leds.rs`). eth0, eth1
+and Wi-Fi each fade out to dark with no link, fade in and breathe above a floor with
+a link and no address, and fade to solid with one, which is the ETH LED test app's
+scheme, the curves and the colours included. An address that arrives before the
+light has breathed once waits for that breath: a Wi-Fi reconnect reuses its lease
+and has one 0.4 s after the link, and every connect should look the same. Wi-Fi
+counts as a link from when NetworkManager starts connecting (`prepare`, about 3 s
+after the radio comes on and a scan finds a known network), not from the carrier,
+which comes only after association. A 169.254 address counts as none. Link
+is held dark until it has a meaning. The state comes from rtnetlink link and address
+events, and the thread ticks only while a light moves. The attributes are opened to
+the `leds` group by `70-flipctl-devices.rules`, since 50 writes a second cannot each
+go through sudo. The image's `99-network-leds.rules` and `91-wifi-led` must go, or
+the netdev trigger comes back on every interface add or rename.
+
+Debug mode adds the timings under LED Brightness: Fade In, Breathe, Floor, Solid
+and Fade Out, on the ETH LED app's steps and defaults but for a 50% floor and a 0.4 s fade out,
+saved in
+`settings.conf`, and Reset to Defaults. Play, on the right soft key of a timing row,
+runs the effect it adjusts on the three network LEDs, which go back to their ports
+15 s after the last press.
+
+The colours are chosen in the bytes the WS2812s really get. The MCU shifts each
+RGB565 channel up to eight bits, scales it by the group setting and by half, and
+truncates (`led_set_color` in flipperone-mcu-firmware), so at 20% lime has twelve
+bytes of red and 25 of green, and red's last byte goes at a level where green still
+shows. Only the shades whose hue is within 12% of the colour are used, one per byte,
+so a light can be a byte off in brightness and never in colour, and a setting too dim
+to show the colour at all leaves it dark.
 
 ## The battery, from uevents, 2026-11-13
 

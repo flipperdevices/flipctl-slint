@@ -389,7 +389,7 @@ run "sudo tee /etc/sysusers.d/flipctl.conf >/dev/null && sudo systemd-sysusers /
     < "$SYSD/flipctl.sysusers.conf"
 run "sudo tee /etc/udev/rules.d/70-flipctl-devices.rules >/dev/null && \
      sudo udevadm control --reload && \
-     sudo udevadm trigger -s gpio -s usb -s spidev -c change" \
+     sudo udevadm trigger -s gpio -s usb -s spidev -s leds -c change" \
     < "$SYSD/70-flipctl-devices.rules"
 run "sudo tee /etc/modules-load.d/flipctl-devices.conf >/dev/null && \
      sudo systemctl restart systemd-modules-load.service" \

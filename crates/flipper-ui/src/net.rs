@@ -47,6 +47,9 @@ pub struct Net {
     pub airplane: bool,
     pub wifi_enabled: bool,
     pub wifi_connected: bool,
+    /// NetworkManager is bringing a Wi-Fi connection up: from scanning's end through
+    /// association, authentication and the address.
+    pub wifi_connecting: bool,
     /// Empty when not connected, or when the active connection has no name.
     pub ssid: String,
     /// NetworkManager's overall answer, which is the best any interface gets.
@@ -98,10 +101,10 @@ fn parse_general(s: &str) -> Option<(Connectivity, bool, bool)> {
 }
 
 /// `nmcli -t -f DEVICE,TYPE,STATE,CONNECTION,IP4-CONNECTIVITY,IP6-CONNECTIVITY device`
-/// prints one line per interface. Read for two things in one process: the connected
+/// prints one line per interface. Read for three things in one process: the connected
 /// Wi-Fi's connection, whose name for a normal `nmcli dev wifi connect` is the SSID,
-/// and whether any interface is behind a portal.
-fn read_devices() -> Option<(Option<String>, bool)> {
+/// whether any interface is behind a portal, and whether a Wi-Fi is connecting.
+fn read_devices() -> Option<Devices> {
     Some(parse_devices(&output(&[
         "nmcli",
         "-t",
@@ -111,18 +114,28 @@ fn read_devices() -> Option<(Option<String>, bool)> {
     ])?))
 }
 
-fn parse_devices(s: &str) -> (Option<String>, bool) {
-    let mut ssid = None;
-    let mut portal = false;
+/// What [`read_devices`] reads.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Devices {
+    ssid: Option<String>,
+    portal: bool,
+    wifi_connecting: bool,
+}
+
+fn parse_devices(s: &str) -> Devices {
+    let mut found = Devices::default();
     for line in s.lines() {
         let fields = terse_fields(line);
         let [_, kind, state, connection, ip4, ip6] = fields.as_slice() else { continue };
-        if kind == "wifi" && state == "connected" && ssid.is_none() {
-            ssid = Some(connection.clone());
+        if kind == "wifi" && state == "connected" && found.ssid.is_none() {
+            found.ssid = Some(connection.clone());
         }
-        portal |= [ip4, ip6].iter().any(|c| Connectivity::parse(c) == Connectivity::Portal);
+        // "connecting (prepare)", "(configuring)", "(need authentication)",
+        // "(getting IP configuration)" and the rest.
+        found.wifi_connecting |= kind == "wifi" && state.starts_with("connecting");
+        found.portal |= [ip4, ip6].iter().any(|c| Connectivity::parse(c) == Connectivity::Portal);
     }
-    (ssid, portal)
+    found
 }
 
 /// One line of nmcli's terse output, split on the colons that are not escaped: a
@@ -144,14 +157,15 @@ fn terse_fields(line: &str) -> Vec<String> {
 fn read_net() -> Net {
     let (connectivity, wifi_enabled, wwan_enabled) =
         read_general().unwrap_or((Connectivity::Unknown, false, false));
-    let (ssid, behind) = read_devices().unwrap_or((None, false));
+    let devices = read_devices().unwrap_or_default();
     Net {
         airplane: !wifi_enabled && !wwan_enabled,
         wifi_enabled,
-        wifi_connected: ssid.is_some(),
-        ssid: ssid.unwrap_or_default(),
+        wifi_connected: devices.ssid.is_some(),
+        wifi_connecting: devices.wifi_connecting,
+        ssid: devices.ssid.unwrap_or_default(),
         connectivity,
-        portal: behind || connectivity == Connectivity::Portal,
+        portal: devices.portal || connectivity == Connectivity::Portal,
     }
 }
 
@@ -215,6 +229,7 @@ impl NetSource {
             .name("net-watch".into())
             .spawn(move || {
                 let publish = |fresh: Net| {
+                    crate::net_leds::wifi_connecting(fresh.wifi_connecting);
                     let mut cur = s.lock().unwrap();
                     if *cur != fresh {
                         *cur = fresh;
@@ -407,13 +422,30 @@ mod tests {
                        wlxb06b11673c1a:wifi:connected:TEST-PORTAL:limited:limited\n\
                        lo:loopback:connected (externally):lo:unknown:unknown\n\
                        wlxb26b11673c1a:wifi:disconnected::none:none\n";
-        assert_eq!(parse_devices(limited), (Some("TEST-PORTAL".into()), false));
+        let seen = |s: &str| {
+            let d = parse_devices(s);
+            (d.ssid, d.portal)
+        };
+        assert_eq!(seen(limited), (Some("TEST-PORTAL".into()), false));
         let portal = limited.replace("TEST-PORTAL:limited", "TEST-PORTAL:portal");
-        assert_eq!(parse_devices(&portal), (Some("TEST-PORTAL".into()), true));
+        assert_eq!(seen(&portal), (Some("TEST-PORTAL".into()), true));
         // A name with a colon in it, escaped as nmcli escapes it.
         let colon = "wlan0:wifi:connected:Cafe\\: Guest:portal:none\n";
-        assert_eq!(parse_devices(colon), (Some("Cafe: Guest".into()), true));
-        assert_eq!(parse_devices(""), (None, false));
+        assert_eq!(seen(colon), (Some("Cafe: Guest".into()), true));
+        assert_eq!(seen(""), (None, false));
+        assert!(!parse_devices(limited).wifi_connecting);
+    }
+
+    /// As nmcli 1.52 prints a Wi-Fi coming up, read on the device.
+    #[test]
+    fn a_wifi_coming_up_is_connecting() {
+        let up = "end0:ethernet:connected:Wired:full:none\n\
+                  wlxb06b11673c1a:wifi:connecting (getting IP configuration):Valhalla:none:none\n";
+        assert!(parse_devices(up).wifi_connecting);
+        let auth = up.replace("getting IP configuration", "need authentication");
+        assert!(parse_devices(&auth).wifi_connecting);
+        let wired = "end0:ethernet:connecting (prepare):Wired:none:none\n";
+        assert!(!parse_devices(wired).wifi_connecting);
     }
 
     /// The check address out of `NetworkManager --print-config`, as the device prints

@@ -4,3 +4,9 @@
 SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", GROUP="gpio", MODE="0660"
 SUBSYSTEM=="spidev", KERNEL=="spidev*", GROUP="gpio", MODE="0660"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", GROUP="plugdev", MODE="0664"
+
+# The four RGB LEDs flipctl draws (net_leds.rs): trigger, level and colour, to the
+# leds group. They are attributes rather than nodes, which GROUP and MODE do not reach.
+SUBSYSTEM=="leds", KERNEL=="flipper-one:rgb:*", ACTION=="add|change", \
+  RUN+="/usr/bin/chgrp leds /sys%p/trigger /sys%p/brightness /sys%p/multi_intensity", \
+  RUN+="/usr/bin/chmod g+w /sys%p/trigger /sys%p/brightness /sys%p/multi_intensity"

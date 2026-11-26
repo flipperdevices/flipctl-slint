@@ -12,10 +12,10 @@ Type=simple
 User=user
 Group=user
 # dialout for ttyUSB and ttyACM (the default udev rules), i2c for /dev/i2c-*, plugdev
-# for /dev/bus/usb, gpio for gpiochip and spidev (70-flipctl-devices.rules; the group
-# comes from flipctl.sysusers.conf). The cgroup filter below opens a class; these
-# open the nodes.
-SupplementaryGroups=input video render dialout i2c plugdev gpio
+# for /dev/bus/usb, gpio for gpiochip and spidev, leds for the network LEDs
+# (70-flipctl-devices.rules; both groups come from flipctl.sysusers.conf). The cgroup
+# filter below opens a class; these open the nodes.
+SupplementaryGroups=input video render dialout i2c plugdev gpio leds
 
 # A real login session, so logind gives this process seat1's devices: the SPI panel
 # and the Flipper's buttons, both tagged ID_SEAT=seat1 by 72-seat-cog.rules.

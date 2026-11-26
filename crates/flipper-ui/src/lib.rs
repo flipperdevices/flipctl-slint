@@ -28,6 +28,7 @@ pub mod layout;
 pub mod leds;
 pub mod log;
 pub mod net;
+pub mod net_leds;
 pub mod netlink;
 pub mod nl80211;
 pub mod old_flipctl_loader;
