@@ -25,7 +25,7 @@ fn debug_flag() -> &'static AtomicBool {
     })
 }
 
-/// Whether debug mode is on: the main menu shows Testing only then.
+/// Whether debug mode is on: Testing and Reinstall FlipperOS show only then.
 pub fn debug_mode() -> bool {
     debug_flag().load(Ordering::Relaxed)
 }

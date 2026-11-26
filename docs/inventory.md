@@ -880,3 +880,6 @@ time.
 Settings has a Debug Mode toggle, off by default, and the main menu shows Testing
 only while it is on. The prototype has neither. The value is saved as
 `debug_mode = true` in `~/.config/flipctl/settings.conf`, so it survives a reboot.
+
+Reinstall FlipperOS under Settings is hidden the same way, from 2026-11-26: it boots
+the installer, which is not a row to come across by accident.

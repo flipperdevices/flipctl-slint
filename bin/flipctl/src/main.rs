@@ -284,6 +284,7 @@ mod demo {
                 }
                 Act::Sub(m) if std::ptr::eq(m, &LEDS) => flipper_ui::leds::available(),
                 Act::Anim(_) | Act::AnimReset => flipper_ui::settings::debug_mode(),
+                Act::Detail(Detail::Update) => flipper_ui::settings::debug_mode(),
                 _ => true,
             })
             .collect()
@@ -343,8 +344,8 @@ mod demo {
         /// Flip airplane mode. Responds to left, right and ok alike, because the
         /// prototype routes all three into `onToggle`.
         Airplane,
-        /// Flip debug mode, which shows Testing in the main menu. Saved, so it
-        /// survives a reboot.
+        /// Flip debug mode, which shows Testing in the main menu and Reinstall
+        /// FlipperOS under Settings. Saved, so it survives a reboot.
         DebugMode,
         /// The app list, which this binary discovers at startup rather than
         /// declaring in the table.
