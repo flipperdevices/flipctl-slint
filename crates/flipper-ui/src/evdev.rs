@@ -57,6 +57,7 @@ impl EvdevSource {
             .filter_map(|path| {
                 OpenOptions::new().read(true).custom_flags(libc_o_nonblock()).open(path).ok()
             })
+            .inspect(grab)
             .collect();
 
         if devices.is_empty() {
@@ -243,6 +244,20 @@ impl TouchpadSource {
     pub fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
         use std::os::fd::AsFd;
         self.device.as_fd()
+    }
+}
+
+/// `EVIOCGRAB`: `_IOW('E', 0x90, int)`.
+const EVIOCGRAB: libc::c_ulong = 0x4004_4590;
+
+/// Take the buttons for ourselves. Otherwise the kernel's console keyboard sees
+/// every press too and types it into the login prompt on tty1. Released when the
+/// file closes, so a restart or a crash gives them back.
+fn grab(device: &File) {
+    use std::os::fd::AsRawFd;
+    // SAFETY: an open evdev descriptor and an int argument, as EVIOCGRAB takes.
+    if unsafe { libc::ioctl(device.as_raw_fd(), EVIOCGRAB as _, 1 as libc::c_int) } < 0 {
+        eprintln!("buttons        not grabbed: {}", std::io::Error::last_os_error());
     }
 }
 
