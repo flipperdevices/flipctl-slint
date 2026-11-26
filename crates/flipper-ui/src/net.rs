@@ -246,12 +246,10 @@ impl NetSource {
                             .stdout(Stdio::piped())
                             .stderr(Stdio::null());
                         // Die with us. The monitor is useless without the process
-                        // that reads it, and nothing else would ever stop it: the
-                        // unit sets PAMName=login, which puts us in a logind
-                        // session scope rather than the service's cgroup, so
-                        // systemd restarting the service kills us and leaves this
-                        // child parented to init. Four of them had accumulated on
-                        // the test device, one per restart, 58MB between them.
+                        // that reads it, and outside the unit's cgroup nothing else
+                        // would stop it: under a login session, four had once
+                        // accumulated on the test device, one per restart, 58MB
+                        // between them, and a run from a shell is the same.
                         //
                         // SAFETY: pre_exec runs in the forked child before exec,
                         // where only async-signal-safe calls are allowed. prctl is

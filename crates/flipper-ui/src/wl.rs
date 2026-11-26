@@ -1146,8 +1146,8 @@ fn speaker() -> String {
 /// Both pins are set because they answer to different clients: `PIPEWIRE_NODE` steers
 /// native and ALSA-bridged ones, `PULSE_SINK` the PulseAudio ones.
 ///
-/// No device access is involved. Sound travels over a socket, so `DevicePolicy=closed`
-/// stays as it is and nothing can take the codec for itself.
+/// No device access is involved. Sound travels over a socket, so nothing can take the
+/// codec for itself.
 fn sound(dir: &Path, cmd: &mut Command) {
     let real = runtime_dir();
     for name in ["pipewire-0", "pulse"] {

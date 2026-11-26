@@ -13,25 +13,22 @@ installs over that path and restarts this unit, and puts a dev run's own mode, p
 and peer in a drop-in at `flipctl.service.d/50-deploy.conf` rather than editing this
 file; deleting the drop-in leaves the machine running what the image shipped.
 
-Four details cost real time to find, so they are worth stating rather than leaving
+Three details cost real time to find, so they are worth stating rather than leaving
 in the file as bare directives:
 
-- **`PAMName=login` with `XDG_SEAT=seat1`.** The panel and the Flipper's buttons are
-  tagged `ID_SEAT=seat1` by `72-seat-cog.rules`, and logind hands a session the
-  devices of its own seat. Without the seat, a session comes up on seat0, which is
-  the desktop's, and finds no buttons at all.
-- **`XDG_SESSION_CLASS=user`.** logind refuses device control to a session of class
-  `background`, with "Session class doesn't support taking device control", and
-  `PAMName=login` alone produces exactly that class.
+- **No login session.** flipctl once ran under `PAMName=login` on seat1, for the
+  seat's devices. Groups give it those (`video`, `render`, `input`), and DRM master
+  goes to the first opener without logind. A session cost 1.3s at boot, since opening
+  one waits for `user@1000.service`, which is ordered after the network. It also
+  moved flipctl out of the service's cgroup, so stopping the unit left it running.
+- **`user-runtime-dir@1000.service` and lingering.** flipctl keeps its socket, sway's
+  directory and each app's in `/run/user/1000`, and links PipeWire's sockets from
+  there. That unit makes the directory without waiting for the network, and the
+  image lingers the user so the directory, the user's bus and PipeWire stay up with
+  nobody logged in.
 - **`WorkingDirectory`.** The browser view's assets are found relative to the
   installed layout; apps are not, they are read from `/home/user/Apps` whatever the
   working directory.
-- **`ExecStopPost`.** Stopping the unit does not stop what it started: `PAMName=login`
-  puts these processes in a logind session scope rather than the service's own
-  cgroup, so a restart otherwise leaves the previous flipctl alive, still holding the
-  remote view's port, and the new one comes up with nothing behind Back or the app
-  switcher. Killing sway covers everything it hosts, since it is the parent of every
-  hosted app.
 
 ## What the image must ship
 
@@ -43,15 +40,18 @@ device so it can be tried before the image carries it; the image is where they b
   `fusermount3`. Without it flipctl still runs bundles, unpacking each into `/tmp`
   per launch, and says so in the log (`no fusermount3, extracting instead`).
 - `70-flipctl-devices.rules` in `/etc/udev/rules.d/`: GPIO and SPI nodes to the
-  `gpio` group, USB devices to `plugdev`, the network LEDs' attributes to `leds`.
+  `gpio` group and the network LEDs' attributes to `leds`. No USB devices: an app
+  gets one through a claim.
 - `flipctl.sysusers.conf` as `/etc/sysusers.d/flipctl.conf`: the `gpio` and `leds`
   groups. The
   unit names it in `SupplementaryGroups`, and a unit naming a missing group does not
   start.
 - `flipctl-devices.conf` in `/etc/modules-load.d/`: `usbserial`, `cdc-acm`, `spidev`,
-  loaded at boot because `DeviceAllow=char-<name>` is resolved against `/proc/devices`
-  when the unit starts and a class nobody has registered is silently dropped.
-- The unit's own `SupplementaryGroups` and `DeviceAllow` lines, as in this directory.
+  loaded at boot. They were for the unit's device filter, which is gone, so this can
+  go once `build-flipctl.sh` stops installing it.
+- The user lingering, `/var/lib/systemd/linger/user`.
+- The unit's own `SupplementaryGroups`, `Environment` and `user-runtime-dir@1000`
+  lines, as in this directory.
 
 `Conflicts=cog-seat1.service` because the panel has one owner at a time, and the
 `Before=` lines claim it before a display manager wakes up and starts looking at

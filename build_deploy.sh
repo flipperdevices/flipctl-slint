@@ -58,10 +58,9 @@ DROPIN="/etc/systemd/system/flipctl.service.d/50-deploy.conf"
 # What running a bundle needs from the machine beyond the unit, each installed from
 # systemd/ here until the image ships it. Listed once so --status can ask after them.
 DEVICE_FILES="/etc/udev/rules.d/70-flipctl-devices.rules /etc/sysusers.d/flipctl.conf /etc/modules-load.d/flipctl-devices.conf"
-# flipctl's own output is not in `journalctl -u flipctl`. PAMName=login puts the
-# process in a logind session scope rather than the service's cgroup, and journald
-# files a line under the cgroup that wrote it, so the unit view holds systemd's
-# side of the story and nothing the program said. Ask by program name for that.
+# By program name rather than by unit: a machine still on a unit with PAMName=login
+# runs flipctl in a logind session scope, and journald files a line under the cgroup
+# that wrote it, so there the unit view holds nothing the program said.
 APP_LOG="sudo journalctl _COMM=flipctl --no-pager -o cat -n"
 
 MODE=headless
@@ -220,7 +219,7 @@ if [ "$MODE" = status ]; then
     # What the image has to ship for bundles (systemd/README.md), and whether it does.
     run "dpkg-query -W -f='fuse3: \${db:Status-Status}\n' fuse3 2>/dev/null || echo 'fuse3: not installed'"
     run "for f in $DEVICE_FILES; do [ -e \"\$f\" ] && echo \"\$f: present\" || echo \"\$f: absent\"; done"
-    run "systemctl show $UNIT -p SupplementaryGroups -p DeviceAllow"
+    run "systemctl show $UNIT -p SupplementaryGroups -p PAMName -p Environment"
     run "ls ~/Apps 2>/dev/null | sed 's/^/app: /' || true"
     run "$APP_LOG 12 2>/dev/null || true"
     exit 0
@@ -391,6 +390,9 @@ run "sudo tee /etc/udev/rules.d/70-flipctl-devices.rules >/dev/null && \
      sudo udevadm control --reload && \
      sudo udevadm trigger -s gpio -s usb -s spidev -s leds -c change" \
     < "$SYSD/70-flipctl-devices.rules"
+# The user lingers, so /run/user/1000, its bus and PipeWire live without a login:
+# flipctl runs outside one (systemd/flipctl.service).
+run "sudo loginctl enable-linger user" </dev/null
 run "sudo tee /etc/modules-load.d/flipctl-devices.conf >/dev/null && \
      sudo systemctl restart systemd-modules-load.service" \
     < "$SYSD/flipctl-devices.conf"
@@ -412,16 +414,26 @@ if ! run "systemctl cat $UNIT.service >/dev/null 2>&1"; then
 fi
 
 echo "== restarting $UNIT.service ($MODE) =="
-# The unit's device and group lines go in here too, not only in systemd/flipctl.service:
-# a machine that came with its own unit keeps it, so the deploy carries what flipctl
-# needs rather than assuming the shipped unit grants it. Both settings are lists that
-# add to whatever the unit already says, so this is safe on a unit that has them, and
-# they are read from the unit here rather than written twice.
+# The unit's group, environment and ordering lines go in here too, not only in
+# systemd/flipctl.service: a machine that came with its own unit keeps it, so the deploy
+# carries what flipctl needs rather than assuming the shipped unit grants it. They are
+# read from the unit here rather than written twice. An older unit ran flipctl in a
+# login session behind a device filter, with a pkill on stop for what the session
+# scope kept, and with plugdev; the empty assignments clear those, and the two lists
+# before the unit's own.
 run "sudo mkdir -p $(dirname "$DROPIN") && sudo tee $DROPIN >/dev/null" <<EOF
+[Unit]
+$(grep -E '^(Wants|After)=user-runtime-dir' "$SYSD/$UNIT.service")
 [Service]
 ExecStart=
 ExecStart=$BIN $ARGS
-$(grep -E '^(DeviceAllow|SupplementaryGroups)=' "$SYSD/$UNIT.service")
+PAMName=
+DevicePolicy=auto
+DeviceAllow=
+ExecStopPost=
+Environment=
+SupplementaryGroups=
+$(grep -E '^(SupplementaryGroups|Environment)=' "$SYSD/$UNIT.service")
 EOF
 # Not fatal here: a unit that fails to come up is reported below, with its log,
 # which is more use than the shell aborting on the restart's exit status.

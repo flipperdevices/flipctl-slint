@@ -303,8 +303,8 @@ process: closing it ends the process, and the state goes with it.
 
 `js/apps/record.js` and `js/apps/voice_recorder_files.js`, transcribed into
 `apps/recorder`. The prototype asked a root server to run sox, amixer, lame, oggenc
-and `play`; an app here has neither root nor the codec (the unit is
-`DevicePolicy=closed`), and it installs nothing, so every divergence below comes
+and `play`; an app here does not run as root, never opens the codec, and installs
+nothing, so every divergence below comes
 from doing all of it in the app's own process over the sound server's socket.
 
 **Nothing is run and nothing is installed.** Capture, playback and both volumes go

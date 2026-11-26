@@ -241,8 +241,8 @@ pub fn version_rank(version: &str) -> (u32, u32, u32) {
 /// The PATH to run a tool with: root's, as this system declares it.
 ///
 /// A tool resolves programs of its own -- boot-profile calls kexec, the size walk
-/// calls btrfs -- and those live in the sbin directories, which a login session's
-/// PATH leaves out. A child inherits ours, so a boot started from flipctl died with
+/// calls btrfs -- and those live in the sbin directories, which the unit's PATH
+/// leaves out. A child inherits ours, so a boot started from flipctl died with
 /// "kexec not installed (kexec-tools)" on a machine carrying /usr/sbin/kexec.
 ///
 /// Read rather than written down: `ENV_SUPATH` in /etc/login.defs is where a system

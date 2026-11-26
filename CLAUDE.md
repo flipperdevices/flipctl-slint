@@ -62,9 +62,9 @@ manifest `script.rs` lifts out of a `# /// flipctl` block in its head. Three thi
 there are easy to undo by accident:
 
 - **Never execute either kind to learn what it is.** The folder is where a person drops
-  anything, and the scan runs in a unit with GPIO and USB open. `--appimage-extract`
-  would be the easy way and is the wrong one; so would running a script for its
-  `__doc__`.
+  anything, and the scan runs in a unit with GPIO open and passwordless sudo.
+  `--appimage-extract` would be the easy way and is the wrong one; so would running
+  a script for its `__doc__`.
 - **The stamp is size plus mtime to the nanosecond.** squashfs pads to 4K, so two
   bundles of one app differ in content and not in size; seconds were not enough.
 - **The manifest is the marker, and `wayland` non-empty is the rule.** A stock

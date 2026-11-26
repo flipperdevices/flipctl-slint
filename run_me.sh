@@ -75,9 +75,9 @@ if [ "${state:-}" != active ]; then
     exit 1
 fi
 
-# By program name, not by unit: PAMName=login puts flipctl in a logind session
-# scope, and journald files a line under the cgroup that wrote it, so the unit view
-# has systemd's messages about the unit and nothing the program said.
+# By program name, not by unit: a machine still on a unit with PAMName=login runs
+# flipctl in a logind session scope, and journald files a line under the cgroup that
+# wrote it, so there the unit view has nothing the program said.
 sudo journalctl _COMM=flipctl -n 6 --no-pager -o cat
 echo
 PORT=$(systemctl show -p ExecStart --value flipctl.service \
