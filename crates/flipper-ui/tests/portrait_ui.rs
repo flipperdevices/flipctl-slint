@@ -17,7 +17,9 @@ use flipper_ui::slint_render::{render_frame, render_rotated, FlipperSlintPlatfor
 use flipper_ui::theme::{PANEL_H, PANEL_W};
 use slint::platform::software_renderer::RenderingRotation;
 
-slint::include_modules!();
+// The fixture's own generated module: `build.rs` compiles `tests/portrait_row.slint` on its
+// own, so this is the row and not the production screens - which do not carry it.
+include!(concat!(env!("OUT_DIR"), "/portrait_row.rs"));
 
 /// The page: the panel read the long way up.
 const PW: usize = PANEL_H as usize;

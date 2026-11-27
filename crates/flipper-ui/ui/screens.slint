@@ -4,8 +4,4 @@
 // `include_modules!` can only ever pick up one. One entry file also means the
 // shared components are defined once rather than duplicated per screen.
 export { Root, Screen, ListItem, IdleLine, DetailRow, EthLink, EthDetailRow, WifiRow, WifiNetRow, WifiDetailRow, BootRow, BootPopupRow, KbCell, SwitchCard, CardItem, ChoiceView, ChoiceRow, ChoiceLine } from "root.slint";
-// The portrait showcase: a settings row built for a 144-wide page rather than
-// the panel's 256. It comes through this entry and not on its own, because
-// slint-build keeps one generated module and a second entry would replace it.
-export { PortraitRow } from "portrait.slint";
 

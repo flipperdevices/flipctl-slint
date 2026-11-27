@@ -72,8 +72,9 @@ export component Shell inherits Window {
 // app's window and the panel disagree by a quarter turn. flipctl makes that turn when
 // it puts the frame on the glass (`rotate = "left"`, or `"right"`), and it does it in
 // the renderer's inner loop rather than by resampling a landscape picture, so text
-// stays crisp. What this component adds is only the shape: the same window, the same
-// keys and the same soft bar as `Shell`, sized `panel_h` by `panel_w`.
+// stays crisp. What this component adds is only the shape: the same window and the same
+// keys as `Shell`, sized `panel_h` by `panel_w`, and no soft bar - the keys are along the
+// page's left edge, where a label would be lying on its side.
 //
 // The status bar is not here. flipctl paints its own bar along the edge that is the
 // page's top (`status = true`), so a portrait page loses `status_bar_h` rows of its own

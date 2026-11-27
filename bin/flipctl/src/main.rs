@@ -3024,6 +3024,10 @@ fn portrait_strip_at() -> (usize, usize) {
 /// cutting it out is the same route the landscape bar takes, where the scene is rendered and
 /// its top rows are kept.
 ///
+/// `None` when the scene would not render. A black strip is a bar nobody can read, and
+/// handing one back would leave the caller thinking it had a bar to show until the status
+/// next moved.
+///
 /// This used to be drawn by hand in Rust, in the built-in `TITLE` face on a strip of its own,
 /// which made two bars that disagreed about their ground, their ink, their icons and their
 /// typeface. There is one bar now, and a change to `statusbar.slint` reaches both.
@@ -3032,7 +3036,7 @@ fn portrait_status(
     window: &slint::platform::software_renderer::MinimalSoftwareWindow,
     screen: &flipper_ui::ui::Root,
     long: u16,
-) -> Vec<flipper_ui::Gray8> {
+) -> Option<Vec<flipper_ui::Gray8>> {
     use flipper_ui::theme::metric::STATUS_BAR_H;
 
     let (px, py) = portrait_strip_at();
@@ -3047,10 +3051,10 @@ fn portrait_status(
     screen.set_portrait_strip(false);
     window.request_redraw();
 
-    let mut strip = vec![flipper_ui::Gray8::BLACK; pw * tall];
     if !drawn {
-        return strip;
+        return None;
     }
+    let mut strip = vec![flipper_ui::Gray8::BLACK; pw * tall];
     // The render is the panel's shape, so a row of the strip is `PANEL_W` into the frame.
     let stride = usize::from(flipper_ui::PANEL_W);
     for y in 0..tall {
@@ -3060,7 +3064,7 @@ fn portrait_status(
             }
         }
     }
-    strip
+    Some(strip)
 }
 
 /// Paint a status strip along the edge that is the app's top.
@@ -6250,9 +6254,16 @@ fn panel(
                 } else {
                     // Turned: the bar has to be drawn to the length it will occupy,
                     // which is the panel's height, so the rendered one cannot be reused.
-                    status_long = PANEL_H;
-                    status_strip = portrait_status(&window, &screen, PANEL_H);
-                    true
+                    // Nothing is replaced when the render fails, so the pair stays whole
+                    // and the next turn tries again.
+                    match portrait_status(&window, &screen, PANEL_H) {
+                        Some(strip) => {
+                            status_long = PANEL_H;
+                            status_strip = strip;
+                            true
+                        }
+                        None => false,
+                    }
                 };
                 if lifted {
                     strip_for = Some((front.clone(), turn));
