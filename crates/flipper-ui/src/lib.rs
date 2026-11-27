@@ -28,6 +28,7 @@ pub mod layout;
 pub mod leds;
 pub mod log;
 pub mod net;
+pub mod net_leds;
 pub mod netlink;
 pub mod nl80211;
 pub mod old_flipctl_loader;
@@ -40,7 +41,9 @@ pub mod profile_update;
 pub mod remote;
 pub mod route_watch;
 pub mod scale;
+pub mod screen_rec;
 pub mod script;
+pub mod settings;
 #[cfg(feature = "slint")]
 pub mod slint_render;
 pub mod status;

@@ -44,6 +44,10 @@ export component Page inherits Shell {
     // A picture, as CanvasBody takes it, and the text placed over it.
     in property <image> picture;
     in property <[CanvasText]> texts;
+    // White over the status bar, 0 to 1, for a modal the app paints.
+    in property <float> status_scrim;
+    // Drawn over the status bar, for a modal that reaches over it.
+    in property <image> overlay;
 
     detail := DetailBody {
         visible: root.mode == 0;
@@ -83,6 +87,8 @@ export component Page inherits Shell {
         bitmap: root.picture;
         texts: root.texts;
         status_bar: true;
+        status_scrim: root.status_scrim;
+        overlay: root.overlay;
         buttons: root.buttons;
         pressed_slot: AppKeys.pressed_slot;
     }

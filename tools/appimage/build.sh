@@ -141,11 +141,18 @@ cross_build() {
     local app=$1 bin=$2
     mkdir -p "$XT" "$CARGO_HOME_DIR"
     echo "== cross-building $bin =="
+    # An app that compiles C++ may bring its own compiler wrapper, to drop a flag its
+    # dependencies insist on; see apps/screen-recorder/cxx.sh.
+    local cxx=() cxx_env=()
+    if [ -x "$HERE/apps/$app/cxx.sh" ]; then
+        cxx=("CXX_aarch64_unknown_linux_gnu=$HERE/apps/$app/cxx.sh")
+        cxx_env=(-e "CXX_aarch64_unknown_linux_gnu=/src/apps/$app/cxx.sh")
+    fi
     # readelf reads any architecture, so the check is the same either way; the
     # container's is prefixed only because that is what its binutils installs.
     if [ "$NATIVE" = 1 ]; then
         preflight_cross
-        CARGO_TARGET_DIR="$XT" \
+        env "${cxx[@]}" CARGO_TARGET_DIR="$XT" \
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
             cargo build --release --locked "${XTARGET_ARG[@]}" \
                 --manifest-path "$HERE/apps/$app/Cargo.toml"
@@ -156,6 +163,7 @@ cross_build() {
             -v "$HERE:/src" -w /src \
             -v "$XT:/target" -e CARGO_TARGET_DIR=/target \
             -v "$CARGO_HOME_DIR:/cargo" -e CARGO_HOME=/cargo \
+            "${cxx_env[@]}" \
             flipctl-cross \
             sh -c "cargo build --release --locked --target $TARGET --manifest-path apps/$app/Cargo.toml && \
                    aarch64-linux-gnu-readelf -d /target/$TARGET/release/$bin \

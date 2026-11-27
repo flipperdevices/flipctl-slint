@@ -172,6 +172,7 @@ Switches read from the environment, all off unless set:
 #[cfg(feature = "slint")]
 mod demo {
     use flipper_ui::leds::Group;
+    use flipper_ui::net_leds::Param;
     use flipper_ui::ui::{ListItem, Root};
 
     pub fn labels(list: &[&str]) -> slint::ModelRc<slint::SharedString> {
@@ -277,8 +278,13 @@ mod demo {
             .filter(|r| match r.act {
                 Act::Boot => flipper_ui::boot::available(),
                 Act::Apps | Act::Manager => can_host_apps(),
-                Act::Flipctl2 => flipper_ui::old_flipctl_loader::available(),
+                Act::Flipctl2 => {
+                    flipper_ui::settings::debug_mode()
+                        && flipper_ui::old_flipctl_loader::available()
+                }
                 Act::Sub(m) if std::ptr::eq(m, &LEDS) => flipper_ui::leds::available(),
+                Act::Anim(_) | Act::AnimReset => flipper_ui::settings::debug_mode(),
+                Act::Detail(Detail::Update) => flipper_ui::settings::debug_mode(),
                 _ => true,
             })
             .collect()
@@ -338,6 +344,9 @@ mod demo {
         /// Flip airplane mode. Responds to left, right and ok alike, because the
         /// prototype routes all three into `onToggle`.
         Airplane,
+        /// Flip debug mode, which shows Testing in the main menu and Reinstall
+        /// FlipperOS under Settings. Saved, so it survives a reboot.
+        DebugMode,
         /// The app list, which this binary discovers at startup rather than
         /// declaring in the table.
         Apps,
@@ -360,6 +369,10 @@ mod demo {
         UsbPower,
         /// One LED group's brightness, which left and right step.
         Led(Group),
+        /// One timing of the network LEDs' animation, which left and right step.
+        Anim(Param),
+        /// Every animation timing back to its default.
+        AnimReset,
         /// Hand the panel to the flipctl2 prototype: stop this build, start the
         /// browser that draws that one. There is no way back from the panel,
         /// which is what makes it a testing row rather than a menu entry.
@@ -394,11 +407,11 @@ mod demo {
         /// The breadcrumb crumb, which is also the screen's name.
         pub fn title(self) -> &'static str {
             match self {
-                Detail::System => "System info",
+                Detail::System => "System Info",
                 Detail::Ethernet => "Ethernet",
-                Detail::Routing => "Routing info",
-                Detail::Disk => "Disk info",
-                Detail::Battery => "Battery info",
+                Detail::Routing => "Routing Info",
+                Detail::Disk => "Disk Info",
+                Detail::Battery => "Battery Info",
                 Detail::Modem => "5G Modem",
                 Detail::Update => "Reinstall FlipperOS",
                 Detail::Profile => "Update FlipperOS",
@@ -418,12 +431,16 @@ mod demo {
         Airplane,
         /// OFF when the radio is off, else the SSID, else "not connected".
         Wifi,
-        /// "Airplane mode" while that is what blocks the row.
+        /// "Airplane Mode" while that is what blocks the row.
         ModemBlocked,
         /// The capability set the USB-C port is offering.
         UsbPower,
         /// An LED group's brightness, between chevrons.
         Led(Group),
+        /// An animation timing, between chevrons.
+        Anim(Param),
+        /// `< ON >` / `< OFF >` for debug mode.
+        DebugMode,
     }
 
     pub struct Row {
@@ -451,8 +468,8 @@ mod demo {
     pub static NETWORK: Menu = Menu {
         title: "Network",
         rows: &[
-            Row { label: "Airplane mode", icon: 9, frames: 10, stat: Stat::Airplane, act: Act::Airplane },
-            Row { label: "Routing info", icon: 10, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Routing) },
+            Row { label: "Airplane Mode", icon: 9, frames: 10, stat: Stat::Airplane, act: Act::Airplane },
+            Row { label: "Routing Info", icon: 10, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Routing) },
             Row { label: "5G Modem", icon: 11, frames: 1, stat: Stat::ModemBlocked, act: Act::Detail(Detail::Modem) },
             Row { label: "Wi-Fi", icon: 12, frames: 1, stat: Stat::Wifi, act: Act::Wifi },
             Row { label: "Ethernet", icon: 13, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Ethernet) },
@@ -463,7 +480,7 @@ mod demo {
     ///
     /// No icons: unlike `networkMenu`, that function sets no icon map, so every
     /// row here is label-only and the label starts where the icon would end.
-    /// "System info" has no factory in the prototype either.
+    /// "System Info" has no factory in the prototype either.
     /// Whether a submenu is one the app switcher tracks.
     ///
     /// Network and Settings, which is what the prototype marks as apps: they are
@@ -482,28 +499,35 @@ mod demo {
     pub static SETTINGS: Menu = Menu {
         title: "Settings",
         rows: &[
-            Row { label: "System info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::System) },
-            Row { label: "Battery info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Battery) },
-            Row { label: "USB-C1 power out", icon: 0, frames: 1, stat: Stat::UsbPower, act: Act::UsbPower },
+            Row { label: "System Info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::System) },
+            Row { label: "Battery Info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Battery) },
+            Row { label: "USB-C1 Power Out", icon: 0, frames: 1, stat: Stat::UsbPower, act: Act::UsbPower },
             Row { label: "LED Brightness", icon: 0, frames: 1, stat: Stat::None, act: Act::Sub(&LEDS) },
-            Row { label: "Disk info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
+            Row { label: "Disk Info", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Disk) },
             Row { label: "App Manager", icon: 0, frames: 1, stat: Stat::None, act: Act::Manager },
             Row { label: "OS Profiles", icon: 0, frames: 1, stat: Stat::None, act: Act::Boot },
             Row { label: "Update FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Profile) },
             Row { label: "Reinstall FlipperOS", icon: 0, frames: 1, stat: Stat::None, act: Act::Detail(Detail::Update) },
+            Row { label: "Debug Mode", icon: 0, frames: 1, stat: Stat::DebugMode, act: Act::DebugMode },
             Row { label: "Reboot", icon: 0, frames: 1, stat: Stat::None, act: Act::Reboot },
             Row { label: "Shutdown", icon: 0, frames: 1, stat: Stat::None, act: Act::Shutdown },
         ],
     };
 
-    /// The brightness of each LED group the MCU drives. The prototype has none.
+    /// The brightness of the MCU's Link and Power LED groups. The prototype has none.
+    /// Debug mode adds the network LEDs' animation timings.
     #[rustfmt::skip]
     pub static LEDS: Menu = Menu {
         title: "LED Brightness",
         rows: &[
             Row { label: "Link", icon: 0, frames: 1, stat: Stat::Led(Group::Link), act: Act::Led(Group::Link) },
             Row { label: "Power", icon: 0, frames: 1, stat: Stat::Led(Group::Power), act: Act::Led(Group::Power) },
-            Row { label: "Wattmeter", icon: 0, frames: 1, stat: Stat::Led(Group::Wattmeter), act: Act::Led(Group::Wattmeter) },
+            Row { label: "Fade In", icon: 0, frames: 1, stat: Stat::Anim(Param::FadeIn), act: Act::Anim(Param::FadeIn) },
+            Row { label: "Breathe", icon: 0, frames: 1, stat: Stat::Anim(Param::Breathe), act: Act::Anim(Param::Breathe) },
+            Row { label: "Floor", icon: 0, frames: 1, stat: Stat::Anim(Param::Floor), act: Act::Anim(Param::Floor) },
+            Row { label: "Solid", icon: 0, frames: 1, stat: Stat::Anim(Param::Solid), act: Act::Anim(Param::Solid) },
+            Row { label: "Fade Out", icon: 0, frames: 1, stat: Stat::Anim(Param::FadeOut), act: Act::Anim(Param::FadeOut) },
+            Row { label: "Reset to Defaults", icon: 0, frames: 1, stat: Stat::None, act: Act::AnimReset },
         ],
     };
 
@@ -542,6 +566,9 @@ mod demo {
             Stat::None => String::new(),
             // MenuLine keys its chevron layout off this exact string.
             Stat::Airplane => if net.airplane { "< ON >" } else { "< OFF >" }.into(),
+            Stat::DebugMode => {
+                if flipper_ui::settings::debug_mode() { "< ON >" } else { "< OFF >" }.into()
+            }
             Stat::Wifi => {
                 if !net.wifi_enabled {
                     "OFF".into()
@@ -553,7 +580,7 @@ mod demo {
                     net.ssid.clone()
                 }
             }
-            Stat::ModemBlocked => if net.airplane { "Airplane mode" } else { "" }.into(),
+            Stat::ModemBlocked => if net.airplane { "Airplane Mode" } else { "" }.into(),
             Stat::UsbPower => flipper_ui::usb_pd::Port::read()
                 .filter(|p| p.powering())
                 .and_then(|p| p.sets.get(p.selected).map(|s| s.short()))
@@ -561,6 +588,7 @@ mod demo {
             Stat::Led(group) => flipper_ui::leds::read(*group)
                 .map(|v| format!("< {} >", flipper_ui::leds::label(v)))
                 .unwrap_or_default(),
+            Stat::Anim(p) => format!("< {} >", flipper_ui::net_leds::label(*p)),
         }
     }
 
@@ -572,6 +600,7 @@ mod demo {
                 Some(v) => (v == 0, v == u8::MAX),
                 None => (false, false),
             },
+            Stat::Anim(p) => flipper_ui::net_leds::ends(*p),
             _ => (false, false),
         }
     }
@@ -584,6 +613,15 @@ mod demo {
     /// The main menu shows none, matching the prototype: its MenuScene has no
     /// button bar at all, and only its power-off modal puts anything there.
     pub const SOFT_LABELS: [&str; 5] = ["", "", "", "", ""];
+
+    /// A menu's soft keys with `row` selected: Play on an LED animation timing,
+    /// which shows the effect it adjusts, and none elsewhere.
+    pub fn menu_labels(row: Option<&Row>) -> [&'static str; 5] {
+        match row.map(|r| &r.act) {
+            Some(Act::Anim(_)) => ["", "", "", "", "Play"],
+            _ => SOFT_LABELS,
+        }
+    }
 }
 
 /// The five detail screens: their pollers and their row builders.
@@ -1623,11 +1661,11 @@ mod detail {
     fn install_rows(install: &sysinfo::Install, current: Vec<DetailRow>) -> Vec<DetailRow> {
         let number = |b: &sysinfo::Installed| b.number.map(|n| format!("#{n}")).unwrap_or_default();
         match &install.bundle {
-            Some(b) => std::iter::once(row("Install type", format!("Bundle {}", number(b)).trim()))
+            Some(b) => std::iter::once(row("Install Type", format!("Bundle {}", number(b)).trim()))
                 .chain(current)
                 .collect(),
             None if install.parts.is_empty() => current,
-            None => std::iter::once(row("Install type", "Custom"))
+            None => std::iter::once(row("Install Type", "Custom"))
                 .chain(current)
                 .chain(install.parts.iter().map(|p| row(part_label(&p.name), &number(p))))
                 .collect(),
@@ -1696,7 +1734,7 @@ mod detail {
             ("Hostname", &s.hostname),
             ("SoC", &s.soc),
             ("CPU", &s.cpu),
-            ("CPU serial", &s.serial),
+            ("CPU Serial", &s.serial),
         ] {
             out.extend(long(label, value));
         }
@@ -1723,7 +1761,7 @@ mod detail {
                 ("Size", &u.size),
                 ("Version", &u.version),
                 ("Link", &u.link),
-                ("Life used", &u.life),
+                ("Life Used", &u.life),
                 ("Health", &u.health),
             ] {
                 out.extend(long(label, value));
@@ -1733,16 +1771,16 @@ mod detail {
         match &s.sd {
             Some(c) => {
                 for (label, value) in
-                    [("SD card", c.name.as_str()), ("SD size", &c.size), ("SD type", &c.kind)]
+                    [("SD Card", c.name.as_str()), ("SD Size", &c.size), ("SD Type", &c.kind)]
                 {
                     out.extend(long(label, value));
                 }
                 let r = &c.ratings;
                 for (label, value) in [
-                    ("SD speed class", &r.speed),
-                    ("SD UHS grade", &r.uhs),
-                    ("SD video class", &r.video),
-                    ("SD app class", &r.app),
+                    ("SD Speed Class", &r.speed),
+                    ("SD UHS Grade", &r.uhs),
+                    ("SD Video Class", &r.video),
+                    ("SD App Class", &r.app),
                 ] {
                     if !value.is_empty() {
                         out.extend(long(label, value));
@@ -1752,34 +1790,34 @@ mod detail {
                 let w = &c.switch;
                 if !w.speeds.is_empty() {
                     for (label, value) in [
-                        ("SD speeds", &w.speeds),
-                        ("SD power limit", &w.power),
-                        ("SD current", &w.current),
-                        ("SD commands", &w.commands),
+                        ("SD Speeds", &w.speeds),
+                        ("SD Power Limit", &w.power),
+                        ("SD Current", &w.current),
+                        ("SD Commands", &w.commands),
                     ] {
                         out.extend(long(label, value));
                     }
                 }
                 for (label, value) in [
-                    ("SD spec", &c.spec),
-                    ("SD allocation unit", &c.au),
-                    ("SD perf", &c.perf),
-                    ("SD discard", &c.discard),
-                    ("SD made", &c.made),
-                    ("SD serial", &c.serial),
+                    ("SD Spec", &c.spec),
+                    ("SD Allocation Unit", &c.au),
+                    ("SD Perf", &c.perf),
+                    ("SD Discard", &c.discard),
+                    ("SD Made", &c.made),
+                    ("SD Serial", &c.serial),
                     ("SD OEM", &c.oem),
-                    ("SD rev", &c.rev),
+                    ("SD Rev", &c.rev),
                 ] {
                     out.extend(long(label, value));
                 }
                 if c.sduc {
-                    out.push(row("SD boot", "no (SDUC)"));
+                    out.push(row("SD Boot", "no (SDUC)"));
                 }
                 if c.locked {
-                    out.push(row("SD lock", "write-protected"));
+                    out.push(row("SD Lock", "write-protected"));
                 }
             }
-            None => out.push(row("SD card", "none")),
+            None => out.push(row("SD Card", "none")),
         }
         sections.push(("SD", std::mem::take(&mut out)));
         if let Some(p) = &s.pack {
@@ -1788,7 +1826,7 @@ mod detail {
                 ("Battery", b.what),
                 ("Capacity", b.capacity),
                 ("Cycles", b.cycles),
-                ("Batt health", b.health),
+                ("Batt Health", b.health),
             ] {
                 out.extend(long(label, &value));
             }
@@ -1858,14 +1896,14 @@ mod detail {
             ("Host".into(), s.hostname.clone()),
             ("SoC".into(), s.soc.clone()),
             ("CPU".into(), s.cpu.clone()),
-            ("CPU serial".into(), s.serial.clone()),
+            ("CPU Serial".into(), s.serial.clone()),
             ("Memory".into(), sysinfo::installed_text(s.mem_total)),
         ];
         if let Some(m) = &s.mcu {
             out.extend([
                 ("MCU".into(), m.version.clone()),
-                ("MCU slot".into(), m.slot.clone()),
-                ("MCU boot".into(), m.boot.clone()),
+                ("MCU Slot".into(), m.slot.clone()),
+                ("MCU Boot".into(), m.boot.clone()),
             ]);
         }
         out.extend([
@@ -1883,7 +1921,7 @@ mod detail {
                 ("Size".into(), u.size.clone()),
                 ("Version".into(), u.version.clone()),
                 ("Link".into(), u.link.clone()),
-                ("Life used".into(), u.life.clone()),
+                ("Life Used".into(), u.life.clone()),
                 ("Health".into(), u.health.clone()),
             ]);
         }
@@ -2414,7 +2452,7 @@ mod wifi {
             self.details.is_none()
         }
 
-        /// Flip Auto join, and tell NetworkManager.
+        /// Flip Auto Join, and tell NetworkManager.
         ///
         /// Optimistic, like the radio toggles: the row flips on the frame the key
         /// was pressed on and the command runs detached, because
@@ -4101,10 +4139,10 @@ fn png(
     if modal {
         screen.set_modal_lines(slint::ModelRc::new(slint::VecModel::from(vec![
             slint::SharedString::from("To use 5G Modem you need"),
-            slint::SharedString::from("to turn off Airplane mode"),
+            slint::SharedString::from("to turn off Airplane Mode"),
         ])));
         screen.set_modal_left("Cancel".into());
-        screen.set_modal_right("Turn off".into());
+        screen.set_modal_right("Turn Off".into());
     }
     slint::platform::update_timers_and_animations();
 
@@ -4234,6 +4272,12 @@ fn panel(
     let mut pad =
         if headless || wayland { None } else { flipper_ui::evdev::TouchpadSource::open().ok() };
     let mut buzz = if headless || wayland { None } else { flipper_ui::haptic::Haptic::open().ok() };
+    // The LEDs are ours for the life of the process, on the same terms: the group
+    // settings first, since the network LEDs' colours are worked out under them.
+    if !headless && !wayland {
+        flipper_ui::leds::restore();
+        flipper_ui::net_leds::start();
+    }
 
     // The browser view is a second sink over the same frames and a second source
     // of the same key events, so nothing downstream can tell a remote click from
@@ -4474,7 +4518,7 @@ fn panel(
         act: DialogAct,
     }
     // What the dialog's right button does. Only one dialog has one so far: the
-    // airplane block, whose "Turn off" clears airplane mode and then proceeds to
+    // airplane block, whose "Turn Off" clears airplane mode and then proceeds to
     // the row that was blocked.
     #[derive(PartialEq)]
     enum DialogAct {
@@ -4865,6 +4909,8 @@ fn panel(
 
     let flash = Duration::from_millis(timing::PRESS_FLASH_MS as u64);
     let mut press = Flash::default();
+    // The menu's soft key labels as last drawn, which follow the selected row.
+    let mut menu_labels_shown = demo::SOFT_LABELS;
     // Which soft slot is showing its pressed state, and what to do when the flash
     // ends. The prototype flashes first and acts after: `btn.press()`, then a 30ms
     // timer calls `release()` and the handler. Acting immediately would switch the
@@ -4997,6 +5043,9 @@ fn panel(
     // can be turned the same way and still want their own.
     #[cfg(feature = "wayland")]
     let mut strip_for: Option<(String, flipper_ui::Rotate)> = None;
+    // The app recording the panel, while one is: every frame committed goes to it too.
+    #[cfg(feature = "wayland")]
+    let mut rec_tap: Option<flipper_ui::screen_rec::Tap> = None;
     // What a canvas app costs, per second while one is sending. The pixels arrive in
     // the panel's own format, are expanded to RGB for Slint and reduced again on the
     // way out, and the question is what that is worth.
@@ -5192,6 +5241,36 @@ fn panel(
         }};
     }
 
+    // Flip a toggle row. Debug Mode adds or drops Testing in the main menu, so each
+    // level of the stack is pointed back at the row it had selected.
+    macro_rules! toggle {
+        ($row:expr) => {{
+            match $row.act {
+                demo::Act::DebugMode => {
+                    let held: Vec<_> = stack
+                        .iter()
+                        .map(|(menu, sel, _)| demo::rows(menu).get(*sel as usize).copied())
+                        .collect();
+                    let on = !flipper_ui::settings::debug_mode();
+                    flipper_ui::settings::set_debug_mode(on);
+                    eprintln!("settings       debug mode {}", if on { "on" } else { "off" });
+                    for ((menu, sel, scroll), row) in stack.iter_mut().zip(held) {
+                        let Some(row) = row else { continue };
+                        if let Some(at) =
+                            demo::rows(menu).iter().position(|r| std::ptr::eq(*r, row))
+                        {
+                            let moved = at as i32 - *sel;
+                            *sel += moved;
+                            *scroll = (*scroll + moved).max(0);
+                        }
+                    }
+                    demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
+                }
+                _ => net.set_airplane(!net_now.airplane),
+            }
+        }};
+    }
+
     // The home screen, from wherever we are: what Back would drop on the way out of
     // each screen, dropped at once, and the menu back to its top. Esc does this from
     // our own screens, and an app does it with `POST /home` for an Esc it leaves.
@@ -5307,6 +5386,41 @@ fn panel(
                     }
                     continue;
                 }
+                flipper_ui::ipc::Request::ScreenRecord { pid } => {
+                    // From the app in front, which goes to the background as it is
+                    // answered so that what it records is the screen underneath.
+                    #[cfg(feature = "wayland")]
+                    {
+                        let asker = wl_front
+                            .as_deref()
+                            .filter(|_| rec_tap.is_none())
+                            .and_then(|name| wl_apps.iter().find(|a| a.name == name))
+                            .filter(|a| a.owns(pid))
+                            .map(|a| a.name.clone());
+                        match asker {
+                            Some(name) => match req
+                                .stream()
+                                .and_then(|s| flipper_ui::screen_rec::Tap::new(s, name.clone()))
+                            {
+                                Ok(tap) => {
+                                    eprintln!("app            {name} records the panel");
+                                    rec_tap = Some(tap);
+                                    asked_leave = Some(false);
+                                    screen.set_recording(true);
+                                    strip_for = None;
+                                }
+                                Err(e) => eprintln!("app            {name} cannot record: {e}"),
+                            },
+                            None => req.refused("only the app in front can record, one at a time"),
+                        }
+                    }
+                    #[cfg(not(feature = "wayland"))]
+                    {
+                        let _ = pid;
+                        req.refused("no app is in front");
+                    }
+                    continue;
+                }
             };
             if !demo::can_host_apps() {
                 req.err("cannot host apps");
@@ -5343,6 +5457,22 @@ fn panel(
                 Opened::Queued => req.ok(&format!("queued {name}")),
                 Opened::Starting => req.ok(&format!("starting {name}")),
                 Opened::Refused => req.err(&format!("{name} cannot start; the panel says why")),
+            }
+        }
+
+        // A recording ends when its app hangs up or quits. Its app coming back to the
+        // front holds it, before that app's first frame is committed, so the recorder
+        // never films itself.
+        #[cfg(feature = "wayland")]
+        if let Some(tap) = rec_tap.as_mut() {
+            let quit = !wl_apps.iter().any(|a| a.name == tap.owner());
+            if quit || tap.over() {
+                eprintln!("app            {} stops recording the panel", tap.owner());
+                rec_tap = None;
+                screen.set_recording(false);
+                strip_for = None;
+            } else {
+                tap.front(wl_front.as_deref());
             }
         }
 
@@ -6051,6 +6181,9 @@ fn panel(
                             eprintln!("app            frame not shown: {e}");
                         }
                     }
+                    if let Some(tap) = rec_tap.as_mut() {
+                        tap.frame(Some(&front), ready, PANEL_W, PANEL_H);
+                    }
                     // The browser view shows the panel, so it gets the same frame, and
                     // only while somebody is looking.
                     #[cfg(feature = "remote")]
@@ -6464,12 +6597,15 @@ fn panel(
             // proves the labels line up with the hardware instead of us
             // assuming it.
             let slot = FlipperKey::SOFT_ROW.iter().position(|k| *k == event.key);
+            let menu_labels = demo::menu_labels(
+                demo::rows(stack.last().unwrap().0).get(selected as usize).copied(),
+            );
             match slot {
-                Some(i) if demo::SOFT_LABELS[i].is_empty() => {
+                Some(i) if menu_labels[i].is_empty() => {
                     eprintln!("key {} -> slot {i}, no label", event.key.name())
                 }
                 Some(i) => {
-                    eprintln!("key {} -> slot {i} \"{}\"", event.key.name(), demo::SOFT_LABELS[i])
+                    eprintln!("key {} -> slot {i} \"{}\"", event.key.name(), menu_labels[i])
                 }
                 None => eprintln!("key {}", event.key.name()),
             }
@@ -6482,8 +6618,7 @@ fn panel(
 
             // A labelled soft key must do something, or the label is a lie.
             let on_menu_now = screen.get_screen() == Screen::Menu;
-            let labels: &[&str; 5] =
-                if on_menu_now { &demo::SOFT_LABELS } else { &demo::IDLE_LABELS };
+            let labels: &[&str; 5] = if on_menu_now { &menu_labels } else { &demo::IDLE_LABELS };
             let labelled_soft = slot.is_some_and(|i| !labels[i].is_empty());
 
             // Tab belongs to the system, not to whatever is in front. It is
@@ -7349,9 +7484,13 @@ fn panel(
             let Some(row) = visible.get(selected as usize).copied() else {
                 continue;
             };
-            let is_toggle = matches!(row.act, demo::Act::Airplane);
+            let is_toggle = matches!(row.act, demo::Act::Airplane | demo::Act::DebugMode);
             let led = match row.act {
                 demo::Act::Led(group) => Some(group),
+                _ => None,
+            };
+            let anim = match row.act {
+                demo::Act::Anim(p) => Some(p),
                 _ => None,
             };
 
@@ -7386,7 +7525,7 @@ fn panel(
                 // The chevron flashes rather than the whole row: nothing is being
                 // opened, so the selector must not fill.
                 (true, FlipperKey::Left) | (true, FlipperKey::Right) if is_toggle => {
-                    net.set_airplane(!net_now.airplane);
+                    toggle!(row);
                     arrow = Some((
                         if event.key == FlipperKey::Left { 1 } else { 2 },
                         Instant::now() + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
@@ -7411,11 +7550,23 @@ fn panel(
                     }
                 }
                 (true, FlipperKey::Ok) | (true, FlipperKey::Run) if led.is_some() => {}
+                (true, FlipperKey::Left) | (true, FlipperKey::Right) if anim.is_some() => {
+                    let up = event.key == FlipperKey::Right;
+                    if flipper_ui::net_leds::step(anim.unwrap(), up) {
+                        arrow = Some((
+                            if up { 2 } else { 1 },
+                            Instant::now() + Duration::from_millis(timing::CHEVRON_FLASH_MS as u64),
+                        ));
+                        demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
+                    }
+                }
+                (true, FlipperKey::Ok) if anim.is_some() => {}
+                (true, FlipperKey::Run) if anim.is_some() => {
+                    press.soft(FlipperKey::Run, 4, Instant::now() + flash)
+                }
                 // A toggle flips on ok too, with no press flash and no scene
                 // change, matching the onToggle branch in submenu.js.
-                (true, FlipperKey::Ok) | (true, FlipperKey::Run) if is_toggle => {
-                    net.set_airplane(!net_now.airplane);
-                }
+                (true, FlipperKey::Ok) | (true, FlipperKey::Run) if is_toggle => toggle!(row),
                 (true, FlipperKey::Ok) | (true, FlipperKey::Run) => {
                     // The 30ms flash comes first and the row acts when it ends,
                     // so the inverted row is always drawn at least once.
@@ -8041,6 +8192,16 @@ fn panel(
                 } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Idle {
                     screen.set_screen(Screen::Menu);
                     eprintln!("screen         menu");
+                } else if key == FlipperKey::Run
+                    && slot == Some(4)
+                    && screen.get_screen() == Screen::Menu
+                {
+                    let visible = demo::rows(stack.last().unwrap().0);
+                    if let Some(demo::Act::Anim(p)) = visible.get(selected as usize).map(|r| &r.act)
+                    {
+                        eprintln!("action         led preview {}", p.label());
+                        flipper_ui::net_leds::preview(*p);
+                    }
                 } else if key == FlipperKey::Ok && screen.get_screen() == Screen::Menu {
                     let visible = demo::rows(stack.last().unwrap().0);
                     let Some(row) = visible.get(selected as usize).copied() else {
@@ -8127,10 +8288,10 @@ fn panel(
                             dialog = Some(Dialog {
                                 lines: vec![
                                     "To use 5G Modem you need".into(),
-                                    "to turn off Airplane mode".into(),
+                                    "to turn off Airplane Mode".into(),
                                 ],
                                 left: "Cancel",
-                                right: "Turn off",
+                                right: "Turn Off",
                                 act: DialogAct::ClearAirplane,
                             });
                         }
@@ -8207,7 +8368,15 @@ fn panel(
                             }
                         }
                         // Changed in place by the key itself, with no flash to wait out.
-                        demo::Act::Airplane | demo::Act::Led(_) => {}
+                        demo::Act::Airplane
+                        | demo::Act::DebugMode
+                        | demo::Act::Led(_)
+                        | demo::Act::Anim(_) => {}
+                        demo::Act::AnimReset => {
+                            flipper_ui::net_leds::reset();
+                            eprintln!("action         led animation defaults");
+                            demo::apply_menu(&screen, stack.last().unwrap().0, &net_now);
+                        }
                     }
                 }
             }
@@ -8863,6 +9032,12 @@ fn panel(
 
         screen.set_selected(selected);
         screen.set_scroll(scroll);
+        let want_labels =
+            demo::menu_labels(demo::rows(stack.last().unwrap().0).get(selected as usize).copied());
+        if want_labels != menu_labels_shown {
+            screen.set_menu_buttons(demo::labels(&want_labels));
+            menu_labels_shown = want_labels;
+        }
         // A dialog's press flash belongs to its own button, so the row underneath
         // must not fill at the same time.
         screen.set_pressed(press.row_pressed());
@@ -9029,6 +9204,10 @@ fn panel(
                 if !app_owns_panel {
                     sink.commit(composed, damage)?;
                 }
+            }
+            #[cfg(feature = "wayland")]
+            if let Some(tap) = rec_tap.as_mut().filter(|_| !app_owns_panel) {
+                tap.frame(wl_front.as_deref(), &frame, PANEL_W, PANEL_H);
             }
             #[cfg(feature = "remote")]
             if let Some(view) = web.as_mut() {

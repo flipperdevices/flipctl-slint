@@ -1,10 +1,12 @@
-//! The brightness of each LED group the MCU drives.
+//! The brightness of the LED groups the MCU drives that flipctl sets: Link and Power.
+//! The wattmeter group is the MCU's own.
 //!
 //! The MCU scales every LED in a group by a group setting, 0 (off) to 255 (full),
 //! which the LED driver exposes on its controller device. A change is written as it
-//! is made, off the render loop, since the write goes through sudo. The MCU's own
-//! menu can change the setting too, with no notice to the host, so a group with
-//! nothing waiting is always read back from the MCU.
+//! is made, off the render loop, since the write goes through sudo, and saved in
+//! flipctl's settings, which flipctl puts back on the MCU when it starts: 50% until
+//! one is saved. The MCU's own menu can change the setting too, with no notice to
+//! the host, so a group with nothing waiting is always read back from the MCU.
 
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, OnceLock};
@@ -18,17 +20,23 @@ const DRIVER: &str = "/sys/bus/platform/drivers/flipper-one-leds";
 pub enum Group {
     Link,
     Power,
-    Wattmeter,
 }
 
 impl Group {
-    pub const ALL: [Group; 3] = [Group::Link, Group::Power, Group::Wattmeter];
+    pub const ALL: [Group; 2] = [Group::Link, Group::Power];
 
     fn file(self) -> &'static str {
         match self {
             Group::Link => "link_brightness",
             Group::Power => "power_brightness",
-            Group::Wattmeter => "wattmeter_brightness",
+        }
+    }
+
+    /// Where the setting is saved, as a percentage.
+    fn key(self) -> &'static str {
+        match self {
+            Group::Link => "led_link_percent",
+            Group::Power => "led_power_percent",
         }
     }
 
@@ -60,8 +68,33 @@ pub fn read(group: Group) -> Option<u8> {
     text.trim().parse().ok()
 }
 
-/// Write `value` for `group`.
+/// Write `value` for `group` and save it.
 pub fn set(group: Group, value: u8) {
+    hold(group, value);
+    crate::settings::set(group.key(), &percent(value).to_string());
+}
+
+/// Put the saved settings, or 50%, back on the MCU. A group already there is not
+/// written, since each write costs the MCU a flash write.
+pub fn restore() {
+    if !available() {
+        return;
+    }
+    for group in Group::ALL {
+        let want = crate::settings::get(group.key())
+            .and_then(|v| v.parse::<u8>().ok())
+            .map_or(raw(DEFAULT_PERCENT), raw);
+        if read(group) != Some(want) {
+            hold(group, want);
+        }
+    }
+}
+
+/// The percentage a group starts at until one is saved.
+const DEFAULT_PERCENT: u8 = 50;
+
+/// Hand `value` to the writer.
+fn hold(group: Group, value: u8) {
     let w = writer();
     w.held.lock().unwrap().values[group.index()] = Some(value);
     w.wake.notify_one();
@@ -101,7 +134,7 @@ pub fn label(raw: u8) -> String {
 }
 
 struct Held {
-    values: [Option<u8>; 3],
+    values: [Option<u8>; 2],
 }
 
 struct Writer {
@@ -115,7 +148,7 @@ fn writer() -> &'static Writer {
     let mut fresh = false;
     let w = WRITER.get_or_init(|| {
         fresh = true;
-        Writer { held: Mutex::new(Held { values: [None; 3] }), wake: Condvar::new() }
+        Writer { held: Mutex::new(Held { values: [None; 2] }), wake: Condvar::new() }
     });
     if fresh {
         thread::spawn(move || flush(w));

@@ -267,6 +267,7 @@ pub fn wrap(text: &str, budget: i32, max: usize) -> Vec<String> {
 include!("font/title.rs");
 include!("font/row.rs");
 include!("font/row_active.rs");
+include!("font/helvb08.rs");
 
 #[cfg(test)]
 mod tests {

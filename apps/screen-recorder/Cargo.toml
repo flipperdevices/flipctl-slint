@@ -1,0 +1,44 @@
+# Its own workspace, so this crate is independent of whatever it happens to sit
+# inside. Without it cargo refuses to build: a crate under a workspace directory
+# is assumed to be a member of it.
+[workspace]
+
+[package]
+name = "screen-recorder-app"
+version = "0.1.0"
+edition = "2021"
+# The source. The binary is a combined work: it links flipctl-app, and so Slint,
+# which makes the built app GPL-3.0-only like flipctl itself.
+license = "MIT"
+publish = false
+
+# Everything is in this binary: the frames come from flipctl over its socket, the
+# sound from the sound server's, and the encoders and the MP4 writer are compiled
+# in, so nothing on the device has to be installed.
+[dependencies]
+flipctl-app = { path = "../../crates/flipctl-app" }
+# The frame stream's format, shared with flipctl, which writes it.
+flipper-ui = { path = "../../crates/flipper-ui", default-features = false }
+slint = { version = "1.17", default-features = false, features = [
+    "compat-1-2", "backend-winit-wayland", "renderer-software", "std" ] }
+# localtime_r for the file name.
+libc = "0.2"
+# The sound server, over the PulseAudio socket PipeWire serves. Pure Rust.
+pulseaudio = { version = "0.3", default-features = false }
+# Cisco's H.264 encoder and LAME, both built from source by `cc` and linked
+# statically. OpenH264 is C++, and build.rs links its runtime statically too, so the
+# binary still needs only libc, libm and libgcc_s.
+openh264 = { version = "0.9", default-features = false, features = ["source"] }
+mp3lame-encoder = { version = "0.3", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["render"] }
+
+[build-dependencies]
+flipctl-app = { path = "../../crates/flipctl-app", features = ["build"] }
+# The C++ compiler cc would pick for the target, to find its static runtime.
+cc = "1"
+
+[profile.release]
+opt-level = "z"
+strip = true

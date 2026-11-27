@@ -22,9 +22,9 @@ e-marker is decoded from its VDOs, which only the VCONN source can read.
 Most of it is sysfs, readable by anyone. Two things are not there:
 
   capabilities  what a device supports rather than what it negotiated lives in its
-                BOS descriptor, which the kernel reads and does not keep. It is asked
-                for once per device through usbfs, a standard GET_DESCRIPTOR, which
-                is what `lsusb -v` does; the node is the plugdev group's to open.
+                BOS descriptor. sysfs has it as bos_descriptors, readable by anyone,
+                so no device node is opened: an app reaches a device only through a
+                flipctl claim.
   errors        enumeration failures (`device descriptor read/64, error -71`, a port
                 that cannot be enabled) are only in the kernel log. /dev/kmsg is read
                 from boot and followed, and each message is given to the entry whose
@@ -43,8 +43,6 @@ next section, Back leaves.
 """
 
 import asyncio
-import ctypes
-import fcntl
 import glob
 import os
 import pathlib
@@ -104,7 +102,6 @@ CABLE_SPEEDS = {0: "USB 2.0 only", 1: "5Gbps USB 3.2 Gen1", 2: "10Gbps USB 3.2 G
                 3: "40Gbps USB4 Gen3", 4: "80Gbps USB4 Gen4"}
 CABLE_VOLTS = {0: 20, 1: 30, 2: 40, 3: 50}
 
-USBDEVFS_CONTROL = 0xC0185500
 BOS_TYPE = 0x0F
 BOS_CAPS = {
     2: "USB2 ext", 3: "SS", 4: "Container ID", 6: "PD", 7: "Battery", 8: "PD sink",
@@ -317,28 +314,14 @@ class Ids:
 IDS = Ids()
 
 
-def bos(bus: int, dev: int) -> dict | None:
-    """The device's BOS descriptor, parsed, or None when it has none to give."""
+def bos(path: pathlib.Path) -> dict | None:
+    """The device at `path`'s BOS descriptor, parsed, or None when it has none."""
     try:
-        fd = os.open(f"/dev/bus/usb/{bus:03d}/{dev:03d}", os.O_RDWR)
+        data = (path / "bos_descriptors").read_bytes()
     except OSError:
         return None
-    try:
-        def get(length: int) -> bytes:
-            data = ctypes.create_string_buffer(length)
-            request = bytearray(struct.pack("=BBHHHI4xQ", 0x80, 6, BOS_TYPE << 8, 0, length,
-                                            1000, ctypes.addressof(data)))
-            got = fcntl.ioctl(fd, USBDEVFS_CONTROL, request)
-            return data.raw[:got]
-
-        head = get(5)
-        if len(head) < 5 or head[1] != BOS_TYPE:
-            return None
-        data = get(struct.unpack_from("<H", head, 2)[0])
-    except OSError:
+    if len(data) < 5 or data[1] != BOS_TYPE:
         return None
-    finally:
-        os.close(fd)
 
     found = {"caps": [], "max": None}
     at = data[0] if data else 5
@@ -722,7 +705,6 @@ class Analyzer:
         self.choice = 0
         self.log = Log()
         self.bos: dict[tuple, dict | None] = {}
-        self.asking: set = set()
         self.changed = threading.Event()
         self.version = 0
         self.known: set[str] = set()
@@ -771,21 +753,13 @@ class Analyzer:
         self.choice = min(max(self.choice + step, 0), max(0, len(self.entries) - 1))
 
     def capabilities(self, device: Device) -> dict | None:
-        """The BOS, asked for on a thread so a device that sits on a control request
-        cannot hold the panel, and only for a device that says it has one."""
+        """The BOS, read once per device and only for one that says it has one."""
         if device.version < 2.01 or not device["busnum"] or not device["devnum"]:
             return None
         key = (device.name, device["busnum"], device["devnum"])
-        if key not in self.bos and key not in self.asking:
-            self.asking.add(key)
-
-            def ask():
-                self.bos[key] = bos(int(device["busnum"]), int(device["devnum"]))
-                self.asking.discard(key)
-                self.version += 1
-
-            threading.Thread(target=ask, daemon=True).start()
-        return self.bos.get(key)
+        if key not in self.bos:
+            self.bos[key] = bos(device.path)
+        return self.bos[key]
 
     def owners(self) -> dict[str, Entry]:
         """Every name a kernel message might use for something an entry holds."""

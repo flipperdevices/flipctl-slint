@@ -37,6 +37,14 @@ Minor glyphs adjustments for FlipCTL based on original work by **Yana Odobesku**
 
 ---
 
+### [helvb08](helvb08-FlipCTL/)
+
+Extra FlipCTL glyphs on top of [u8g2](https://github.com/olikraus/u8g2)'s `u8g2_font_helvB08_tf`, based on the X11 **Adobe Helvetica Bold** bitmap font - licensed [**X11-Style (Adobe-DEC)**](helvb08-FlipCTL/LICENSE).
+
+<img width="1467" height="658" alt="image" src="https://github.com/user-attachments/assets/13c45133-3f76-48e2-9734-d4b775648921" />
+
+---
+
 ## Font editing
 
 The `.glyphs` sources are edited in [Glyphs.app](https://glyphsapp.com)

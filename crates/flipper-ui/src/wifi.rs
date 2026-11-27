@@ -720,7 +720,7 @@ pub struct DetailRow {
     /// A line inside a card, which changes where its rule is inset to and how
     /// light it is drawn.
     pub in_card: bool,
-    /// An action whose value is an ON/OFF toggle, which is Auto join.
+    /// An action whose value is an ON/OFF toggle, which is Auto Join.
     pub toggle: bool,
     /// A value with nothing behind it yet: "Loading..", "open", "-".
     pub dim: bool,
@@ -943,7 +943,7 @@ pub fn detail_rows(
     rows.push(action("Forget this network", DetailAct::Forget));
     rows.push(drow(0, metric::WIFI_SECTION_H));
 
-    let mut auto = action("Auto join", DetailAct::AutoJoin);
+    let mut auto = action("Auto Join", DetailAct::AutoJoin);
     auto.toggle = true;
     auto.value = match details {
         Some(d) if d.known => if d.autoconnect { "ON" } else { "OFF" }.into(),
@@ -988,7 +988,7 @@ pub fn detail_rows(
     for row in rows.iter_mut() {
         row.y = y;
         y += row.h;
-        // Auto join and the passphrase get a pixel between them rather than a
+        // Auto Join and the passphrase get a pixel between them rather than a
         // rule: they belong together, and a whole row of air would separate
         // them. The same pixel goes under the pair, pushing the rule below it
         // down by one.
@@ -1271,7 +1271,7 @@ mod tests {
         }
         assert!(view.content_h >= expected);
 
-        // Auto join and the passphrase are a pixel apart, not a row.
+        // Auto Join and the passphrase are a pixel apart, not a row.
         let auto = view.rows.iter().find(|r| r.act == DetailAct::AutoJoin).unwrap();
         let pw = view.rows.iter().find(|r| r.act == DetailAct::Password).unwrap();
         assert_eq!(pw.y - (auto.y + auto.h), 1);

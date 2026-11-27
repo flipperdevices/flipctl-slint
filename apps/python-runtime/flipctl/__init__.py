@@ -228,7 +228,8 @@ def item(label: str, status: str = "", value: str = "", chevrons: int = 0,
     """
     return {"label": label, "tag": tag, "status": status, "icon": 0,
             "picture": slint.Image(), "frames": 1, "chevrons": chevrons, "dim": dim,
-            "value": value, "at_start": first, "at_end": last}
+            "value": value, "at_start": first, "at_end": last,
+            "bar": False, "bar_fill": 0, "bar_text_x": 0}
 
 
 # ── Keys ─────────────────────────────────────────────────────────────────────

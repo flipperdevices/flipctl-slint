@@ -1,7 +1,11 @@
 [Unit]
 Description=flipctl on the Flipper One panel
-After=systemd-logind.service
-Wants=systemd-logind.service
+# The user's runtime directory, /run/user/1000, where flipctl keeps its socket, sway's
+# and each app's directory, and finds PipeWire. Not a login session: opening one waits
+# for user@1000.service, which waits for the network, 1.3s at boot. This unit makes the
+# directory without waiting. 1000 is the image's user; a unit cannot name a uid.
+Wants=user-runtime-dir@1000.service
+After=user-runtime-dir@1000.service
 # Claim the panel before any display manager wakes up and starts looking at cards.
 Before=display-manager.service
 Before=sddm.service
@@ -11,53 +15,19 @@ Conflicts=cog-seat1.service
 Type=simple
 User=user
 Group=user
-# dialout for ttyUSB and ttyACM (the default udev rules), i2c for /dev/i2c-*, plugdev
-# for /dev/bus/usb, gpio for gpiochip and spidev (70-flipctl-devices.rules; the group
-# comes from flipctl.sysusers.conf). The cgroup filter below opens a class; these
-# open the nodes.
-SupplementaryGroups=input video render dialout i2c plugdev gpio
+# video and render for the panel's card and the GPU, input for the buttons, dialout
+# for ttyUSB and ttyACM (the default udev rules), i2c for /dev/i2c-*, gpio for
+# gpiochip and spidev, leds for the network LEDs
+# (70-flipctl-devices.rules; both groups come from flipctl.sysusers.conf).
+SupplementaryGroups=input video render dialout i2c gpio leds
 
-# A real login session, so logind gives this process seat1's devices: the SPI panel
-# and the Flipper's buttons, both tagged ID_SEAT=seat1 by 72-seat-cog.rules.
-PAMName=login
-Environment=XDG_SEAT=seat1
-Environment=XDG_SESSION_CLASS=user
-Environment=XDG_SESSION_TYPE=tty
+# What a session would have set. The directory and the user's bus outlive any
+# login because the image lingers the user, which also starts PipeWire at boot.
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 # /usr/games too, because that is where Debian puts them and a hosted app is
 # whatever the archive ships.
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/games
-
-DevicePolicy=closed
-# The panel, by path rather than by number: card numbers move between kernels. The
-# render node is for converting a hosted app's frames on the GPU rather than the CPU,
-# and for the apps that draw with it themselves.
-DeviceAllow=/dev/dri/by-path/platform-2acf0000.spi-cs-0-card rw
-DeviceAllow=/dev/dri/by-path/platform-27800000.gpu-render rw
-DeviceAllow=char-input rw
-DeviceAllow=/dev/tty0 rw
-# The kernel log, where flipctl puts the moment the panel lights up. It writes the node
-# through sudo, as it does every privileged thing, but the cgroup's device filter applies to
-# that child as much as to us, so without this line the write fails however root it is.
-DeviceAllow=/dev/kmsg rw
-# An app is an AppImage, and its runtime mounts the bundle over FUSE through
-# fusermount3, a setuid child of ours and so inside this filter like everything else.
-DeviceAllow=/dev/fuse rw
-# The boot menu's profile tools mount each btrfs top level to read it, the booted one
-# included, and btrfs opens a device for writing on its first mount. Without these the
-# list is empty. The Flipper never showed it, because the seat1 session moves flipctl
-# out of this cgroup; a board with no seat1 stays here.
-DeviceAllow=block-sd rw
-DeviceAllow=block-mmc rw
-DeviceAllow=block-blkext rw
-# Hardware a hosted app may drive, by class name from /proc/devices. Resolved when
-# the unit starts, and a class whose driver is not loaded yet is silently absent, so
-# flipctl-devices.conf loads usbserial, cdc-acm and spidev at boot.
-DeviceAllow=char-gpiochip rw
-DeviceAllow=char-usb_device rw
-DeviceAllow=char-i2c rw
-DeviceAllow=char-ttyUSB rw
-DeviceAllow=char-ttyACM rw
-DeviceAllow=char-spidev rw
 
 # The installed layout, not a build tree: the binary is /usr/bin/flipctl and its
 # apps and assets are under /usr/share/flipctl. A deploy installs over those paths
@@ -68,17 +38,6 @@ StandardOutput=journal
 StandardError=journal
 ExecStart=/usr/bin/flipctl --panel \
     --remote [::]:8899 --assets /usr/share/flipctl/assets/remote
-
-# Stopping the unit does not stop what it started: PAMName=login puts these
-# processes in a logind session scope rather than the service's own cgroup, so a
-# restart used to leave the previous flipctl alive, still holding the remote view's
-# port, and the
-# new one came up with no endpoint for Back or the app switcher.
-#
-# sway covers the hosted apps: it is the parent of every one of them, so killing it
-# takes the terminals and the games with it.
-ExecStopPost=-/usr/bin/pkill -x flipctl
-ExecStopPost=-/usr/bin/pkill -x sway
 Restart=on-failure
 RestartSec=2
 

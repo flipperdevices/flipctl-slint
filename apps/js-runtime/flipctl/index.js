@@ -216,6 +216,9 @@ function item(label, options = {}) {
         value,
         at_start: first,
         at_end: last,
+        bar: false,
+        bar_fill: 0,
+        bar_text_x: 0,
     };
 }
 

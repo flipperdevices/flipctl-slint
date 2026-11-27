@@ -1,0 +1,13 @@
+# Screen recorder: the panel, as flipctl puts it on the glass, to an MP4 in
+# ~/Videos, with the speaker's sound, the microphone or none.
+#
+# The frames come from flipctl, which is the only thing that sees them: the app asks
+# for them on flipctl's socket and is sent to the background as it is answered, and
+# opening it again ends the recording before it is drawn. `audio` is what earns it the
+# sound server. The H.264 and MP3 encoders and the MP4 writer are compiled into the
+# binary, so nothing has to be installed.
+name = "Screen Recorder"
+icon = "icon.png"
+wayland = "./target/release/screen-recorder-app"
+folder = "Media"
+audio = true

@@ -347,10 +347,11 @@ impl KmsSink {
     /// drops it. Both are waited out here, before any buffer is created on the fd, since a
     /// buffer belongs to the fd that made it.
     ///
-    /// The wait exists because logind activates this session a moment after the unit
-    /// starts, and it was seen to last 10s once in 19 boots for a reason the kernel log
-    /// did not show. Giving up costs a restart that re-pays the whole start-up, so the
-    /// error says what was seen: the card, how long, and which refusal.
+    /// The wait exists because the card's last holder, cog or the flipctl before us,
+    /// can still be letting go when the unit starts. Under a login session it was seen
+    /// to last 10s once in 19 boots for a reason the kernel log did not show. Giving up
+    /// costs a restart that re-pays the whole start-up, so the error says what was
+    /// seen: the card, how long, and which refusal.
     fn open_as_master(path: &Path, limit: Duration) -> std::io::Result<Card> {
         let began = Instant::now();
         let mut card = Card(OpenOptions::new().read(true).write(true).open(path)?);
