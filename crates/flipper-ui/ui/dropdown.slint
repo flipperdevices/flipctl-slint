@@ -36,6 +36,10 @@ export struct DropView {
     // The row's title, drawn again over the wash so the row being changed stays
     // legible while the rest of the page fades.
     title: string,
+    // Where that title is drawn, which is the row's own line and not the frame's top.
+    // A frame that had to move up to fit the page - the last row's list does - would
+    // otherwise carry the word with it and make it jump as the list opens.
+    title_y: length,
     sel_y: length,
     sel_w: length,
     sel_h: length,
@@ -63,6 +67,8 @@ export component SplitText {
     // From the chip's left edge, which is this component's own left edge.
     in property <length> text_x;
     in property <length> fill_w;
+    // The chip's width comes from the row above: the panel's metric is one chip
+    // among several, and a window narrower than the panel needs a narrower one.
     in property <length> chip_w: FlipperTheme.drop_chip_w;
 
     width: root.chip_w;
@@ -108,6 +114,11 @@ export component SplitText {
 // One settings row: a title on the left, a chip on the right.
 export component DropLine {
     in property <DropRow> line;
+    // The chip's width. It is the panel's by default, and a window narrower than
+    // the panel - a portrait screen, say - passes its own so the row still fits:
+    // `chip_x` is measured from the right edge either way, so only the width has
+    // to follow the window and nothing else about the row moves.
+    in property <length> chip_w: FlipperTheme.drop_chip_w;
 
     x: 0;
     y: root.line.y;
@@ -115,7 +126,7 @@ export component DropLine {
     height: FlipperTheme.drop_row_h;
 
     property <length> chip_x: root.width
-        - FlipperTheme.drop_chip_pad_r - FlipperTheme.drop_chip_w;
+        - FlipperTheme.drop_chip_pad_r - root.chip_w;
     // Only the chevrons are measured here. They are one glyph of a fixed string,
     // so the hidden-Text measurement is exact; the value was measured in Rust
     // because it is the app's string and may end in a space.
@@ -135,7 +146,7 @@ export component DropLine {
     SelectorFrame {
         x: root.chip_x;
         y: FlipperTheme.drop_top_pad;
-        frame_w: FlipperTheme.drop_chip_w;
+        frame_w: root.chip_w;
         frame_h: FlipperTheme.drop_chip_h;
         filled: true;
         stroke: false;
@@ -154,8 +165,8 @@ export component DropLine {
         stroke: false;
         shadow: false;
         fill_color: FlipperTheme.black;
-        round_tr: root.line.fill_w >= FlipperTheme.drop_chip_w;
-        round_br: root.line.fill_w >= FlipperTheme.drop_chip_w;
+        round_tr: root.line.fill_w >= root.chip_w;
+        round_br: root.line.fill_w >= root.chip_w;
     }
 
     // The value, and the chevrons that say left and right will move it. All three
@@ -164,7 +175,7 @@ export component DropLine {
     contents := Rectangle {
         x: root.chip_x;
         y: FlipperTheme.drop_top_pad;
-        width: FlipperTheme.drop_chip_w;
+        width: root.chip_w;
         height: FlipperTheme.drop_chip_h;
         background: transparent;
 
@@ -174,18 +185,21 @@ export component DropLine {
             text: root.line.value;
             text_x: root.line.value_x;
             fill_w: contents.fill;
+            chip_w: root.chip_w;
         }
 
         if root.line.selected: SplitText {
             text: "<";
             text_x: FlipperTheme.drop_arrow_pad;
             fill_w: contents.fill;
+            chip_w: root.chip_w;
         }
 
         if root.line.selected: SplitText {
             text: ">";
-            text_x: FlipperTheme.drop_chip_w - root.gt_w - FlipperTheme.drop_arrow_pad;
+            text_x: root.chip_w - root.gt_w - FlipperTheme.drop_arrow_pad;
             fill_w: contents.fill;
+            chip_w: root.chip_w;
         }
     }
 }
@@ -215,14 +229,24 @@ export component DropRule inherits Rectangle {
 export component DropPicker inherits Rectangle {
     in property <DropView> view;
     in property <[DropItem]> items;
+    // The chip's width, the same one its row was built with.
+    in property <length> chip_w: FlipperTheme.drop_chip_w;
 
     width: 100%;
     height: 100%;
     background: FlipperTheme.white.with-alpha(FlipperTheme.overlay_alpha);
 
+    // The row's title, drawn again over the wash.
+    //
+    // The wash is translucent, so the page's own copy shows through - but it shows through
+    // *greyed*, because white at `overlay_alpha` sits on top of it. Redrawing the word here,
+    // on top of the wash, is what keeps the row being changed readable in black. It lands on
+    // the row's own title rather than beside it: the caller passes the chip's y, which is
+    // `drop_top_pad` below the row's top, and that is exactly where `DropLine` draws the
+    // title.
     Text {
         x: FlipperTheme.drop_title_x;
-        y: root.view.y;
+        y: root.view.title_y;
         text: root.view.title;
         font-size: 16px;
         font-family: "HaxrCorp 4090";
@@ -232,7 +256,7 @@ export component DropPicker inherits Rectangle {
     SelectorFrame {
         x: root.view.x;
         y: root.view.y;
-        frame_w: FlipperTheme.drop_chip_w;
+        frame_w: root.chip_w;
         frame_h: root.view.h;
         filled: true;
         stroke: false;
@@ -243,7 +267,7 @@ export component DropPicker inherits Rectangle {
     for item in root.items: Rectangle {
         x: root.view.x;
         y: item.y;
-        width: FlipperTheme.drop_chip_w;
+        width: root.chip_w;
         height: FlipperTheme.drop_pick_item_h;
         background: transparent;
 
@@ -261,7 +285,7 @@ export component DropPicker inherits Rectangle {
         if item.rule: Rectangle {
             x: FlipperTheme.drop_pick_pad;
             y: FlipperTheme.drop_pick_item_h;
-            width: FlipperTheme.drop_chip_w - FlipperTheme.drop_pick_pad * 2;
+            width: root.chip_w - FlipperTheme.drop_pick_pad * 2;
             height: FlipperTheme.drop_pick_gap;
             background: FlipperTheme.pick_rule;
         }

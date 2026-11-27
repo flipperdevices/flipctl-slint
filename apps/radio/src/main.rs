@@ -257,7 +257,10 @@ impl Radio {
 
     /// One request on the control connection, opening it first if need be. A
     /// connection that fails is dropped, and the next request opens another.
-    fn control<T>(&mut self, ask: impl FnOnce(&mut pulse::Conn) -> std::io::Result<T>) -> Option<T> {
+    fn control<T>(
+        &mut self,
+        ask: impl FnOnce(&mut pulse::Conn) -> std::io::Result<T>,
+    ) -> Option<T> {
         if !self.online {
             return None;
         }
@@ -555,10 +558,7 @@ impl Radio {
         } else {
             // Inside the frame's own corners: a line that reached into the chamfer
             // would be a letter with a diagonal cut through it.
-            font::fit(
-                &format!("Could not start {station}"),
-                metric::MODAL_W - radius::BOX * 2,
-            )
+            font::fit(&format!("Could not start {station}"), metric::MODAL_W - radius::BOX * 2)
         };
         vec!["Stream error".into(), body.into()]
     }
@@ -592,6 +592,7 @@ fn apply(ui: &AppWindow, state: &Radio) {
             y: view.y as f32,
             h: view.h as f32,
             title: view.title.into(),
+            title_y: view.title_y as f32,
             sel_y: view.sel_y as f32,
             sel_w: view.sel_w as f32,
             sel_h: view.sel_h as f32,
@@ -661,8 +662,7 @@ fn key(state: &mut Radio, key: Key) -> bool {
                 // stream to arrive back where it was.
                 if total > 1 {
                     let at = state.current(row);
-                    let next =
-                        if forward { (at + 1) % total } else { (at + total - 1) % total };
+                    let next = if forward { (at + 1) % total } else { (at + total - 1) % total };
                     state.choose(row, next);
                 }
             }
@@ -756,8 +756,7 @@ mod tests {
         apply(&ui, state);
         ui.show().expect("show");
         slint::platform::update_timers_and_animations();
-        let frame: Vec<u8> =
-            render_frame(&window).expect("frame").iter().map(|px| px.0).collect();
+        let frame: Vec<u8> = render_frame(&window).expect("frame").iter().map(|px| px.0).collect();
         drop(ui);
         // Written only when asked for, because a test that writes files on every
         // run is a test nobody runs. `RADIO_RENDER=1 cargo test` then leaves the
@@ -780,11 +779,7 @@ mod tests {
         );
         encoder.set_color(png::ColorType::Grayscale);
         encoder.set_depth(png::BitDepth::Eight);
-        encoder
-            .write_header()
-            .expect("png header")
-            .write_image_data(frame)
-            .expect("png data");
+        encoder.write_header().expect("png header").write_image_data(frame).expect("png data");
     }
 
     fn at(frame: &[u8], x: i32, y: i32) -> u8 {
@@ -820,9 +815,7 @@ mod tests {
             .enumerate()
             .filter(|(_, px)| !allowed.contains(px))
             .take(8)
-            .map(|(i, px)| {
-                format!("({}, {}) = {px}", i as i32 % stride, i as i32 / stride)
-            })
+            .map(|(i, px)| format!("({}, {}) = {px}", i as i32 % stride, i as i32 / stride))
             .collect();
         assert!(offenders.is_empty(), "off-palette pixels: {offenders:?}");
     }
@@ -879,14 +872,31 @@ mod tests {
         state.selected = 0;
         state.picking = Some(2);
         let frame = shot("picker", &state);
-        let view = dropdown::picker(
-            row_y(0) + metric::DROP_TOP_PAD,
-            "City",
-            &state.options(Row::City),
-            2,
-        );
+        let view =
+            dropdown::picker(row_y(0) + metric::DROP_TOP_PAD, "City", &state.options(Row::City), 2);
         assert_eq!(view.x, dropdown::CHIP_X);
         assert_eq!(view.h, dropdown::picker_h(CITIES.len()));
+        // The row's title stays black over the wash. The wash is translucent, so the page's
+        // own copy shows through greyed; the picker draws its own on top, at the same y the
+        // row's title has. Without it the whole word - the one that says which row is being
+        // changed - turns the wash's grey, which no other assertion here would notice.
+        //
+        // The title's own box only: from `drop_title_x` across, over the rows the text
+        // occupies. The chip and the frame beside it are darker than the wash, so counting
+        // the whole picker width would find ink either way and prove nothing.
+        // The title is drawn from the component's own left edge, not from the picker's
+        // `view.x`: `DropPicker` fills the window and the frame inside it starts at
+        // `view.x`, so the text lines up with the row's title rather than with the chip.
+        // 6 is `drop_title_x` in tokens.toml, which has no generated constant of its own,
+        // and 44 is wider than any title this app has.
+        let darkest = (view.y..view.y + 13)
+            .map(|y| (6..50).filter(|x| at(&frame, *x, y) == theme::color::BLACK.0).count())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            darkest > 3,
+            "the picker's title is not black over the wash: its densest row has {darkest} dark pixels"
+        );
         // The frame reaches the last option, over ground that is page below it.
         let inside = view.y + view.h - metric::DROP_PICK_PAD - 1;
         assert_eq!(at(&frame, view.x + 1, inside), theme::color::CHIP_FILL.0);
@@ -933,7 +943,8 @@ mod tests {
         assert_eq!(state.note(), ["Playing: Jamiroquai - Virtual Insanity"]);
         let room = PANEL_W as i32 - metric::DROP_TITLE_X - metric::DROP_RULE_PAD_X;
         // A long title wraps at spaces, every line inside the page.
-        state.now = "Dado Polumenta - Ljubavi moja (ft Elitni odredi) [Live at the Sava Centar]".into();
+        state.now =
+            "Dado Polumenta - Ljubavi moja (ft Elitni odredi) [Live at the Sava Centar]".into();
         let lines = state.note();
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert_eq!(lines.join(" "), format!("Playing: {}", state.now));
@@ -992,10 +1003,7 @@ mod tests {
         for (city, stations) in CITIES {
             for station in *stations {
                 assert!(url(station).is_some(), "{city}'s {station} has no URL");
-                assert!(
-                    station.is_ascii(),
-                    "{station} cannot be drawn: the fonts are ASCII"
-                );
+                assert!(station.is_ascii(), "{station} cannot be drawn: the fonts are ASCII");
             }
         }
         // And nothing is in the URL list that no city offers.
@@ -1083,11 +1091,18 @@ mod tests {
     fn outputs_are_named_and_ordered_as_the_recorder_has_them() {
         let listed = vec![
             ("bluez_output.AA_BB.1".into(), "Headphones".into()),
-            ("alsa_output.platform-dp0-sound.stereo-fallback".into(), "DisplayPort Digital Output".into()),
-            ("alsa_output.platform-sound.stereo-fallback".into(), "On-board NAU8822 Analog Output".into()),
+            (
+                "alsa_output.platform-dp0-sound.stereo-fallback".into(),
+                "DisplayPort Digital Output".into(),
+            ),
+            (
+                "alsa_output.platform-sound.stereo-fallback".into(),
+                "On-board NAU8822 Analog Output".into(),
+            ),
             ("alsa_output.platform-hdmi-sound.pro-output-0".into(), "HDMI Digital Output".into()),
         ];
-        let labels: Vec<String> = outputs(listed.clone()).into_iter().map(|(_, label)| label).collect();
+        let labels: Vec<String> =
+            outputs(listed.clone()).into_iter().map(|(_, label)| label).collect();
         assert_eq!(labels, [SPEAKER, "HDMI", "DisplayPort", "Headphones"]);
 
         // The longest of the names, on its chip and in the picker.
@@ -1108,7 +1123,10 @@ mod tests {
         let mut state = radio();
         state.choose(Row::Device, 1);
         let hdmi = ("alsa_output.hdmi-stereo".to_string(), "Digital Stereo (HDMI)".to_string());
-        let dp = ("alsa_output.platform-dp0-sound.stereo-fallback".to_string(), "DisplayPort".to_string());
+        let dp = (
+            "alsa_output.platform-dp0-sound.stereo-fallback".to_string(),
+            "DisplayPort".to_string(),
+        );
         state.set_outputs(vec![dp.clone(), hdmi]);
         assert_eq!(state.sink(), "alsa_output.hdmi-stereo");
         assert_eq!(state.device, 1);

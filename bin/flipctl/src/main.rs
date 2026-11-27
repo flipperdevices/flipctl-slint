@@ -2930,9 +2930,11 @@ fn start_hosted(
     let host = host.as_mut()?;
 
     // Its own size if it insists on one, the panel's otherwise. Doom renders 320x200
-    // and cannot be told otherwise, and here it simply gets an output that shape.
-    let (w, h) =
-        entry.size.unwrap_or((u32::from(flipper_ui::PANEL_W), u32::from(flipper_ui::PANEL_H)));
+    // and cannot be told otherwise, and here it simply gets an output that shape. A
+    // portrait app asks for the panel transposed, which is what makes its page fill the
+    // frame: the capture is turned on the way to the glass, so 144 by 256 becomes 256
+    // by 144 with nothing resampled.
+    let (w, h) = app_size(entry);
     let place = match host.place(w, h) {
         Ok(place) => place,
         Err(e) => {
@@ -2956,6 +2958,7 @@ fn start_hosted(
         h,
         &env,
         entry.audio,
+        entry.rotate,
     ) {
         Ok(session) => {
             eprintln!(
@@ -2984,57 +2987,84 @@ fn start_hosted(
     }
 }
 
-/// flipctl's status bar, drawn for an app that is turned sideways.
+/// The size a hosted app draws at, and what its output is made.
 ///
-/// The panel is landscape and its own bar is 256 long, but a portrait app's top edge is
-/// 144, so rotating the rendered one would crop the clock off the end. This draws a bar
-/// to the width it will actually occupy, from the same status flipctl shows everywhere
-/// else, and hands it back as a strip `STATUS_BAR_H` tall.
+/// The panel's own shape unless the app asks for one. A portrait app asks for nothing
+/// and gets the panel transposed: its page is 144 across and 256 down, read with the
+/// device turned, so the output is that shape and the capture is turned onto the glass.
+/// An app that names a size gets exactly that, rotation or not -- it has said what it
+/// draws and is taken at its word.
 #[cfg(all(feature = "device", feature = "slint", feature = "wayland"))]
-fn portrait_status(status: &flipper_ui::Status, long: u16) -> Vec<flipper_ui::Gray8> {
-    use flipper_ui::font::TITLE;
+fn app_size(entry: &flipper_ui::app::AppEntry) -> (u32, u32) {
+    let (pw, ph) = (u32::from(flipper_ui::PANEL_W), u32::from(flipper_ui::PANEL_H));
+    entry.size.unwrap_or(match entry.rotate {
+        flipper_ui::Rotate::None => (pw, ph),
+        _ => (ph, pw),
+    })
+}
+
+/// Where the portrait bar sits in flipctl's own scene, in panel coordinates.
+///
+/// `Root` parks a `PortraitBar` in its bottom-left corner when `portrait_strip` is set, and
+/// this is that corner. The two numbers are a contract with `root.slint`: the bar is
+/// `status_bar_h` tall and sits against the bottom edge, so its top is the panel's height
+/// less that. A landscape `Root` is 256 wide, so the strip is read from `x` 0..143 - the
+/// turned page's width - rather than to the scene's edge.
+#[cfg(all(feature = "device", feature = "slint", feature = "wayland"))]
+fn portrait_strip_at() -> (usize, usize) {
+    (0, usize::from(flipper_ui::PANEL_H) - flipper_ui::theme::metric::STATUS_BAR_H as usize)
+}
+
+/// The status bar a turned app wears, at the width a portrait page has.
+///
+/// Drawn by the framework's own `PortraitBar` - which is the same `StatusBar` the landscape
+/// screen draws, at 144 columns instead of 256 - and lifted out of flipctl's scene. The
+/// platform here hands out one window and `set_platform` may only be called once, so the
+/// component cannot be rendered by itself; drawing it into the scene at a known corner and
+/// cutting it out is the same route the landscape bar takes, where the scene is rendered and
+/// its top rows are kept.
+///
+/// `None` when the scene would not render. A black strip is a bar nobody can read, and
+/// handing one back would leave the caller thinking it had a bar to show until the status
+/// next moved.
+///
+/// This used to be drawn by hand in Rust, in the built-in `TITLE` face on a strip of its own,
+/// which made two bars that disagreed about their ground, their ink, their icons and their
+/// typeface. There is one bar now, and a change to `statusbar.slint` reaches both.
+#[cfg(all(feature = "device", feature = "slint", feature = "wayland"))]
+fn portrait_status(
+    window: &slint::platform::software_renderer::MinimalSoftwareWindow,
+    screen: &flipper_ui::ui::Root,
+    long: u16,
+) -> Option<Vec<flipper_ui::Gray8>> {
     use flipper_ui::theme::metric::STATUS_BAR_H;
 
-    let tall = STATUS_BAR_H as u16;
-    let mut strip = flipper_ui::Surface::new(long, tall);
-    strip.clear(flipper_ui::Gray8::WHITE);
+    let (px, py) = portrait_strip_at();
+    let (pw, tall) = (usize::from(long), STATUS_BAR_H as usize);
 
-    // The same things flipctl's own bar shows, in the same order: the radios at the
-    // leading edge, the battery at the trailing one. No clock, because flipctl's bar
-    // has none and a turned app should get the same bar rather than a different one.
-    let mut ink = |text: &str, x: i32| {
-        TITLE.for_each_pixel(text, x, 2, |px, py| {
-            strip.pixel(px, py, flipper_ui::Gray8::BLACK);
-        });
-    };
+    // Ask for the bar, render the scene, and put the flag back: the scene is flipctl's own
+    // screen and must not keep a bar parked in its corner.
+    screen.set_portrait_strip(true);
+    window.request_redraw();
+    let mut frame = Vec::new();
+    let drawn = flipper_ui::slint_render::render_into(window, &mut frame).is_some();
+    screen.set_portrait_strip(false);
+    window.request_redraw();
 
-    // Nothing at all when there is no battery, as the landscape bar does: a machine
-    // on the mains has none to report, and a reading of "--%" reads as a flat pack.
-    let charge = if status.battery < 0 {
-        String::new()
-    } else if status.charging {
-        format!("{}%+", status.battery)
-    } else {
-        format!("{}%", status.battery)
-    };
-    let mut radios = String::new();
-    if status.modem_available {
-        radios.push_str(status.access_tech);
-        radios.push(' ');
+    if !drawn {
+        return None;
     }
-    if status.wifi_connected {
-        radios.push_str("wifi ");
+    let mut strip = vec![flipper_ui::Gray8::BLACK; pw * tall];
+    // The render is the panel's shape, so a row of the strip is `PANEL_W` into the frame.
+    let stride = usize::from(flipper_ui::PANEL_W);
+    for y in 0..tall {
+        for x in 0..pw {
+            if let Some(px_v) = frame.get((py + y) * stride + px + x) {
+                strip[y * pw + x] = *px_v;
+            }
+        }
     }
-    if matches!(status.ethernet, flipper_ui::Ethernet::Real) {
-        radios.push_str("eth");
-    }
-    ink(radios.trim_end(), 3);
-    let width = i32::from(TITLE.text_width(&charge));
-    ink(&charge, i32::from(long) - width - 3);
-
-    // A rule along the inside edge, as the landscape bar has under it.
-    strip.rect(0, i32::from(tall) - 1, i32::from(long), 1, flipper_ui::Gray8::BLACK);
-    strip.pixels().to_vec()
+    Some(strip)
 }
 
 /// Paint a status strip along the edge that is the app's top.
@@ -3065,8 +3095,12 @@ fn paint_status(
                 // panel and its rows run outward. The obvious mapping puts it upside
                 // down, which is how this was found.
                 flipper_ui::Rotate::Left => (y, ph - 1 - x),
-                // The right edge, the other way round.
-                flipper_ui::Rotate::Right => (pw - tall + y, ph - 1 - x),
+                // The other edge, mirrored: `turn_from_xrgb`'s right case puts the page's
+                // top on the panel's right-hand column, so the strip runs down that column
+                // and its rows go across. `pw - 1 - y` is the column and `x` the row, which
+                // is the same piece of frame `Left` covers, reflected. The mapping this
+                // replaces turned the strip a further 180 degrees.
+                flipper_ui::Rotate::Right => (pw - 1 - y, x),
             };
             if fx < pw && fy < ph {
                 frame[fy * pw + fx] = ink;
@@ -5019,10 +5053,6 @@ fn panel(
     // What a canvas app costs, per second while one is sending. The pixels arrive in
     // the panel's own format, are expanded to RGB for Slint and reduced again on the
     // way out, and the question is what that is worth.
-    // The last status the poller produced, kept because a turned app's bar is drawn
-    // here rather than by Slint, and it needs the same numbers.
-    #[cfg(feature = "wayland")]
-    let mut last_status = flipper_ui::Status::default();
     #[cfg(feature = "wayland")]
     let mut app_frames: u32 = 0;
     #[cfg(feature = "wayland")]
@@ -5648,9 +5678,8 @@ fn panel(
         if let Some(now) = status.poll() {
             #[cfg(feature = "wayland")]
             {
-                last_status = now;
-                // The bar an app wears over its own frame is drawn from this, so it is
-                // worth lifting again now and not before.
+                // The bar an app wears over its own frame is drawn from the scene's own
+                // numbers, so it is worth lifting again once they have changed.
                 strip_for = None;
             }
             apply_status(&screen, now);
@@ -6094,10 +6123,18 @@ fn panel(
                     }
                     key => {
                         if let Some(app) = wl_apps.iter_mut().find(|a| a.name == front) {
-                            app.session.key(u32::from(key.to_evdev()), event.down);
-                            wl_held.retain(|k| *k != key);
+                            // A portrait app's directions are its own: the compositor turns
+                            // its frame onto the glass, so the panel's up is the page's
+                            // right and the d-pad has to turn with it. `Ok` and the soft
+                            // row are named buttons and pass through untouched.
+                            let sent = app.rotate.turn_key(key);
+                            app.session.key(u32::from(sent.to_evdev()), event.down);
+                            // What the app was given is what has to come back up: a held
+                            // direction is tracked turned, or the release lands on a key
+                            // the app never saw held.
+                            wl_held.retain(|k| *k != sent);
                             if event.down {
-                                wl_held.push(key);
+                                wl_held.push(sent);
                             }
                             // The frame this press causes is the one being waited for,
                             // so the app is quick again before it draws rather than a
@@ -6217,9 +6254,16 @@ fn panel(
                 } else {
                     // Turned: the bar has to be drawn to the length it will occupy,
                     // which is the panel's height, so the rendered one cannot be reused.
-                    status_long = PANEL_H;
-                    status_strip = portrait_status(&last_status, PANEL_H);
-                    true
+                    // Nothing is replaced when the render fails, so the pair stays whole
+                    // and the next turn tries again.
+                    match portrait_status(&window, &screen, PANEL_H) {
+                        Some(strip) => {
+                            status_long = PANEL_H;
+                            status_strip = strip;
+                            true
+                        }
+                        None => false,
+                    }
                 };
                 if lifted {
                     strip_for = Some((front.clone(), turn));
@@ -6424,13 +6468,16 @@ fn panel(
             // the keyboard's own. Done and Cancel answer the app.
             #[cfg(feature = "wayland")]
             if matches!(kb_for, KbFor::App { .. }) {
-                if !event.down && wl_held.contains(&event.key) {
-                    wl_held.retain(|k| *k != event.key);
+                if !event.down {
                     let front = wl_front.as_deref();
                     if let Some(app) = wl_apps.iter_mut().find(|a| Some(a.name.as_str()) == front) {
-                        app.session.key(u32::from(event.key.to_evdev()), false);
+                        let sent = app.rotate.turn_key(event.key);
+                        if wl_held.contains(&sent) {
+                            wl_held.retain(|k| *k != sent);
+                            app.session.key(u32::from(sent.to_evdev()), false);
+                            continue;
+                        }
                     }
-                    continue;
                 }
                 let Some(input) = kb.as_mut() else { continue };
                 if !event.down {

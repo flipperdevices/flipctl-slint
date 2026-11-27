@@ -37,12 +37,13 @@
 pub use flipper_ui::key::FlipperKey;
 pub use flipper_ui::platform::Touch;
 pub use flipper_ui::status::{Status, StatusSource};
-pub use flipper_ui::Ethernet;
 pub use flipper_ui::{dropdown, font, keyboard, paint, pixel, theme};
+pub use flipper_ui::{Ethernet, Rotate};
 
 pub mod app;
 pub mod ask;
 pub mod port;
+pub mod portrait;
 #[cfg(feature = "render")]
 pub mod render;
 pub use app::{
@@ -127,6 +128,59 @@ pub fn overlay(surface: &paint::Surface, keep: impl Fn(u16, u16) -> bool) -> sli
     slint::Image::from_rgba8(buffer)
 }
 
+/// The keys inside a soft key's press flash, and whether the finger is still on them.
+///
+/// A soft key is shown pressed for `PRESS_FLASH_MS` before it acts, so a tap shorter than the
+/// flash leaves its release queued behind a press that has not happened yet - told the other
+/// way round, a press-and-hold app is keyed with the button already up. And the panel repeats
+/// a held key, so a flash is armed once per press and not once per event: a second timer would
+/// act after the first had already handed its release over.
+///
+/// Both key paths keep the same queue - [`attach`] and [`app::Driver`](crate::app::Driver) -
+/// so neither has its own idea of when a press begins and ends.
+#[derive(Default)]
+pub(crate) struct Flashes {
+    keys: Vec<(Key, bool)>,
+}
+
+impl Flashes {
+    /// The key is going down; `true` when this press should arm a flash.
+    ///
+    /// A key already inside one is the panel repeating a held key, or a second tap, and either
+    /// way it is the same press: it only puts the finger back down.
+    pub fn down(&mut self, key: Key) -> bool {
+        match self.keys.iter_mut().find(|(k, _)| *k == key) {
+            Some(entry) => {
+                entry.1 = true;
+                false
+            }
+            None => {
+                self.keys.push((key, true));
+                true
+            }
+        }
+    }
+
+    /// The key came up; `true` when it was inside a flash, so its release waits for the press.
+    pub fn up(&mut self, key: Key) -> bool {
+        match self.keys.iter_mut().find(|(k, _)| *k == key) {
+            Some(entry) => {
+                entry.1 = false;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The flash fired; `true` when the finger had gone, so the release is due now.
+    pub fn gone(&mut self, key: Key) -> bool {
+        match self.keys.iter().position(|(k, _)| *k == key) {
+            Some(i) => !self.keys.remove(i).1,
+            None => false,
+        }
+    }
+}
+
 /// The keys and the status bar, wired to a page of the app's own.
 ///
 /// What [`attach!`] does, for the closures it makes from the app's generated types:
@@ -141,10 +195,18 @@ pub fn attach(
     set_status: impl Fn(&Status) + 'static,
     bind: impl FnOnce(Box<dyn Fn(&str, bool)>),
     handler: impl FnMut(Key) -> bool + 'static,
+    released: impl FnMut(Key) + 'static,
 ) -> Attached {
     use std::cell::RefCell;
     use std::rc::Rc;
     let act = Rc::new(RefCell::new(handler));
+    // A key coming back up. A press is the whole event for a menu, but not for a button that
+    // means something while it is held: push-to-talk is down for exactly as long as the person
+    // is speaking. Until this existed the app was never told the finger had gone, and a
+    // toggle could not stand in for it - the panel repeats a held key, so a toggle flips the
+    // link on and off for as long as the button is held.
+    let up = Rc::new(RefCell::new(released));
+    let flashes = Rc::new(RefCell::new(Flashes::default()));
     let act = move |key: Key| {
         if !(act.borrow_mut())(key) {
             unused(key, CLOSE);
@@ -161,6 +223,11 @@ pub fn attach(
             });
         }
         if !down {
+            // A key still inside its flash has not acted yet, so its release waits for the
+            // press; every other key is told at once.
+            if !flashes.borrow_mut().up(key) {
+                (up.borrow_mut())(key);
+            }
             return;
         }
         let Some(slot) = key.soft_slot() else {
@@ -168,11 +235,21 @@ pub fn attach(
             return;
         };
         set_slot(slot as i32);
-        let (set_slot, act) = (set_slot.clone(), act.clone());
+        // One press, one flash: a repeat is the same press and arms nothing.
+        if !flashes.borrow_mut().down(key) {
+            return;
+        }
+        let (set_slot, act, up, flashes) =
+            (set_slot.clone(), act.clone(), up.clone(), flashes.clone());
         let flash = std::time::Duration::from_millis(theme::timing::PRESS_FLASH_MS as u64);
         slint::Timer::single_shot(flash, move || {
             set_slot(-1);
             act(key);
+            // A finger that has already gone is told now, after the press it belongs to; one
+            // still on the key is told when it comes up, on the path above.
+            if flashes.borrow_mut().gone(key) {
+                (up.borrow_mut())(key);
+            }
         });
     }));
     Attached { _status: poll_status(set_status) }
@@ -221,7 +298,10 @@ pub(crate) fn poll_status(set: impl Fn(&Status) + 'static) -> slint::Timer {
 /// `PanelStatus` so Rust can reach them.
 #[macro_export]
 macro_rules! attach {
-    ($ui:expr, $status:ident, $keys:ident, $handler:expr) => {{
+    ($ui:expr, $status:ident, $keys:ident, $handler:expr) => {
+        $crate::attach!($ui, $status, $keys, $handler, |_key| {})
+    };
+    ($ui:expr, $status:ident, $keys:ident, $handler:expr, $released:expr) => {{
         let ui = $ui;
         let (slot, arrow, status, bind) = (ui.as_weak(), ui.as_weak(), ui.as_weak(), ui.as_weak());
         $crate::attach(
@@ -246,6 +326,7 @@ macro_rules! attach {
                 }
             },
             $handler,
+            $released,
         )
     }};
 }

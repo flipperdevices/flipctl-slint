@@ -50,7 +50,7 @@ use std::time::Duration;
 use flipper_ui::status::{Status, StatusSource};
 use flipper_ui::theme::{count, timing};
 
-use crate::Key;
+use crate::{Flashes, Key};
 
 /// What a page shows. The app returns one from [`App::page`] each time it is drawn.
 pub struct Page {
@@ -316,6 +316,20 @@ pub trait App {
         false
     }
 
+    /// A key as it comes back up, for an app whose button means something while held.
+    ///
+    /// `key` only sees presses: a moment later flipctl draws the button released and calls
+    /// `release`, and until this existed the app was never told that the finger had gone.
+    /// That is fine for a menu - a press is the whole event - but not for push-to-talk,
+    /// where the key is down for exactly as long as the person is speaking. A toggle there
+    /// is not a substitute: the panel repeats a held key, so a toggle flips the link on and
+    /// off for as long as the button is held.
+    ///
+    /// The default does nothing, so an app that has no held button needs no change.
+    fn key_up(&mut self, key: Key, ui: &mut Ui) {
+        let _ = (key, ui);
+    }
+
     /// How often to call [`App::tick`] and draw, for an app showing something that
     /// changes on its own. Asked again after every key, tick and redraw, so a page
     /// that wants a faster clock than the rest can have one while it is shown.
@@ -405,6 +419,9 @@ pub struct Driver<A, S> {
     pub app: A,
     pub screen: S,
     states: Vec<(i32, &'static str, Ui)>,
+    /// The keys inside a soft key's press flash, kept the same way [`attach`](crate::attach)
+    /// keeps them: one press, one action, and the release after the press it belongs to.
+    flashes: Flashes,
     /// The page last drawn, which a key acts on.
     current: (i32, &'static str),
     /// Items in the menu last drawn, which the cursor wraps round.
@@ -430,6 +447,7 @@ impl<A: App, S: Screen> Driver<A, S> {
             app,
             screen,
             states: Vec::new(),
+            flashes: Flashes::default(),
             current: (-1, ""),
             count: 0,
             closed: false,
@@ -525,16 +543,24 @@ impl<A: App, S: Screen> Driver<A, S> {
                 _ => 2,
             });
         }
-        if !down || self.closed {
+        // The finger has gone. A key still inside its press flash has not acted yet, so
+        // the release waits for it: telling the app now would be a button going up before
+        // it went down. Everything else is told at once - a held push-to-talk is the case
+        // that needs it, since `key` only ever sees presses.
+        if !down {
+            self.key_up(key);
+            return Press::Ignored;
+        }
+        if self.closed {
             return Press::Ignored;
         }
         if let Some(slot) = key.soft_slot() {
             self.screen.set_pressed_slot(slot as i32);
-            return Press::Flash;
+            return self.flash_press(key);
         }
         if key == Key::Ok && self.current.0 == 2 {
             self.screen.set_row_pressed(true);
-            return Press::Flash;
+            return self.flash_press(key);
         }
         self.act(key);
         Press::Now
@@ -545,6 +571,44 @@ impl<A: App, S: Screen> Driver<A, S> {
         self.screen.set_pressed_slot(-1);
         self.screen.set_row_pressed(false);
         self.act(key);
+        // A finger that went up during the flash is told now, so the app sees the press and
+        // then the release however short the tap was. One still on the key is told when it
+        // comes up, by `key_up` - there is nothing left for it to wait on.
+        if self.flashes.gone(key) {
+            self.tell_up(key);
+        }
+    }
+
+    /// The key has come back up.
+    ///
+    /// Separate from [`App::release`], which finishes a press's flash and *acts*: this one
+    /// only tells the app the finger is gone, and every key gets it. A held push-to-talk
+    /// needs it and a menu ignores it.
+    pub fn key_up(&mut self, key: Key) {
+        if !self.flashes.up(key) {
+            self.tell_up(key);
+        }
+    }
+
+    /// The release, actually delivered.
+    fn tell_up(&mut self, key: Key) {
+        if self.closed {
+            return;
+        }
+        let here = self.current;
+        let mut ui = *self.state(here);
+        self.app.key_up(key, &mut ui);
+        self.settle(here, ui);
+    }
+
+    /// The press a soft-key flash is armed for: `Flash` for the first, `Ignored` for a repeat
+    /// of the same press, which arms nothing and acts nothing.
+    fn flash_press(&mut self, key: Key) -> Press {
+        if self.flashes.down(key) {
+            Press::Flash
+        } else {
+            Press::Ignored
+        }
     }
 
     /// The clock [`App::every`] asked for.
@@ -804,6 +868,8 @@ mod tests {
         runs: u32,
         picked: Option<usize>,
         closed: bool,
+        /// Every key whose release reached the app, in order.
+        released: Vec<Key>,
         /// The first button's label.
         escape: &'static str,
     }
@@ -831,13 +897,60 @@ mod tests {
             }
             true
         }
+        fn key_up(&mut self, key: Key, _: &mut Ui) {
+            self.released.push(key);
+        }
         fn close(&mut self) {
             self.closed = true;
         }
     }
 
+    /// A tap shorter than a press flash: the release arrives while the press is still
+    /// waiting, and the app has to be told in the order the finger made the events. Told
+    /// the other way round, a press-and-hold app is keyed with the button already up.
+    #[test]
+    fn a_release_inside_a_press_flash_waits_for_the_press() {
+        let mut d = driver(0, 4);
+        // The fifth soft key is Run, which the test app counts.
+        assert_eq!(d.key(Key::Run, true), Press::Flash, "a soft key flashes first");
+
+        d.key_up(Key::Run);
+        assert_eq!(d.app.runs, 0, "the press has not acted yet, so nothing is keyed");
+        assert!(
+            d.app.released.is_empty(),
+            "and the release has not been delivered either: that would be up before down"
+        );
+
+        // The flash ends, which is what acts on the press.
+        d.release(Key::Run);
+        assert_eq!(d.app.runs, 1, "the press acted");
+        assert_eq!(d.app.released, vec![Key::Run], "and the release followed it, in that order");
+    }
+
+    /// The same tap, with the finger still down when the flash ends: the release must not
+    /// be invented, and the app hears nothing until the key really goes up.
+    #[test]
+    fn a_press_held_past_its_flash_is_released_when_it_goes_up() {
+        let mut d = driver(0, 4);
+        assert_eq!(d.key(Key::Run, true), Press::Flash);
+        d.release(Key::Run);
+        assert_eq!(d.app.runs, 1, "the press acted");
+        assert!(d.app.released.is_empty(), "nothing has gone up yet");
+
+        d.key_up(Key::Run);
+        assert_eq!(d.app.released, vec![Key::Run], "and now it has");
+    }
+
     fn driver(kind: i32, n: usize) -> Driver<Test, Fake> {
-        let test = Test { kind, n, runs: 0, picked: None, closed: false, escape: "Close" };
+        let test = Test {
+            kind,
+            n,
+            runs: 0,
+            picked: None,
+            closed: false,
+            released: Vec::new(),
+            escape: "Close",
+        };
         let mut d = Driver::new(test, Fake::default());
         d.draw();
         d
@@ -857,6 +970,66 @@ mod tests {
         assert_eq!(seen(&d, |s| s.slot), -1);
         assert_eq!(d.app.runs, 1);
         assert_eq!(seen(&d, |s| s.buttons[4].clone()), "Again", "drawn again after the key");
+    }
+
+    /// The panel repeats a held key. A repeat is the same press - one flash, one action, one
+    /// release - or the app is left keyed with the button already up.
+    #[test]
+    fn a_held_soft_key_is_one_press() {
+        let mut d = driver(0, 4);
+        assert_eq!(d.key(Key::Run, true), Press::Flash);
+        assert_eq!(d.key(Key::Run, true), Press::Ignored, "a repeat arms nothing");
+        assert_eq!(d.key(Key::Run, true), Press::Ignored);
+
+        d.key_up(Key::Run);
+        d.release(Key::Run);
+        assert_eq!(d.app.runs, 1, "one held key is one press");
+        assert_eq!(d.app.released, [Key::Run], "and it is released once");
+    }
+
+    /// A second tap inside the flash is the same press too: the first tap's flash is still
+    /// armed, so the second only puts the finger back on the key.
+    #[test]
+    fn a_second_tap_inside_the_flash_is_the_same_press() {
+        let mut d = driver(0, 4);
+        assert_eq!(d.key(Key::Run, true), Press::Flash);
+        d.key_up(Key::Run);
+        assert_eq!(d.key(Key::Run, true), Press::Ignored, "no second flash");
+
+        d.release(Key::Run);
+        assert_eq!(d.app.runs, 1, "one action for the burst");
+        assert_eq!(d.app.released, [], "the finger is still down, so nothing is released");
+
+        d.key_up(Key::Run);
+        assert_eq!(d.app.released, [Key::Run], "the release arrives when the finger goes");
+    }
+
+    /// A held key's release has to reach the app: push-to-talk is exactly that.
+    ///
+    /// `key` only sees presses, so without this the app was never told the finger had gone
+    /// and the link stayed keyed. Nothing in the repository asserted it, which is why a
+    /// `key_up` that nothing called could sit in the tree compiling.
+    #[test]
+    fn a_release_reaches_the_app() {
+        let mut d = driver(0, 3);
+        d.key(Key::Ptt, true);
+        d.key(Key::Ptt, false);
+        assert_eq!(d.app.released, [Key::Ptt], "the release never reached the app");
+    }
+
+    /// Every key gets its release, not only the one an app reacted to - whether it is
+    /// delivered at once, as for a plain key, or after the flash that a soft key acts on.
+    #[test]
+    fn every_key_gets_its_release() {
+        let mut d = driver(0, 3);
+        for key in [Key::Down, Key::Up, Key::Ptt, Key::Run] {
+            if d.key(key, true) == Press::Flash {
+                // The flash ends and the press acts; the release follows it.
+                d.release(key);
+            }
+            d.key(key, false);
+        }
+        assert_eq!(d.app.released, [Key::Down, Key::Up, Key::Ptt, Key::Run]);
     }
 
     #[test]

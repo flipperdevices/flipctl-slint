@@ -141,3 +141,8 @@ required-features = ["wayland"]
 [[example]]
 name = "tui_probe"
 required-features = ["tui"]
+
+[[test]]
+name = "portrait_ui"
+required-features = ["screens"]
+

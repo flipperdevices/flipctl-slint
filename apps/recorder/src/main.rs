@@ -705,6 +705,7 @@ fn apply(ui: &AppWindow, state: &Recorder) {
             y: view.y as f32,
             h: view.h as f32,
             title: "".into(),
+            title_y: view.title_y as f32,
             sel_y: view.sel_y as f32,
             sel_w: view.sel_w as f32,
             sel_h: view.sel_h as f32,

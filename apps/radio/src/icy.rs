@@ -54,9 +54,10 @@ fn title(block: &[u8]) -> Option<String> {
     const KEY: &[u8] = b"StreamTitle='";
     let at = block.windows(KEY.len()).position(|w| w == KEY)? + KEY.len();
     let rest = &block[at..];
-    let end = rest.windows(2).position(|w| w == b"';").unwrap_or_else(|| {
-        rest.iter().rposition(|&b| b == b'\'').unwrap_or(rest.len())
-    });
+    let end = rest
+        .windows(2)
+        .position(|w| w == b"';")
+        .unwrap_or_else(|| rest.iter().rposition(|&b| b == b'\'').unwrap_or(rest.len()));
     let raw = &rest[..end];
     let text = match std::str::from_utf8(raw) {
         Ok(s) => s.to_string(),

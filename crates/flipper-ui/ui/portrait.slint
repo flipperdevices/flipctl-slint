@@ -1,0 +1,54 @@
+// The portrait screen's own furniture: the bar a turned page wears.
+//
+// The settings row this file used to carry is a fixture for `tests/portrait_ui.rs` and
+// lives beside that test (`tests/portrait_row.slint`), so it is not compiled into flipctl.
+import { FlipperTheme } from "@theme";
+import { StatusBar } from "statusbar.slint";
+
+// The status bar a portrait page wears, at the width that page has.
+//
+// It is the same `StatusBar` the landscape screen draws - the same five signal bars, the
+// same wifi and ethernet icons, the same battery glyph and bolt, the same `HaxrCorp 4090` -
+// laid out in the 144 columns a turned page is wide. `StatusBar` measures itself from its
+// parent (`battery_x: root.width - 2px - 16px`), so nothing but the size has to change.
+//
+// flipctl cannot render this component on its own: the platform it installs hands out one
+// window, of the panel's size, to every component in the process
+// (`create_window_adapter` returns that window, and `set_platform` may only be called
+// once). So flipctl draws this bar into its own scene, at a known corner of `Root`, while
+// a turned app is in front, and lifts the pixels back out - the same route the landscape
+// bar takes, where flipctl's scene is rendered and its top rows are cut off.
+//
+// `values` are properties rather than the `PanelStatus` global so that a caller which
+// already sets the rest of a screen's numbers sets these the same way, and one assignment
+// keeps both bars current.
+export component PortraitBar inherits Rectangle {
+    in property <int> battery: -1;
+    in property <bool> charging;
+    in property <bool> wifi_connected;
+    in property <int> wifi_quality;
+    // 0 down, 1 real, 2 usb gadget.
+    in property <int> ethernet;
+    in property <bool> recording;
+    in property <bool> modem_available;
+    in property <string> access_tech: "--";
+    in property <int> modem_quality;
+
+    width: FlipperTheme.panel_h;
+    height: FlipperTheme.status_bar_h;
+    background: FlipperTheme.bar_bg;
+
+    StatusBar {
+        x: 0;
+        y: 0;
+        battery: root.battery;
+        charging: root.charging;
+        wifi_connected: root.wifi_connected;
+        wifi_quality: root.wifi_quality;
+        ethernet: root.ethernet;
+        recording: root.recording;
+        modem_available: root.modem_available;
+        access_tech: root.access_tech;
+        modem_quality: root.modem_quality;
+    }
+}

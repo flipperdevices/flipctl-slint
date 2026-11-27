@@ -37,12 +37,36 @@ fn compile_slint(theme: &std::path::Path) {
 
     std::env::set_var("SLINT_FONT_SIZES", "16");
 
-    let mut libs = std::collections::HashMap::new();
-    libs.insert("theme".to_string(), theme.to_path_buf());
+    // The theme is a library path, so a component reaches it as `@theme` wherever it sits.
+    let config = || {
+        let mut libs = std::collections::HashMap::new();
+        libs.insert("theme".to_string(), theme.to_path_buf());
+        slint_build::CompilerConfiguration::new()
+            .embed_resources(slint_build::EmbedResourcesKind::EmbedForSoftwareRenderer)
+            .with_library_paths(libs)
+    };
 
-    let config = slint_build::CompilerConfiguration::new()
-        .embed_resources(slint_build::EmbedResourcesKind::EmbedForSoftwareRenderer)
-        .with_library_paths(libs);
+    slint_build::compile_with_config("ui/screens.slint", config())
+        .expect("compile ui/screens.slint");
 
-    slint_build::compile_with_config("ui/screens.slint", config).expect("compile ui/screens.slint");
+    // `tests/portrait_row.slint` is a fixture for `tests/portrait_ui.rs` rather than a
+    // component flipctl draws, so it is compiled on its own and the test includes the
+    // result by path. Through `ui/screens.slint` it would be a test fixture inside the
+    // production module, drawn by flipctl and never called.
+    //
+    // `compile_with_output_path` prints no cargo messages, so `SLINT_INCLUDE_GENERATED`
+    // still points at `ui/screens.slint` and a second entry cannot take `include_modules!`
+    // over.
+    println!("cargo:rerun-if-changed=tests/portrait_row.slint");
+    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    let deps = slint_build::compile_with_output_path(
+        manifest.join("tests/portrait_row.slint"),
+        out.join("portrait_row.rs"),
+        config(),
+    )
+    .expect("compile tests/portrait_row.slint");
+    for dep in deps {
+        println!("cargo:rerun-if-changed={}", dep.display());
+    }
 }
